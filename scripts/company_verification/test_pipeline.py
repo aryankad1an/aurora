@@ -129,15 +129,39 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(after.companies["th"]["domains"], ["tophire.co"])  # kept on the agency itself
         self.assertEqual(vc.verify(after)[0], [])
 
-    def test_typo_domain_moves_and_invalidates(self):
+    def test_typo_domain_is_corrected_not_deleted(self):
         t = self.tables(
-            [company("mi", "Micron"), company("mc", "Micron Con")],
-            [contact("m", "mi", "a@micron.com"), contact("t", "mc", "b@micron.con")])
-        st, plan, after = self.plan(t, typo_domains={"micron.con": "micron.com"})
-        self.assertEqual(plan["moves"], {"mi": ["t"]})
-        self.assertEqual(plan["invalidate"], ["t"])
-        self.assertEqual(plan["fold_into"], {"mc": "mi"})
-        self.assertNotIn("micron.con", after.companies["mi"]["domains"])
+            [company("wf", "Wells Fargo"), company("typo", "Wellfargo")],
+            [contact("w", "wf", "a.b@wellsfargo.com"), contact("t", "typo", "c.d@wellfargo.com", valid=False)])
+        st, plan, after = self.plan(t, typo_domains={"wellfargo.com": "wellsfargo.com"},
+                                    dead_domains={"wellfargo.com": "no host"})   # typo wins over dead
+        self.assertEqual(plan["rewrite_emails"], [{"id": "t", "from": "c.d@wellfargo.com", "to": "c.d@wellsfargo.com"}])
+        self.assertEqual(plan["delete_dead"], [])
+        self.assertEqual(plan["fold_into"], {"typo": "wf"})
+        fixed = next(r for r in after.recruiters if r["id"] == "t")
+        self.assertEqual((fixed["email"], fixed["company_id"], fixed["is_valid"]), ("c.d@wellsfargo.com", "wf", True))
+        self.assertEqual(after.companies["wf"]["domains"], ["wellsfargo.com"])
+        self.assertEqual(vc.verify(after)[0], [])
+
+    def test_deleted_typo_contact_is_restored_corrected(self):
+        t = self.tables([company("mi", "Micron")], [contact("m", "mi", "a@micron.com")])
+        backup_rows = [contact("gone", "old-co", "spradhan@micron.con", name="S Pradhan"),
+                       contact("m", "mi", "a@micron.com")]                  # still live: ignored
+        st = vc.State(t)
+        with mock.patch.dict(vc.DECISIONS, {**copy.deepcopy(BASE_DECISIONS), "typo_domains": {"micron.con": "micron.com"}}):
+            plan = vc.build_plan(st, backup_rows)
+            plan["domains"] = vc.domain_ops(vc.State(vc.simulate(st, plan)))   # as main() does
+            after = vc.State(vc.simulate(st, plan))
+            self.assertEqual(vc.verify(after)[0], [])
+        self.assertEqual([(x["id"], x["email"], x["company_id"], x["is_valid"]) for x in plan["restore_contacts"]],
+                         [("gone", "spradhan@micron.com", "mi", True)])
+
+    def test_restore_skipped_when_corrected_address_already_exists(self):
+        t = self.tables([company("mi", "Micron")], [contact("m", "mi", "spradhan@micron.com")])
+        with mock.patch.dict(vc.DECISIONS, {**copy.deepcopy(BASE_DECISIONS), "typo_domains": {"micron.con": "micron.com"}}):
+            plan = vc.build_plan(vc.State(t), [contact("gone", "x", "spradhan@micron.con")])
+        self.assertEqual(plan["restore_contacts"], [])
+        self.assertTrue(any("already in the catalog" in n for n in plan["notes"]))
 
     def test_personal_contacts_deleted_but_never_one_with_sends(self):
         t = self.tables(
@@ -214,6 +238,33 @@ class Pipeline(unittest.TestCase):
         st, _, _ = self.plan(t, domain_moves={"ivp.in": {"create": "Indus Valley Partners", "why": "x"}})
         self.assertTrue(any("ivp.in" in v for v in vc.verify(st)[0]))
 
+    def test_dead_domain_contacts_deleted_emptied_company_removed_sent_ones_held(self):
+        t = self.tables(
+            [company("w", "Wolves India", ["wolves-india.com"]), company("am", "Amazon", ["amazon.com", "ant.amazon.com"]),
+             company("tr", "Tracked Dead", ["gone.io"]), company("s", "Sent Dead")],
+            [contact("w1", "w", "a@wolves-india.com"), contact("w2", "w", "b@wolves-india.com"),
+             contact("a1", "am", "x@amazon.com"), contact("a2", "am", "y@ant.amazon.com"),
+             contact("t1", "tr", "z@gone.io"), contact("s1", "s", "q@dead.biz")],
+            sends=["s1"], tracked=[("me@x.com", "tr")])
+        dead = {"_about": "x", "wolves-india.com": "nx", "ant.amazon.com": "nx", "gone.io": "nx", "dead.biz": "nx"}
+        _, plan, after = self.plan(t, dead_domains=dead)
+        self.assertEqual(sorted(plan["delete_dead"]), ["a2", "t1", "w1", "w2"])
+        self.assertEqual(plan["held_dead"], ["s1"])                 # a send is never cascaded away
+        self.assertEqual(plan["delete_emptied"], ["w"])             # tracked company kept, Amazon kept
+        self.assertEqual(after.companies["am"]["domains"], ["amazon.com"])
+        self.assertEqual(after.companies["tr"]["domains"], [])       # dead host dropped from the list
+        self.assertEqual(vc.verify(after)[0], [])
+
+    def test_ilike_exact_escapes_like_wildcards_but_not_star(self):
+        self.assertEqual(vc.ilike_exact("first_last@x.com"), r"ilike.first\_last@x.com")
+        self.assertEqual(vc.ilike_exact("a%b@x.com"), r"ilike.a\%b@x.com")
+        self.assertEqual(vc.ilike_exact("a*b@x.com"), "ilike.a*b@x.com")
+
+    def test_verify_flags_a_contact_on_a_dead_domain(self):
+        t = self.tables([company("w", "W")], [contact("w1", "w", "a@wolves-india.com")])
+        st, _, _ = self.plan(t, dead_domains={"wolves-india.com": "nx"})
+        self.assertTrue(any("can't receive mail" in v for v in vc.verify(st)[0]))
+
     def test_typed_in_domain_with_no_contacts_is_kept(self):
         t = self.tables([company("s", "Stripe", ["stripe.dev"])], [contact("a", "s", "a@stripe.com")])
         _, plan, after = self.plan(t)
@@ -246,7 +297,7 @@ class ApplySafety(unittest.TestCase):
         return calls
 
     def base_plan(self, **kw):
-        p = {"creates": {}, "moves": {}, "invalidate": [], "tracking": [], "delete_companies": [],
+        p = {"creates": {}, "moves": {}, "tracking": [], "delete_companies": [],
              "fold_into": {}, "delete_junk": [], "delete_personal": [], "delete_emptied": [],
              "renames": {}, "sectors": {}, "domains": {}}
         p.update(kw)

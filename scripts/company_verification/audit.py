@@ -52,28 +52,39 @@ def audit(old, new):
     from domains import is_personal  # the verified personal-mailbox list (data, not planning logic)
     personal_deleted = DECISIONS.get("personal_contacts", {}).get("action") == "delete"
     old_sends = collections.Counter(m["recruiter_id"] for m in old["mail_sends"])
+    dead = {h for h in DECISIONS.get("dead_domains", {}) if not h.startswith("_")}
+    deletable = lambda r: not old_sends[r["id"]] and (
+        (personal_deleted and is_personal(host(r["email"]))) or host(r["email"]) in dead)
     for rid, r in orr.items():
         if rid not in nr:
             if r["company_id"] in junk:
                 notes["contact deleted: junk"] += 1
             elif personal_deleted and is_personal(host(r["email"])) and not old_sends[rid]:
                 notes["contact deleted: personal mailbox (no sends)"] += 1
+            elif host(r["email"]) in dead and not old_sends[rid]:
+                notes["contact deleted: domain can't receive mail (no sends)"] += 1
             elif personal_deleted and is_personal(host(r["email"])):
                 problems.append(f"personal contact {r['email']} was deleted although it had sends")
             else:
                 problems.append(f"contact {r['email']} disappeared")
             continue
         n = nr[rid]
+        typo_fix = None
+        if host(r["email"]) in DECISIONS["typo_domains"]:
+            local = r["email"].strip().rsplit("@", 1)[0]
+            typo_fix = f"{local}@{DECISIONS['typo_domains'][host(r['email'])]}"
+        if typo_fix and n.get("email") == typo_fix:
+            notes["contact email corrected (typo domain)"] += 1
         for field in r:
             if field in ("company_id", "name", "greeting_name", "is_valid"):
+                continue
+            if field == "email" and typo_fix and n.get("email") == typo_fix:
                 continue
             if r[field] != n.get(field):
                 problems.append(f"contact {r['email']}: {field} changed {r[field]!r} -> {n.get(field)!r}")
         if r.get("is_valid", True) and not n.get("is_valid", True):
-            if host(r["email"]) not in DECISIONS["typo_domains"]:
-                problems.append(f"contact {r['email']} marked invalid without a typo-domain rule")
-            notes["contact marked invalid (typo domain)"] += 1
-        if not r.get("is_valid", True) and n.get("is_valid", True):
+            problems.append(f"contact {r['email']} was marked invalid")
+        if not r.get("is_valid", True) and n.get("is_valid", True) and not typo_fix:
             problems.append(f"contact {r['email']} was flipped back to valid")
     for rid in nr.keys() - orr.keys():
         problems.append(f"contact {nr[rid]['email']} is new")
@@ -124,9 +135,8 @@ def audit(old, new):
             # Allowed only on evidence: everything it ever held was a personal
             # mailbox with no sends, and all of it was deleted.
             held = [r for r in old["recruiters"] if r["company_id"] == cid]
-            if personal_deleted and held and all(
-                    is_personal(host(r["email"])) and not old_sends[r["id"]] and r["id"] not in nr for r in held):
-                notes["company deleted: emptied personal group"] += 1
+            if held and all(deletable(r) and r["id"] not in nr for r in held):
+                notes["company deleted: every contact was a deleted personal/dead address"] += 1
             else:
                 problems.append(f"company {c['name']!r} deleted but it was neither junk nor a merge source")
         else:

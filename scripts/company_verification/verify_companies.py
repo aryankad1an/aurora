@@ -128,7 +128,7 @@ class UnionFind:
             self.parent[ro] = rt
 
 
-def build_plan(st):
+def build_plan(st, restore_rows=()):
     d = DECISIONS
     uf = UnionFind()
     final_name = {}      # root id -> name it should end with
@@ -160,7 +160,7 @@ def build_plan(st):
     renames = {}
     for old, new in d["renames"].items():
         cid = st.resolve(old, required=False)
-        if cid is None and new not in st.by_name:
+        if cid is None and new not in st.by_name and old not in PINNED:
             raise SystemExit(f"decisions.json renames a company that isn't in the DB: {old!r}")
         if cid:
             renames[cid] = new
@@ -229,12 +229,19 @@ def build_plan(st):
             dom = contact_domain(r)
             if dom and is_personal(dom) and r["company_id"] not in test_ids | junk_ids:
                 (held_personal if st.sends[r["id"]] else delete_personal).append(r)
-    deleting = {r["id"] for r in delete_personal}
+    # Contacts on hosts that provably can't receive mail: same treatment.
+    dead = dead_hosts()
+    delete_dead, held_dead = [], []
+    for r in st.recruiters:
+        dom = contact_domain(r)
+        if dom in dead and r["company_id"] not in test_ids | junk_ids:
+            (held_dead if st.sends[r["id"]] else delete_dead).append(r)
+    deleting = {r["id"] for r in delete_personal + delete_dead}
 
     # Each contact's destination.
     moves = collections.defaultdict(list)      # target id -> [recruiter]
-    invalidate = []
     stray = []                                 # moves not implied by a company merge
+    rewrite = []                               # typo addresses corrected in place
     for r in st.recruiters:
         cid = r["company_id"]
         if cid in test_ids or cid in junk_ids or r["id"] in deleting:
@@ -245,8 +252,7 @@ def build_plan(st):
         if dom and dom in d["typo_domains"]:
             fixed = registrable(d["typo_domains"][dom])
             target = owner.get(fixed, target)
-            if r.get("is_valid", True):
-                invalidate.append(r)
+            rewrite.append({"id": r["id"], "from": r["email"], "to": corrected(r["email"])})
             reason = f"typo domain {dom} (meant {d['typo_domains'][dom]})"
         elif dom and not is_personal(dom) and registrable(dom) not in relay:
             reg = registrable(dom)
@@ -300,6 +306,26 @@ def build_plan(st):
         norm_moves[folded.get(tgt, tgt)].extend(rs)
     moves = norm_moves
 
+    # Typo contacts deleted by an earlier run (as dead domains), restored from a
+    # backup with the address corrected: same id, filed under the company that
+    # owns the correct domain. Skipped if the corrected address already exists.
+    restore = []
+    live_ids = {r["id"] for r in st.recruiters}
+    live_emails = {r["email"].strip().lower() for r in st.recruiters}
+    for r in restore_rows:
+        dom = contact_domain(r)
+        if dom not in d["typo_domains"] or r["id"] in live_ids:
+            continue
+        new_email = corrected(r["email"])
+        tgt = owner.get(registrable(d["typo_domains"][dom]))
+        if new_email.lower() in live_emails:
+            notes.append(f"not restoring {r['email']}: {new_email} is already in the catalog")
+        elif not tgt:
+            notes.append(f"not restoring {r['email']}: no company owns {d['typo_domains'][dom]}")
+        else:
+            restore.append({**r, "email": new_email, "company_id": tgt, "is_valid": True})
+            live_emails.add(new_email.lower())
+
     # Tracking rows that must follow a folded company.
     tracking = []
     will_track = collections.defaultdict(set)
@@ -333,10 +359,11 @@ def build_plan(st):
     moving_out = collections.Counter(r["company_id"] for rs in moves.values() for r in rs)
     moving_in = {folded.get(t, t) for t in moves}
     for cid, c in st.companies.items():
-        if "(Personal Email)" not in c["name"] or cid in folded or cid in moving_in:
+        if cid in folded or cid in moving_in or cid in test_ids or not st.by_company[cid]:
             continue
+        gone_here = [r for r in st.by_company[cid] if r["id"] in deleting]
         left = [r for r in st.by_company[cid] if r["id"] not in deleting]
-        if len(left) == moving_out[cid] and not st.tracked[cid]:
+        if gone_here and len(left) == moving_out[cid] and not st.tracked[cid]:
             emptied.append(cid)
 
     # Junk: delete their contacts, then the company. Never if mail was sent.
@@ -351,13 +378,16 @@ def build_plan(st):
     return {
         "creates": creates,
         "moves": {t: [r["id"] for r in rs] for t, rs in moves.items()},
-        "invalidate": [r["id"] for r in invalidate],
         "tracking": tracking,
         "delete_companies": sorted(folded),
         "fold_into": folded,
         "delete_junk": junk,
         "delete_personal": [r["id"] for r in delete_personal],
         "held_personal": [r["id"] for r in held_personal],
+        "delete_dead": [r["id"] for r in delete_dead],
+        "rewrite_emails": rewrite,
+        "restore_contacts": restore,
+        "held_dead": [r["id"] for r in held_dead],
         "delete_emptied": sorted(emptied),
         "renames": rename_ops,
         "sectors": sector_ops,
@@ -366,6 +396,26 @@ def build_plan(st):
         "_contested": contested,
         "notes": notes,
     }
+
+
+def dead_hosts():
+    """Hosts that provably can't receive mail. A typo host is corrected, not deleted."""
+    return {h for h in DECISIONS.get("dead_domains", {}) if not h.startswith("_")} - set(DECISIONS["typo_domains"])
+
+
+def corrected(email):
+    """`a.b@wellfargo.com` -> `a.b@wellsfargo.com`: the typo rule's fix, local part untouched."""
+    local, host = email.strip().rsplit("@", 1)
+    return f"{local}@{DECISIONS['typo_domains'][host.lower()]}"
+
+
+def ilike_exact(value):
+    """A PostgREST filter matching `value` exactly, ignoring case. `_` and `%`
+    are LIKE wildcards, so `first_last@x.com` would otherwise also match
+    `firstXlast@x.com` — and a false clash aborts --apply halfway through.
+    `*` is left alone: PostgREST turns it into `%` after unescaping, so an
+    escaped one would match nothing and hide a real clash."""
+    return "ilike." + re.sub(r"([\\%_])", r"\\\1", value)
 
 
 def is_agency_itself(company_name, host):
@@ -386,7 +436,7 @@ def domain_ops(st):
     if not any("domains" in c for c in st.companies.values()):
         return {}
     d = DECISIONS
-    relay, typo = set(d["relay_domains"]), set(d["typo_domains"])
+    relay, typo, dead = set(d["relay_domains"]), set(d["typo_domains"]), dead_hosts()
     test_ids = {st.resolve(n, required=False) for n in d["test_companies"]} - {None}
     held = collections.defaultdict(set)  # host -> companies whose contacts use it
     for r in st.recruiters:
@@ -399,7 +449,7 @@ def domain_ops(st):
             continue
         have = list(c.get("domains") or [])
         def allowed(h):
-            if is_personal(h) or h in typo:
+            if is_personal(h) or h in typo or h in dead:
                 return False
             return registrable(h) not in relay or is_agency_itself(c["name"], h)
         mine = {contact_domain(r) for r in st.by_company[cid]} - {None}
@@ -457,8 +507,8 @@ def verify(st):
 
     for r in st.recruiters:
         dom = contact_domain(r)
-        if dom in d["typo_domains"] and r.get("is_valid", True):
-            violations.append(f"contact {r['email']} has a typo domain but is still marked valid")
+        if dom in d["typo_domains"]:
+            violations.append(f"contact {r['email']} is on typo domain {dom}; should be {corrected(r['email'])}")
 
     # Every explicit domain rule actually landed on its target company.
     for host_rule, rule in d["domain_moves"].items():
@@ -483,6 +533,13 @@ def verify(st):
                 else:
                     violations.append(f"personal contact {r['email']} should have been deleted")
 
+    for r in st.recruiters:
+        if contact_domain(r) in dead_hosts() and r["company_id"] not in test_ids:
+            if st.sends[r["id"]]:
+                warnings.append(f"{r['email']} is on a dead domain but kept: it has sends")
+            else:
+                violations.append(f"{r['email']} is on a domain that can't receive mail")
+
     if any("domains" in c for c in st.companies.values()):
         listed = collections.defaultdict(list)
         for cid, c in st.companies.items():
@@ -490,6 +547,8 @@ def verify(st):
                 listed[h].append(c["name"])
                 if is_personal(h):
                     violations.append(f"{c['name']!r} lists personal domain {h}")
+                elif h in dead_hosts():
+                    violations.append(f"{c['name']!r} lists dead domain {h}")
                 elif h in d["typo_domains"]:
                     violations.append(f"{c['name']!r} lists typo domain {h}")
                 elif registrable(h) in relay and not is_agency_itself(c["name"], h):
@@ -501,7 +560,7 @@ def verify(st):
             h = contact_domain(r)
             c = st.companies.get(r["company_id"])
             if (h and c and r["company_id"] not in test_ids and not is_personal(h)
-                    and h not in d["typo_domains"] and registrable(h) not in relay
+                    and h not in d["typo_domains"] and h not in dead_hosts() and registrable(h) not in relay
                     and h not in (c.get("domains") or [])):
                 violations.append(f"{c['name']!r} doesn't list {h}, which its contact {r['email']} uses")
 
@@ -621,10 +680,13 @@ def plan_summary(st, plan):
     lines.append(f"- create companies: {[c['name'] for c in plan['creates'].values()]}")
     lines.append(f"- personal-mailbox contacts deleted: {len(plan.get('delete_personal', []))}; "
                  f"held because mail was sent: {len(plan.get('held_personal', []))}")
-    lines.append(f"- emptied personal groups deleted: {len(plan.get('delete_emptied', []))}")
+    lines.append(f"- typo addresses corrected: {len(plan.get('rewrite_emails', []))}; "
+                 f"typo contacts restored corrected: {len(plan.get('restore_contacts', []))}")
+    lines.append(f"- contacts on dead domains deleted: {len(plan.get('delete_dead', []))}; "
+                 f"held because mail was sent: {len(plan.get('held_dead', []))}")
+    lines.append(f"- companies emptied by deletions (deleted): {len(plan.get('delete_emptied', []))}")
     lines.append(f"- companies whose domains change: {len(plan.get('domains', {}))}")
     lines.append(f"- contacts moved: {sum(len(v) for v in plan['moves'].values())}")
-    lines.append(f"- contacts marked invalid (typo domains): {len(plan['invalidate'])}")
     lines.append(f"- companies folded into another: {len(plan['delete_companies'])}")
     lines.append(f"- junk companies deleted: {len(plan['delete_junk'])}")
     lines.append(f"- renames: {len(plan['renames'])}; sectors filled: {len(plan['sectors'])}")
@@ -654,7 +716,14 @@ def plan_summary(st, plan):
     for rid in plan.get("held_personal", []):
         r = rmap[rid]
         lines.append(f"- {r['email']} ({st.companies[r['company_id']]['name']}, {st.sends[rid]} send(s))")
-    lines += ["", "### Emptied personal groups deleted", ""]
+    lines += ["", "### Typo addresses corrected / restored", ""]
+    lines += [f"- {x['from']} → {x['to']}" for x in plan.get("rewrite_emails", [])]
+    lines += [f"- restored: {x['email']} → {nm(x['company_id'])}" for x in plan.get("restore_contacts", [])]
+    lines += ["", "### Contacts on dead domains deleted", ""]
+    for rid in plan.get("delete_dead", []):
+        r = rmap[rid]
+        lines.append(f"- {r['email']} ({st.companies[r['company_id']]['name']}) — {DECISIONS['dead_domains'][contact_domain(r)]}")
+    lines += ["", "### Companies emptied by deletions (deleted)", ""]
     lines += [f"- {st.companies[c]['name']}" for c in plan.get("delete_emptied", [])]
     lines += ["", "### Domain list changes", ""]
     for cid, doms in sorted(plan.get("domains", {}).items(), key=lambda kv: nm(kv[0]).lower()):
@@ -689,11 +758,18 @@ def apply(st, plan):
             assert len(got) == len(part), f"moved {len(got)} of {len(part)} into {tgt}"
     print(f"  moved {sum(len(v) for v in plan['moves'].values())} contacts")
 
-    if plan["invalidate"]:
-        got = supabase.write("PATCH", "recruiters", {"id": supabase.in_filter(plan["invalidate"])},
-                             {"is_valid": False})
-        assert len(got) == len(plan["invalidate"])
-        print(f"  marked {len(got)} typo-domain contacts invalid")
+    for x in plan.get("rewrite_emails", []):
+        clash = [c for c in supabase.get("recruiters", {"email": ilike_exact(x["to"])}, select="id") if c["id"] != x["id"]]
+        if clash:
+            raise SystemExit(f"refusing to rewrite {x['from']}: {x['to']} already exists")
+        got = supabase.write("PATCH", "recruiters", {"id": f"eq.{x['id']}"}, {"email": x["to"], "is_valid": True})
+        assert len(got) == 1, f"no row for {x['from']}"
+    print(f"  corrected {len(plan.get('rewrite_emails', []))} typo addresses")
+    for row in plan.get("restore_contacts", []):
+        if supabase.get("recruiters", {"email": ilike_exact(row["email"])}, select="id"):
+            raise SystemExit(f"refusing to restore {row['email']}: it already exists")
+        supabase.write("POST", "recruiters", body=row, prefer="return=minimal")
+    print(f"  restored {len(plan.get('restore_contacts', []))} typo contacts with corrected addresses")
 
     for t in plan["tracking"]:
         if t["insert"]:
@@ -703,14 +779,15 @@ def apply(st, plan):
                                               "company_id": f"eq.{t['from']}"}, prefer="return=minimal")
     print(f"  moved {len(plan['tracking'])} tracked rows")
 
-    # Personal contacts: deleting one cascades to its sends, so re-check at
-    # delete time that none has any (the plan already held those that did).
-    for part in chunks(plan.get("delete_personal", [])):
+    # Personal and dead-domain contacts: deleting one cascades to its sends, so
+    # re-check at delete time that none has any (the plan held those that did).
+    for part in chunks(plan.get("delete_personal", []) + plan.get("delete_dead", [])):
         sent = supabase.get("mail_sends", {"recruiter_id": supabase.in_filter(part)}, select="id")
         if sent:
-            raise SystemExit(f"refusing to delete personal contacts: {len(sent)} sends appeared since planning")
+            raise SystemExit(f"refusing to delete contacts: {len(sent)} sends appeared since planning")
         supabase.write("DELETE", "recruiters", {"id": supabase.in_filter(part)}, prefer="return=minimal")
-    print(f"  deleted {len(plan.get('delete_personal', []))} personal-mailbox contacts")
+    print(f"  deleted {len(plan.get('delete_personal', []))} personal-mailbox contacts, "
+          f"{len(plan.get('delete_dead', []))} contacts on dead domains")
 
     # Deleting a company cascades to its contacts and their sends: refuse
     # unless the DB confirms it's empty and untracked right now.
@@ -723,7 +800,7 @@ def apply(st, plan):
                              f"{len(left)} contacts, {len(tracked)} tracked rows remain")
         supabase.write("DELETE", "companies", {"id": f"eq.{cid}"}, prefer="return=minimal")
     print(f"  deleted {len(plan['delete_companies'])} folded companies, "
-          f"{len(plan.get('delete_emptied', []))} emptied personal groups")
+          f"{len(plan.get('delete_emptied', []))} emptied companies")
 
     for cid in plan["delete_junk"]:
         rids = [r["id"] for r in st.by_company[cid]]
@@ -758,14 +835,15 @@ def simulate(st, plan):
     for key, spec in plan["creates"].items():
         t["companies"].append({"id": key, "name": spec["name"], "sector": None, "domains": []})
     dest = {rid: tgt for tgt, rids in plan["moves"].items() for rid in rids}
-    bad = set(plan["invalidate"])
     junk = set(plan["delete_junk"])
-    gone_contacts = set(plan.get("delete_personal", []))
+    gone_contacts = set(plan.get("delete_personal", [])) | set(plan.get("delete_dead", []))
     t["recruiters"] = [r for r in t["recruiters"] if r["company_id"] not in junk and r["id"] not in gone_contacts]
+    fix = {x["id"]: x["to"] for x in plan.get("rewrite_emails", [])}
+    t["recruiters"] += [dict(x) for x in plan.get("restore_contacts", [])]
     for r in t["recruiters"]:
         r["company_id"] = dest.get(r["id"], r["company_id"])
-        if r["id"] in bad:
-            r["is_valid"] = False
+        if r["id"] in fix:
+            r["email"], r["is_valid"] = fix[r["id"]], True
     for mv in plan["tracking"]:
         rows = t[mv["table"]]
         rows[:] = [x for x in rows if not (x["user_email"] == mv["user_email"] and x["company_id"] == mv["from"])]
@@ -785,7 +863,9 @@ def conservation(before, after, plan):
     """What must be unchanged by the apply, row for row."""
     problems = []
     junk_contacts = {r["id"] for cid in plan["delete_junk"] for r in before.by_company[cid]}
-    b_ids = {r["id"] for r in before.recruiters} - junk_contacts - set(plan.get("delete_personal", []))
+    b_ids = ({r["id"] for r in before.recruiters} - junk_contacts
+             - set(plan.get("delete_personal", [])) - set(plan.get("delete_dead", [])))
+    b_ids |= {x["id"] for x in plan.get("restore_contacts", [])}
     a_ids = {r["id"] for r in after.recruiters}
     if b_ids != a_ids:
         problems.append(f"contacts changed: lost {len(b_ids - a_ids)}, gained {len(a_ids - b_ids)}")
@@ -812,6 +892,8 @@ def main():
     ap.add_argument("--snapshot", help="verify a backup directory instead of the live DB")
     ap.add_argument("--apply", action="store_true", help="back up, apply the plan, re-verify")
     ap.add_argument("--out", default=str(REPO / "data_verification"))
+    ap.add_argument("--restore-typos-from", metavar="BACKUP",
+                    help="restore typo-domain contacts deleted since this backup, with corrected addresses")
     args = ap.parse_args()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(args.out) / stamp
@@ -825,7 +907,9 @@ def main():
     else:
         before = State(load_snapshot(args.snapshot) if args.snapshot else load_live())
 
-    plan = build_plan(before)
+    restore_rows = (json.loads((Path(args.restore_typos_from) / "recruiters.json").read_text())
+                    if args.restore_typos_from else ())
+    plan = build_plan(before, restore_rows)
     plan["domains"] = domain_ops(State(simulate(before, plan)))
     v, w = verify(before)
     write_outputs(out / "before", before, plan, v, w, "before")
