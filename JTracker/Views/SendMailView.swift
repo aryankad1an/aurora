@@ -35,11 +35,21 @@ struct SendMailView: View {
 
     @Environment(TemplateStore.self) private var templateStore
     @Environment(ProfileStore.self) private var profileStore
+    @Environment(JobStore.self) private var jobStore
     @Environment(GmailAuthStore.self) private var gmail
     @Environment(MailQueue.self) private var mailQueue
     @Environment(\.dismiss) private var dismiss
 
     private let recipients: [(contact: Contact, company: String)]
+    /// Mailable people beyond `batchLimit`, left for another batch.
+    private let leftOver: Int
+
+    /// The most one batch writes. Every letter in the deck is drawn at once,
+    /// and past a few dozen the screen stalls; more to the point, Gmail caps
+    /// what a personal account may send in a day, and hundreds of near-identical
+    /// mails in one go is the pattern its spam filters look for — the damage
+    /// lands on the sender's own reputation.
+    static let batchLimit = 50
 
     /// The mails as they stand — rendered from a template, then tailored.
     @State private var letters: [MailPreview] = []
@@ -52,13 +62,21 @@ struct SendMailView: View {
     /// A template tap that would overwrite hand edits, held until confirmed.
     @State private var pendingTemplate: MailTemplate?
     @State private var confirmingSend = false
+    /// The company each one-company template was written for (see
+    /// `MailTemplate.writtenFor`), worked out once per template list.
+    @State private var templateCompany: [MailTemplate.ID: String] = [:]
+    /// The template the last batch went out with, so the next compose starts
+    /// there rather than on whichever template sorts first.
+    @AppStorage("compose.lastTemplateID") private var lastTemplateID = ""
 
     init(title: String = "New Mail",
          recipients: [(contact: Contact, company: String)],
          onSent: (() -> Void)? = nil) {
         self.title = title
         // The same bar every send in the app holds: a real address, not ruled out.
-        self.recipients = recipients.filter { $0.contact.isValid && $0.contact.email.contains("@") }
+        let mailable = recipients.filter(\.contact.isMailable)
+        self.recipients = Array(mailable.prefix(Self.batchLimit))
+        self.leftOver = max(0, mailable.count - Self.batchLimit)
         self.onSent = onSent
     }
 
@@ -92,35 +110,29 @@ struct SendMailView: View {
             .paperScreen()
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
+            .discardableEdits(letters.contains(where: \.isEdited),
+                              message: "The mails you edited by hand won't be kept.")
             .safeAreaInset(edge: .bottom) { sendBar }
             .sheet(item: $editing) { letter in
                 MailEditorView(preview: letter) { subject, body in
                     apply(id: letter.id, subject: subject, body: body)
                 }
             }
-            .confirmationDialog("Replace your edits?",
-                                isPresented: Binding(get: { pendingTemplate != nil },
-                                                     set: { if !$0 { pendingTemplate = nil } }),
-                                titleVisibility: .visible,
-                                presenting: pendingTemplate) { template in
-                Button("Use “\(template.name)” for Every Mail", role: .destructive) {
+            .alert("Replace your edits?",
+                   isPresented: Binding(get: { pendingTemplate != nil },
+                                        set: { if !$0 { pendingTemplate = nil } }),
+                   presenting: pendingTemplate) { template in
+                Button("Cancel", role: .cancel) {}
+                Button("Use “\(template.name)”", role: .destructive) {
                     write(template, to: Set(letters.map(\.id)))
                 }
             } message: { _ in
                 Text("Mails you've changed by hand will be rewritten from the template.")
             }
-            .confirmationDialog("Send \(letters.count) mails now?",
-                                isPresented: $confirmingSend,
-                                titleVisibility: .visible) {
-                Button("Send \(letters.count) Mails") { send() }
-            } message: {
-                Text("They go out from your Gmail one after another. You can keep using the app while they do.")
-            }
+            .confirmAlert(letters.count == 1 ? "Send this mail now?" : "Send \(letters.count) mails now?",
+                          message: sendConfirmation,
+                          confirmLabel: "Send",
+                          isPresented: $confirmingSend) { send() }
             .onAppear(perform: start)
             // Templates can arrive after the screen does (a cold start, a pull
             // on another device); the first one to land writes the letters.
@@ -151,11 +163,24 @@ struct SendMailView: View {
 
             Divider().overlay(Color.hairline).padding(.leading, 64)
 
-            envelopeLine("To") {
+            envelopeLine("To", alignsToChips: letters.count > 1) {
                 if letters.isEmpty {
                     Text("Nobody here can be mailed")
                         .font(.subheadline)
                         .foregroundStyle(.inkFaint)
+                } else if let only = letters.first, letters.count == 1 {
+                    // One person: their name and address, as Mail's header has
+                    // it. A lone chip only repeated the letter card below.
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(only.name)
+                            .font(.subheadline)
+                            .foregroundStyle(.ink)
+                            .lineLimit(1)
+                        Text(only.email)
+                            .font(.caption)
+                            .foregroundStyle(.inkMuted)
+                            .lineLimit(1)
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         ScrollViewReader { proxy in
@@ -173,12 +198,17 @@ struct SendMailView: View {
                                 withAnimation(Theme.Motion.snappy) { proxy.scrollTo(id, anchor: .center) }
                             }
                         }
-                        Text(letters.count == 1
-                             ? letters[0].email
-                             : "\(letters.count) people" + (companyCount > 1 ? " · \(companyCount) companies" : ""))
+                        Text("\(letters.count) people" + (companyCount > 1 ? " · \(companyCount) companies" : ""))
                             .font(.caption)
                             .foregroundStyle(.inkMuted)
                             .lineLimit(1)
+                        if leftOver > 0 {
+                            Label("The first \(Self.batchLimit), in order — \(leftOver) more for another batch",
+                                  systemImage: "tray.full")
+                                .font(.caption)
+                                .foregroundStyle(.kraft)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             }
@@ -187,13 +217,17 @@ struct SendMailView: View {
         .padding(.horizontal, Theme.Space.gutter)
     }
 
-    private func envelopeLine<Content: View>(_ label: String,
+    /// - Parameter alignsToChips: set when the line opens with a row of chips,
+    ///   which has no text baseline — the label then centres on the chips
+    ///   instead of dropping to the caption under them.
+    private func envelopeLine<Content: View>(_ label: String, alignsToChips: Bool = false,
                                              @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: alignsToChips ? .top : .firstTextBaseline, spacing: 12) {
             Text(label.uppercased())
                 .font(.caption2.weight(.bold).monospaced())
                 .foregroundStyle(.inkFaint)
                 .frame(width: 40, alignment: .leading)
+                .padding(.top, alignsToChips ? 8 : 0)
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -295,6 +329,12 @@ struct SendMailView: View {
                     .foregroundStyle(template.subject.isEmpty ? Color.inkFaint : Color.inkMuted)
                     .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
+                // Always a line, so the tiles stay one height.
+                Label(templateCompany[template.id].map { "Written for \($0)" } ?? "For any company",
+                      systemImage: templateCompany[template.id] == nil ? "building.2" : "building.2.fill")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(isMismatched(template) ? Color.kraft : Color.inkFaint)
+                    .lineLimit(1)
             }
             .padding(12)
             .frame(width: 176, alignment: .leading)
@@ -430,6 +470,28 @@ struct SendMailView: View {
     /// counted here, where they're the last thing seen before sending.
     private var blankCount: Int { letters.count { !$0.missing.isEmpty } }
 
+    /// Mails written from a template meant for another company. Not a blocker
+    /// — the text may have been fixed by hand — but it's the first warning.
+    private var mismatchCount: Int { letters.count { $0.writtenFor != nil } }
+
+    /// Whether picking `template` would write mails naming the wrong company.
+    private func isMismatched(_ template: MailTemplate) -> Bool {
+        guard let company = templateCompany[template.id] else { return false }
+        return letters.contains { $0.company != company }
+    }
+
+    private var sendConfirmation: String {
+        var message = letters.count == 1
+            ? "It goes out from your Gmail and can't be unsent."
+            : "They go out from your Gmail one after another, and can't be unsent. You can keep using the app while they do."
+        if mismatchCount > 0 {
+            message += mismatchCount == 1
+                ? " One of them was written for a different company."
+                : " \(mismatchCount) of them were written for a different company."
+        }
+        return message
+    }
+
     private var sendTitle: String {
         if letters.count == 1, let only = letters.first {
             return "Send to \(only.name.split(separator: " ").first.map(String.init) ?? only.name)"
@@ -444,6 +506,14 @@ struct SendMailView: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.kraft)
                     .transition(.opacity)
+            } else if mismatchCount > 0 {
+                Label(mismatchCount == 1 && letters.count == 1
+                      ? "This template was written for another company"
+                      : "\(mismatchCount) mail\(mismatchCount == 1 ? " was" : "s were") written for another company",
+                      systemImage: "building.2.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.kraft)
+                    .transition(.opacity)
             } else if blankCount > 0 {
                 Label(blankCount == 1 && letters.count == 1
                       ? "A placeholder in this mail is blank"
@@ -454,13 +524,10 @@ struct SendMailView: View {
                     .transition(.opacity)
             }
 
+            // Always asks, even for one: a mail that's gone can't be taken back.
             Button {
-                if letters.count > 1 {
-                    Haptics.press()
-                    confirmingSend = true
-                } else {
-                    send()
-                }
+                Haptics.press()
+                confirmingSend = true
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "paperplane.fill")
@@ -483,7 +550,11 @@ struct SendMailView: View {
         .background {
             // The letters scroll away under the button rather than behind a
             // hard edge.
-            LinearGradient(colors: [Color.paper.opacity(0), Color.paper.opacity(0.92), Color.paper],
+            // Opaque by the time the warning line starts, so it never sits
+            // on top of the letter text it's warning about.
+            LinearGradient(stops: [.init(color: Color.paper.opacity(0), location: 0),
+                                   .init(color: Color.paper.opacity(0.95), location: 0.3),
+                                   .init(color: Color.paper, location: 1)],
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
         }
@@ -496,11 +567,32 @@ struct SendMailView: View {
     /// Write every letter from the first template, once there is one. Runs again
     /// if the templates arrive late, but never over a hand edit.
     private func start() {
+        let tracked = jobStore.jobs.map(\.company)
+        templateCompany = templates.reduce(into: [:]) { result, template in
+            result[template.id] = template.writtenFor(amongst: tracked)
+        }
         guard letters.isEmpty || (templateID == nil && !letters.contains(where: \.isEdited)) else { return }
-        let template = templateID.flatMap { id in templates.first { $0.id == id } } ?? templates.first
+        let template = templateID.flatMap { id in templates.first { $0.id == id } } ?? defaultTemplate
         templateID = template?.id
         letters = recipients.map { render($0.contact, company: $0.company, template: template) }
         if focusedID == nil { focusedID = letters.first?.id }
+    }
+
+    /// What a fresh batch is written from: the template written for this very
+    /// company when there is one (everyone here works there), then the one the
+    /// last batch went out with, then the first meant for anyone — never,
+    /// silently, one written for somebody else.
+    private var defaultTemplate: MailTemplate? {
+        let companies = Set(recipients.map(\.company))
+        if companies.count == 1, let company = companies.first,
+           let own = templates.first(where: { templateCompany[$0.id] == company }) {
+            return own
+        }
+        if let last = templates.first(where: { $0.id.uuidString == lastTemplateID }),
+           templateCompany[last.id].map({ companies == [$0] }) ?? true {
+            return last
+        }
+        return templates.first { templateCompany[$0.id] == nil } ?? templates.first
     }
 
     /// A template tap from the shelf. Hand edits are only ever overwritten on
@@ -541,7 +633,8 @@ struct SendMailView: View {
                            subject: context.fill(template.subject),
                            body: context.fill(template.content),
                            templateID: template.id,
-                           missing: missing)
+                           missing: missing,
+                           writtenFor: templateCompany[template.id].flatMap { $0 == company ? nil : $0 })
     }
 
     /// Write a hand edit back into its letter. The letter has been read and
@@ -552,6 +645,8 @@ struct SendMailView: View {
         letters[index].body = body
         letters[index].isEdited = true
         letters[index].missing = []
+        // Read and rewritten by a person: whatever it names is now on purpose.
+        letters[index].writtenFor = nil
     }
 
     private func leaveOut(_ letter: MailPreview) {
@@ -576,6 +671,7 @@ struct SendMailView: View {
         // to sending one, and this is the last moment the user is still holding
         // the phone waiting to find out that it worked.
         Haptics.cascade(mails.count)
+        if let templateID { lastTemplateID = templateID.uuidString }
         mailQueue.enqueue(mails, fromName: profileStore.profile.name)
         if let onSent { onSent() } else { dismiss() }
     }
@@ -623,12 +719,20 @@ private struct LetterCard<MenuItems: View>: View {
                     .padding(14)
             }
 
+            if let other = letter.writtenFor {
+                warningStrip(symbol: "building.2.fill",
+                             text: "Written for \(other) — this goes to \(letter.company)",
+                             action: "Edit", onTap: onEdit)
+            }
             if !letter.missing.isEmpty {
-                blanks
+                warningStrip(symbol: "circle.dashed",
+                             text: "Blank here: " + letter.missing.map(\.blankLabel).joined(separator: ", "),
+                             action: "Fill in", onTap: onEdit)
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .panelAccented(letter.missing.isEmpty ? nil : Color.kraft, radius: Theme.Radius.hero)
+        .panelAccented(letter.missing.isEmpty && letter.writtenFor == nil ? nil : Color.kraft,
+                       radius: Theme.Radius.hero)
     }
 
     private var header: some View {
@@ -676,17 +780,19 @@ private struct LetterCard<MenuItems: View>: View {
         }
     }
 
-    /// The placeholders this letter left empty, named — "their role", "your
-    /// college" — so it's clear what to fill in before it reads oddly.
-    private var blanks: some View {
+    /// Something to look at before this letter goes: a template meant for
+    /// another company, or the placeholders it left empty, named — "their
+    /// role", "your college" — so it's clear what to fix before it reads oddly.
+    private func warningStrip(symbol: String, text: String, action: String,
+                              onTap: @escaping () -> Void) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "circle.dashed")
+            Image(systemName: symbol)
                 .font(.caption.weight(.bold))
-            Text("Blank here: " + letter.missing.map(\.blankLabel).joined(separator: ", "))
+            Text(text)
                 .font(.caption.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
-            Button("Fill in", action: onEdit)
+            Button(action, action: onTap)
                 .font(.caption.weight(.semibold))
                 .buttonStyle(.plain)
                 .foregroundStyle(.clay)
@@ -712,6 +818,9 @@ struct MailPreview: Identifiable {
     var templateID: MailTemplate.ID?
     /// Placeholders the template used that had nothing to fill them with here.
     var missing: [MailPlaceholder] = []
+    /// The other company this mail's template was written for, when it isn't
+    /// this recipient's.
+    var writtenFor: String?
     /// Changed by hand since it was rendered.
     var isEdited = false
 }
@@ -724,6 +833,7 @@ struct MailEditorView: View {
     let missing: [MailPlaceholder]
     let onSave: (_ subject: String, _ body: String) -> Void
 
+    private let original: (subject: String, body: String)
     @State private var subject: String
     @State private var messageBody: String
     @Environment(\.dismiss) private var dismiss
@@ -733,9 +843,12 @@ struct MailEditorView: View {
         self.email = preview.email
         self.missing = preview.missing
         self.onSave = onSave
+        original = (preview.subject, preview.body)
         _subject = State(initialValue: preview.subject)
         _messageBody = State(initialValue: preview.body)
     }
+
+    private var hasChanges: Bool { subject != original.subject || messageBody != original.body }
 
     var body: some View {
         NavigationStack {
@@ -769,10 +882,8 @@ struct MailEditorView: View {
             }
             .navigationTitle("Edit Mail")
             .navigationBarTitleDisplayMode(.inline)
+            .discardableEdits(hasChanges)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         Haptics.success()

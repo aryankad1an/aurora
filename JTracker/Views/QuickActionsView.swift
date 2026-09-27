@@ -39,6 +39,8 @@ struct QuickActionsView: View {
     @State private var selection: Set<Contact.ID> = []
     @State private var summaryItem: ActivityEntry?
     @State private var sendBatch: SendBatch?
+    /// The bounce banner's Mark, held until it's confirmed.
+    @State private var pendingValidity: ValidityChange?
     @State private var path = NavigationPath()
     @Namespace private var zoom
 
@@ -84,12 +86,17 @@ struct QuickActionsView: View {
                     .navigationTransition(.zoom(sourceID: companyID, in: zoom))
             }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                // Trailing, like every other sheet here that's only read and
+                // closed: leading is where Cancel goes when there's work to lose.
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
             .toolbar { sendToolbar }
             .refreshable { await sync() }
+            .validityAlert($pendingValidity) { change in
+                Task { await jobStore.setValidity(change.ids, isValid: change.isValid) }
+            }
             // A check that actually found something is the one moment this screen
             // changes on its own, so it gets the double-tap "arrived" knock. A
             // check that found nothing stays silent rather than claiming news —
@@ -231,6 +238,7 @@ struct QuickActionsView: View {
                 ForEach(groups, id: \.company.id) { group in
                     CompanyGroupCard(
                         company: group.company.company,
+                        isTracked: jobStore.isTracked(group.company.id),
                         contacts: group.contacts,
                         selection: selection,
                         onToggleCompany: { toggleAll(in: group.contacts) },
@@ -352,22 +360,31 @@ struct QuickActionsView: View {
                 }
             }
 
+            // Short enough to sit beside "Send All" without truncating.
             BottomBarStatus(text: picked.isEmpty
-                            ? "\(targets.count) \(lane == .waiting ? "to follow up" : "to reach out")"
-                            : "\(picked.count) of \(targets.count) selected")
+                            ? "\(targets.count) \(lane == .waiting ? "waiting" : "new")"
+                            : "\(picked.count) of \(targets.count)")
 
             ToolbarItem(placement: .bottomBar) {
-                Button {
+                // Words, not the paperplane alone: the same button sends the
+                // whole lane or just the ticks, and which one is the point.
+                Button(sendTitle) {
                     send(picked.isEmpty ? targets : picked)
-                } label: {
-                    Label(picked.isEmpty ? "Send All" : "Send \(picked.count)",
-                          systemImage: "paperplane.fill")
-                        .labelStyle(.titleAndIcon)
                 }
+                .fontWeight(.semibold)
+                .contentTransition(.numericText())
                 .buttonStyle(.glassProminent)
                 .tint(.clay)
             }
         }
+    }
+
+    /// Says how many the tap will write, which past a batch is the first
+    /// `SendMailView.batchLimit` — the top of the lane, the most overdue.
+    private var sendTitle: String {
+        let count = picked.isEmpty ? targets.count : picked.count
+        if count > SendMailView.batchLimit { return "Send First \(SendMailView.batchLimit)" }
+        return picked.isEmpty ? "Send All" : "Send \(count)"
     }
 
     private var isAllPicked: Bool {
@@ -385,12 +402,14 @@ struct QuickActionsView: View {
     /// Contacts whose thread came back with a delivery failure. Surfaced here
     /// because the fix already exists — `is_valid` — and this is the only screen
     /// that knows the address is dead.
+    ///
+    /// Looked up by id, so a bounce at a company on a catalog page that hasn't
+    /// been scrolled to yet (but is on Home, or was opened directly) still shows.
     private var bouncedContacts: [Contact] {
-        let ids = replySync.bouncedContactIDs
-        guard !ids.isEmpty else { return [] }
-        return jobStore.allCompanies
-            .flatMap(\.contacts)
-            .filter { ids.contains($0.id) && $0.isValid }
+        replySync.bouncedContactIDs
+            .compactMap { jobStore.contact(id: $0) }
+            .filter(\.isValid)
+            .sortedByName()
     }
 
     private var bounceBanner: some View {
@@ -412,8 +431,7 @@ struct QuickActionsView: View {
             Spacer(minLength: 8)
 
             Button("Mark") {
-                Haptics.thud()
-                Task { await jobStore.setValidity(contacts.map(\.id), isValid: false) }
+                pendingValidity = ValidityChange(contacts, isValid: false)
             }
             .font(.subheadline.weight(.semibold))
             .primaryButton(.statusInvalid)
@@ -479,12 +497,6 @@ private struct StatusStrip: View {
     let sync: ReplySync
     let onSync: () -> Void
 
-    private var syncLabel: String {
-        if sync.isSyncing { return sync.progress.label }
-        guard let last = sync.lastSyncedAt else { return "Not checked yet" }
-        return "Checked \(last.activityLabelWithTime.lowercased())"
-    }
-
     /// The reply rate rides on the Replied caption rather than taking a shape of
     /// its own — same information, none of the furniture.
     private var repliedCaption: String {
@@ -506,7 +518,7 @@ private struct StatusStrip: View {
 
             Divider().overlay(Color.hairline)
 
-            syncBar
+            ReplySyncBar(sync: sync, onCheck: onSync)
         }
         .padding(14)
         .panel(radius: Theme.Radius.hero)
@@ -514,64 +526,6 @@ private struct StatusStrip: View {
         // which changes the strip's height — springing it keeps the lists below
         // from snapping into their new place.
         .animation(Theme.Motion.bouncy, value: sync.isSyncing)
-    }
-
-    /// Something the user has to fix before replies can be read at all.
-    private func blocker(_ symbol: String, _ message: String) -> some View {
-        Label {
-            Text(message)
-                .font(.caption)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-        } icon: {
-            Image(systemName: symbol)
-                .font(.caption)
-        }
-        .foregroundStyle(.statusInvalid)
-    }
-
-    @ViewBuilder
-    private var syncBar: some View {
-        VStack(spacing: 8) {
-            if sync.isSyncing && sync.progress.total > 0 {
-                ProgressView(value: sync.progress.fraction)
-                    .tint(.clay)
-                    .transition(LiquidMaterialize(scale: 0.9, anchor: .top))
-            }
-
-            HStack(spacing: 8) {
-                if sync.needsMigration {
-                    blocker("cylinder.split.1x2.fill",
-                            "Database is missing the reply columns — run the migration in the README")
-                } else if sync.needsReconnect {
-                    blocker("lock.trianglebadge.exclamationmark.fill",
-                            "Reconnect Gmail in Profile to read replies")
-                } else {
-                    Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-                        .font(.caption2)
-                        .foregroundStyle(.inkMuted)
-                        .symbolEffect(.rotate, isActive: sync.isSyncing)
-                    Text(syncLabel)
-                        .font(.caption)
-                        .foregroundStyle(.inkMuted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 4)
-
-                Button {
-                    Haptics.press()
-                    onSync()
-                } label: {
-                    Text(sync.isSyncing ? "Checking…" : "Check now")
-                        .font(.caption.weight(.semibold))
-                }
-                .secondaryButton()
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                .disabled(sync.isSyncing)
-            }
-        }
     }
 }
 
@@ -636,7 +590,7 @@ private struct WaitingRow: View {
     private var subtitle: String {
         guard mail.isMailable else { return "\(mail.company) · ruled out" }
         guard let sentAt = mail.sentAt else { return mail.company }
-        return "\(mail.company) · sent \(sentAt.activityLabel.lowercased())"
+        return "\(mail.company) · sent \(sentAt.activityPhrase)"
     }
 
     var body: some View {
@@ -655,6 +609,7 @@ private struct WaitingRow: View {
                     .foregroundStyle(.inkMuted)
                     .lineLimit(1)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
@@ -686,6 +641,8 @@ private struct WaitingRow: View {
 /// and a choice of how wide to go at it.
 private struct CompanyGroupCard: View {
     let company: String
+    /// On Home — shown with the catalog's pin, since these lead the lane.
+    var isTracked = false
     let contacts: [Contact]
     let selection: Set<Contact.ID>
     let onToggleCompany: () -> Void
@@ -718,10 +675,18 @@ private struct CompanyGroupCard: View {
                     MonogramAvatar(company: company, size: Theme.Avatar.small)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(company)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.ink)
-                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            Text(company)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.ink)
+                                .lineLimit(1)
+                            if isTracked {
+                                Image(systemName: "pin.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.clay)
+                                    .accessibilityLabel("On Home")
+                            }
+                        }
                         Text(summary)
                             .font(.caption)
                             .foregroundStyle(pickedCount > 0 ? Color.clay : .inkMuted)
@@ -788,6 +753,7 @@ private struct GroupPersonRow: View {
                     .foregroundStyle(.inkMuted)
                     .lineLimit(1)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
@@ -834,8 +800,7 @@ private struct ReplyCard: View {
     }
 
     private var snippet: String? {
-        guard let snippet = entry.contact.replySnippet, !snippet.isEmpty else { return nil }
-        return snippet
+        entry.contact.replyPreview
     }
 
     var body: some View {

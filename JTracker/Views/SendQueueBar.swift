@@ -38,6 +38,14 @@ struct SendQueueBar: View {
             trailingControl
         }
         .padding(.horizontal, 14)
+        // A finished run's shelf says "Tap to dismiss", so the whole shelf is the
+        // target — it used to be only the small × at its end.
+        .contentShape(.rect)
+        .onTapGesture {
+            guard !queue.isRunning, queue.outcome != nil else { return }
+            Haptics.tap(0.5)
+            queue.acknowledge()
+        }
         // The result is the one thing on this shelf the user is waiting for, and
         // by the time it lands they've usually navigated away from the screen
         // they sent from. Two tones so the answer arrives before the words are
@@ -89,6 +97,7 @@ struct SendQueueBar: View {
     }
 
     private var title: String {
+        if queue.isStopping { return "Stopping…" }
         if queue.isRunning { return "Sending mail" }
         guard let outcome = queue.outcome else { return "" }
         if outcome.failed.isEmpty {
@@ -98,10 +107,14 @@ struct SendQueueBar: View {
     }
 
     private var subtitle: String {
+        if queue.isStopping {
+            return "Finishing the mail already on its way"
+        }
         if queue.isRunning {
             return "\(queue.completed) of \(queue.total) · keep the app open"
         }
         guard let outcome = queue.outcome, !outcome.failed.isEmpty else { return "Tap to dismiss" }
+        if let reason = outcome.stoppedBecause { return reason }
         return "Couldn't reach \(outcome.failed.prefix(2).joined(separator: ", "))"
             + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
     }
@@ -117,8 +130,12 @@ struct SendQueueBar: View {
                 Text("Stop")
                     .font(.caption.weight(.semibold))
             }
-            .secondaryButton()
+            // Bordered, not glass: the shelf is already glass, and glass on glass
+            // is two panes rendering (and trailing each other) at once.
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
             .controlSize(.small)
+            .disabled(queue.isStopping)
         } else if queue.outcome != nil {
             Button {
                 Haptics.tap(0.5)

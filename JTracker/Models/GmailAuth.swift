@@ -156,7 +156,7 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
 
     /// Build a base64url-encoded RFC 2822 message for the Gmail API's `raw` field.
     private static func mimeMessage(from: String, fromName: String, to: String, subject: String, body: String) -> String {
-        let fromHeader = fromName.isEmpty ? from : "\(fromName) <\(from)>"
+        let fromHeader = fromName.isEmpty ? from : "\(displayName(fromName)) <\(from)>"
         let headers = [
             "From: \(fromHeader)",
             "To: \(to)",
@@ -173,6 +173,18 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
     private static func encodeHeader(_ text: String) -> String {
         guard !text.allSatisfy(\.isASCII) else { return text }
         return "=?UTF-8?B?\(Data(text.utf8).base64EncodedString())?="
+    }
+
+    /// The sender's name as it goes before `<address>`. Non-ASCII is encoded like
+    /// the subject — "Aryan Kādian" sent raw reached some clients as mojibake —
+    /// and a plain name with punctuation that means something in an address
+    /// header ("Kadian, Aryan") is quoted, or it reads as two recipients.
+    private static func displayName(_ name: String) -> String {
+        guard name.allSatisfy(\.isASCII) else { return encodeHeader(name) }
+        guard name.contains(where: { "()<>[]:;@\\,.\"".contains($0) }) else { return name }
+        let escaped = name.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
     }
 
     // MARK: - OAuth steps
@@ -294,16 +306,42 @@ enum GmailAuthError: LocalizedError {
     case invalidResponse
     case notConnected
     case insufficientScope
+    /// Google refused the stored refresh token (`invalid_grant`): it was
+    /// revoked, or it expired — an app whose OAuth consent screen is in Testing
+    /// gets tokens that last seven days. Only signing in again fixes it.
+    case sessionExpired
     case server(String)
 
     var errorDescription: String? {
         switch self {
         case .cancelled: return "Sign-in was cancelled."
         case .invalidResponse: return "Unexpected response from Google."
-        case .notConnected: return "Connect Gmail in Profile first."
+        case .notConnected: return "Gmail isn't signed in on this device. Reconnect Gmail in Profile."
         case .insufficientScope:
             return "Reply tracking needs permission to read your mail. Reconnect Gmail in Profile to grant it."
+        case .sessionExpired:
+            return "Your Gmail sign-in has expired. Reconnect Gmail in Profile."
         case .server(let message): return message
+        }
+    }
+
+    /// Whether the fix is signing in to Gmail again — the UI answers these with
+    /// a Reconnect prompt rather than an error. `notConnected` counts: it only
+    /// reaches the UI when the app still shows an account but its token is gone,
+    /// and Profile then has no Connect button to point at — only Reconnect.
+    var needsReconnect: Bool {
+        switch self {
+        case .notConnected, .insufficientScope, .sessionExpired: true
+        default: false
+        }
+    }
+
+    /// Whether every later request would fail the same way, so a run of them
+    /// (a send batch, a reply sync) should stop rather than fail one by one.
+    var endsRun: Bool {
+        switch self {
+        case .notConnected, .insufficientScope, .sessionExpired: true
+        default: false
         }
     }
 }
@@ -386,7 +424,11 @@ private actor TokenVault {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw GmailAuthError.server(String(data: data, encoding: .utf8) ?? "Couldn't refresh Google session.")
+            let body = String(data: data, encoding: .utf8) ?? ""
+            // A dead refresh token is the common case here, and Google's raw
+            // JSON for it means nothing to a person; it needs a reconnect.
+            if body.contains("invalid_grant") { throw GmailAuthError.sessionExpired }
+            throw GmailAuthError.server(body.isEmpty ? "Couldn't refresh Google session." : body)
         }
         return try JSONDecoder().decode(Refreshed.self, from: data)
     }

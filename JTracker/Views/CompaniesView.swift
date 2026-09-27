@@ -119,7 +119,7 @@ struct CompaniesView: View {
                 title: { "Delete “\($0.company)”?" },
                 message: "This permanently deletes the company and its contacts from the shared database, for every user. This can't be undone."
             ) { company in
-                Task { await jobStore.deleteCompanyUpstream(company.id) }
+                Task { await jobStore.deleteCompanies([company.id]) }
             }
             .sheet(isPresented: $isAdding) {
                 CompanyFormView(title: "New Company", confirmLabel: "Add") { name, sector, domains in
@@ -376,8 +376,10 @@ private struct CompanyRow: View {
                 OutreachChips(job: job)
                     .padding(.top, 1)
             }
-
-            Spacer(minLength: 8)
+            // Fills the row. Beside a Spacer the HStack split the spare room
+            // between the two, and "1DigitalStack" truncated to "1Digital…"
+            // next to half a row of empty card.
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             countPill
 

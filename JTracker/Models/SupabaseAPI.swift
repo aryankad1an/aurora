@@ -1,8 +1,9 @@
 import Foundation
 
 /// Talks to Supabase's auto-generated REST API (PostgREST). Companies and
-/// contacts are a shared catalog; each user's Home selection is stored on-device
-/// (client-side), while sent records (`mail_sends`) stay server-side.
+/// contacts are a shared catalog; each user's Home selection
+/// (`tracked_companies`), sent records (`mail_sends`), profile and templates are
+/// rows keyed by their Gmail address.
 enum SupabaseAPI {
     // MARK: - Catalog (every company, with contacts)
 
@@ -57,11 +58,29 @@ enum SupabaseAPI {
         let pattern = "*\(cleaned)*"
 
         // 1. Companies by name or sector — and by domain, when the query is one.
-        //    The domains column only exists once its migration has run; without
-        //    it the filter is rejected, so retry without it rather than failing
-        //    the whole search.
-        let domain = MailDomain.clean(cleaned)
-        func companySearch(includingDomains: Bool) -> URLRequest {
+        // 2. Companies that employ a matching contact (by name, email or
+        //    position). Independent of the first search, so both are in flight
+        //    at once.
+        let contactReq = makeRequest(path: "recruiters", query: [
+            URLQueryItem(name: "select", value: "company_id"),
+            URLQueryItem(name: "or", value: "(name.ilike.\(pattern),email.ilike.\(pattern),position.ilike.\(pattern))"),
+            URLQueryItem(name: "limit", value: String(limit))
+        ])
+        async let byCompany = searchCompanyRows(pattern: pattern, domain: MailDomain.clean(cleaned), limit: limit)
+        async let byContact = send(contactReq)
+        var foundCompanies = try await byCompany
+        let employers = try decoder.decode([CompanyRef].self, from: try await byContact)
+        foundCompanies += try await fetchCompanies(ids: Set(employers.compactMap(\.company_id))
+                                                        .subtracting(foundCompanies.map(\.id)))
+        return foundCompanies.sortedByName()
+    }
+
+    /// Companies whose name or sector matches `pattern`, or that list `domain`.
+    /// The domains column only exists once its migration has run; without it
+    /// the filter is rejected, so this retries without it rather than failing
+    /// the whole search.
+    private static func searchCompanyRows(pattern: String, domain: String?, limit: Int) async throws -> [Job] {
+        func request(includingDomains: Bool) -> URLRequest {
             var filters = ["name.ilike.\(pattern)", "sector.ilike.\(pattern)"]
             if includingDomains, let domain { filters.append("domains.cs.{\(domain)}") }
             return makeRequest(path: "companies", query: [
@@ -71,35 +90,12 @@ enum SupabaseAPI {
                 URLQueryItem(name: "order", value: "name")
             ])
         }
-        var foundCompanies: [Job]
         do {
-            foundCompanies = try decoder.decode([Job].self,
-                                                from: try await send(companySearch(includingDomains: !domainsColumnMissing)))
+            return try decoder.decode([Job].self, from: try await send(request(includingDomains: !domainsColumnMissing)))
         } catch SupabaseError.schemaOutOfDate where !domainsColumnMissing {
             domainsColumnMissing = true
-            foundCompanies = try decoder.decode([Job].self,
-                                                from: try await send(companySearch(includingDomains: false)))
+            return try decoder.decode([Job].self, from: try await send(request(includingDomains: false)))
         }
-
-        // 2. Companies that employ a matching contact (by name, email or position).
-        let contactReq = makeRequest(path: "recruiters", query: [
-            URLQueryItem(name: "select", value: "company_id"),
-            URLQueryItem(name: "or", value: "(name.ilike.\(pattern),email.ilike.\(pattern),position.ilike.\(pattern))"),
-            URLQueryItem(name: "limit", value: String(limit))
-        ])
-        struct ContactRow: Decodable { let company_id: String? }
-        let rows = try decoder.decode([ContactRow].self, from: try await send(contactReq))
-        let existingIDs = Set(foundCompanies.map(\.id))
-        let missingIDs = Array(Set(rows.compactMap(\.company_id)).subtracting(existingIDs))
-        if !missingIDs.isEmpty {
-            let missingReq = makeRequest(path: "companies", query: [
-                URLQueryItem(name: "select", value: "*,recruiters(*)"),
-                URLQueryItem(name: "id", value: "in.(\(missingIDs.joined(separator: ",")))")
-            ])
-            foundCompanies += try decoder.decode([Job].self, from: try await send(missingReq))
-        }
-
-        return foundCompanies.sortedByName()
     }
 
     /// Every company that `domain` belongs to: the ones listing it on their row,
@@ -108,35 +104,47 @@ enum SupabaseAPI {
     /// entered twice under two names.
     static func companies(forDomain domain: String) async throws -> [Job] {
         guard MailDomain.isWellFormed(domain) else { return [] }
-        var found: [Job] = []
-        if !domainsColumnMissing {
-            let request = makeRequest(path: "companies", query: [
-                URLQueryItem(name: "select", value: "*,recruiters(*)"),
-                URLQueryItem(name: "domains", value: "cs.{\(domain)}")
-            ])
-            do {
-                found = try decoder.decode([Job].self, from: try await send(request))
-            } catch SupabaseError.schemaOutOfDate {
-                domainsColumnMissing = true
-            }
-        }
-
-        struct ContactRow: Decodable { let company_id: String? }
+        // The two lookups are independent, so both are in flight at once.
         let contactReq = makeRequest(path: "recruiters", query: [
             URLQueryItem(name: "select", value: "company_id"),
             URLQueryItem(name: "email", value: "ilike.*@\(domain)"),
             URLQueryItem(name: "limit", value: "200")
         ])
-        let rows = try decoder.decode([ContactRow].self, from: try await send(contactReq))
-        let missingIDs = Set(rows.compactMap(\.company_id)).subtracting(found.map(\.id))
-        if !missingIDs.isEmpty {
-            let request = makeRequest(path: "companies", query: [
-                URLQueryItem(name: "select", value: "*,recruiters(*)"),
-                URLQueryItem(name: "id", value: "in.(\(missingIDs.joined(separator: ",")))")
-            ])
-            found += try decoder.decode([Job].self, from: try await send(request))
-        }
+        async let listed = companiesListing(domain)
+        async let byContact = send(contactReq)
+        var found = try await listed
+        let employers = try decoder.decode([CompanyRef].self, from: try await byContact)
+        found += try await fetchCompanies(ids: Set(employers.compactMap(\.company_id)).subtracting(found.map(\.id)))
         return found
+    }
+
+    /// The companies with `domain` on their row. Empty until the domains
+    /// migration has run.
+    private static func companiesListing(_ domain: String) async throws -> [Job] {
+        guard !domainsColumnMissing else { return [] }
+        let request = makeRequest(path: "companies", query: [
+            URLQueryItem(name: "select", value: "*,recruiters(*)"),
+            URLQueryItem(name: "domains", value: "cs.{\(domain)}")
+        ])
+        do {
+            return try decoder.decode([Job].self, from: try await send(request))
+        } catch SupabaseError.schemaOutOfDate {
+            domainsColumnMissing = true
+            return []
+        }
+    }
+
+    /// A contact row reduced to the company it belongs to.
+    private struct CompanyRef: Decodable { let company_id: String? }
+
+    /// Companies by id, with their contacts. One request; none when `ids` is empty.
+    private static func fetchCompanies(ids: Set<String>) async throws -> [Job] {
+        guard !ids.isEmpty else { return [] }
+        let request = makeRequest(path: "companies", query: [
+            URLQueryItem(name: "select", value: "*,recruiters(*)"),
+            URLQueryItem(name: "id", value: "in.(\(ids.sorted().joined(separator: ",")))")
+        ])
+        return try decoder.decode([Job].self, from: try await send(request))
     }
 
     /// Fetch a single company by id from Supabase with all contacts and sector.
@@ -155,16 +163,11 @@ enum SupabaseAPI {
     /// PostgREST embeds the `companies` row (and its `contacts`) for each
     /// `tracked_companies` membership row, so the whole Home payload comes back in
     /// a single round trip. Sorted by name here since the join order isn't stable.
-    static func fetchTrackedCompanies(userEmail: String, limit: Int? = nil, offset: Int = 0) async throws -> [Job] {
-        var queryItems: [URLQueryItem] = [
+    static func fetchTrackedCompanies(userEmail: String) async throws -> [Job] {
+        let request = makeRequest(path: "tracked_companies", query: [
             URLQueryItem(name: "select", value: "companies(*,recruiters(*))"),
             URLQueryItem(name: "user_email", value: "eq.\(userEmail)")
-        ]
-        if let limit, limit > 0 {
-            queryItems.append(URLQueryItem(name: "limit", value: String(limit)))
-            queryItems.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        let request = makeRequest(path: "tracked_companies", query: queryItems)
+        ])
         let data = try await send(request)
         // Each row wraps the embedded company; a company deleted out from under a
         // membership row (before the FK cascade fires) comes back null — skip it.
@@ -396,10 +399,6 @@ enum SupabaseAPI {
         try await write(method: "PATCH", path: "recruiters",
                         query: [URLQueryItem(name: "id", value: "in.(\(ids.joined(separator: ",")))")],
                         body: ["is_valid": isValid])
-    }
-
-    static func deleteContact(id: String) async throws {
-        try await deleteContacts(ids: [id])
     }
 
     /// Delete several contacts in one request.
@@ -642,10 +641,24 @@ enum SupabaseAPI {
     // MARK: - Date handling
 
     private static func iso(_ date: Date) -> String {
+        fractionalFormatter.string(from: date)
+    }
+
+    /// Made once: building an `ISO8601DateFormatter` costs far more than using
+    /// one, and every timestamp in every load went through two fresh ones —
+    /// several hundred per reload, on the main actor. (Formatters are safe to
+    /// share once configured.)
+    private static let fractionalFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
-    }
+        return formatter
+    }()
+
+    private static let plainFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -662,13 +675,8 @@ enum SupabaseAPI {
     /// separator Postgres sometimes emits instead of "T".
     private static func parseTimestamp(_ string: String) -> Date? {
         let normalized = string.replacingOccurrences(of: " ", with: "T")
-
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFraction.date(from: normalized) { return date }
-
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
+        if let date = fractionalFormatter.date(from: normalized) { return date }
+        let plain = plainFormatter
         if let date = plain.date(from: normalized) { return date }
 
         // Microsecond precision (6+ fractional digits) that ISO8601DateFormatter

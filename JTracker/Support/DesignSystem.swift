@@ -108,26 +108,17 @@ extension View {
         modifier(Panel(accent: accent, radius: radius))
     }
 
-    /// A surface whose rule is conditional — nil means an unmarked card.
-    @ViewBuilder
+    /// A surface whose rule is conditional — nil means an unmarked card. One
+    /// modifier either way, so a card gaining or losing its rule stays the same
+    /// view and the rule animates in, rather than the card being rebuilt.
     func panelAccented(_ accent: Color?, radius: CGFloat = Theme.Radius.card) -> some View {
-        if let accent {
-            modifier(Panel(accent: accent, radius: radius))
-        } else {
-            modifier(Panel(accent: nil, radius: radius))
-        }
+        modifier(Panel(accent: accent, radius: radius))
     }
 
     /// Press feedback for anything card-shaped, applied through a button style so
     /// the whole card dips as one object.
     func cardButtonStyle() -> some View {
         buttonStyle(CardPress())
-    }
-
-    /// Press feedback for a small control — an icon button, a pill, a glass
-    /// capsule. Dips further than a card because there's less of it to see move.
-    func bouncyButtonStyle() -> some View {
-        buttonStyle(BouncyPress())
     }
 
     /// The app's standard arrival: scale up from slightly small while fading in.

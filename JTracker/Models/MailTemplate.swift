@@ -83,3 +83,28 @@ struct MailContext {
         ])
     }
 }
+
+extension MailTemplate {
+    /// The company this template was written for, if it's one company's
+    /// template: it names that company outright and never uses
+    /// `{Receiver-Company}`. Nil for a template meant for anyone.
+    ///
+    /// A template like "Backend Eternal" says "roles at Eternal" in plain text.
+    /// Picked for an Airbnb contact — easily, since it sorts first — it reads
+    /// as the wrong company to the one person it mustn't. Knowing who it was
+    /// written for is what lets the compose screen say so before it's sent.
+    ///
+    /// - Parameter companies: the names to look for — the companies on Home.
+    ///   Matched whole-word and case-sensitively: they're proper nouns, and
+    ///   "Eternal" shouldn't match "eternally grateful".
+    func writtenFor(amongst companies: [String]) -> String? {
+        let text = subject + "\n" + content
+        guard !text.contains(MailPlaceholder.receiverCompany.token) else { return nil }
+        // Longest first, so "Goldman Sachs" wins over a "Goldman" also on file.
+        for name in companies.sorted(by: { $0.count > $1.count }) where name.count >= 3 {
+            let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: name) + "(?![\\p{L}\\p{N}])"
+            if text.range(of: pattern, options: .regularExpression) != nil { return name }
+        }
+        return nil
+    }
+}

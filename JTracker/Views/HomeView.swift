@@ -149,9 +149,9 @@ struct HomeView: View {
     private var trackingSection: some View {
         Section {
             if jobStore.jobs.isEmpty {
-                Text("No tracked companies yet. Track companies from the Companies tab.")
-                    .font(.subheadline)
-                    .foregroundStyle(.inkMuted)
+                InlineEmptyState(title: "Nothing tracked yet",
+                                 systemImage: "pin",
+                                 message: "Swipe right on a company in Companies, or open one and choose Track on Home.")
                     .cardRow()
             } else {
                 ForEach(filteredJobs) { job in
@@ -159,7 +159,19 @@ struct HomeView: View {
                         .matchedTransitionSource(id: job.id, in: zoom)
                         .cardRow()
                         .swipeActions(edge: .trailing) { untrackButton(job) }
-                        .swipeActions(edge: .leading) { untrackButton(job) }
+                        // Both edges used to untrack. The leading one now does
+                        // the other thing a tracked company is for, as Mail's
+                        // leading swipe is the constructive one.
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                Haptics.press()
+                                sendingTo = SendTarget(companies: [job])
+                            } label: {
+                                Label("Send", systemImage: "paperplane")
+                            }
+                            .tint(.clay)
+                            .disabled(job.validContacts.isEmpty)
+                        }
                 }
             }
         } header: {
@@ -242,13 +254,20 @@ private struct QuickActionsCard: View {
 
     @State private var ring: Double = 0
 
+    /// The two figures the chips above can't say: how long the oldest silence
+    /// has run, and how long answers usually take — which together say whether
+    /// that silence is still worth waiting on. (It used to repeat the waiting
+    /// count the chip beside it already showed.)
     private var subtitle: String {
         if insights.totalSent == 0 { return "Send your first mail to start tracking" }
+        var parts: [String] = []
         if let longest = insights.longestSilenceDays, longest > 0 {
-            let waiting = insights.waitingMails.count
-            return "Longest silence \(longest)d · \(waiting) awaiting a reply"
+            parts.append("Longest silence \(longest)d")
         }
-        return "\(insights.totalSent) mails tracked"
+        if let median = insights.medianResponseDays {
+            parts.append(median == 0 ? "replies come same day" : "replies take ~\(median)d")
+        }
+        return parts.isEmpty ? "\(insights.totalSent) mails tracked" : parts.joined(separator: " · ")
     }
 
     var body: some View {
@@ -361,8 +380,9 @@ private struct TrackingCard: View {
                 OutreachChips(job: job)
                     .padding(.top, 1)
             }
-
-            Spacer(minLength: 8)
+            // Fills the row, so the name only truncates when it really doesn't
+            // fit — not to share the room with a Spacer.
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))

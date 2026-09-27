@@ -34,8 +34,12 @@ final class ReplySync {
         var replies = 0
         var bounced = 0
         var failed = 0
+        /// Requests that came back with an answer, whatever the answer was.
+        var read = 0
 
         var changedAnything: Bool { recovered > 0 || replies > 0 }
+        /// Everything that was asked failed: nothing was checked at all.
+        var readNothing: Bool { failed > 0 && read == 0 }
     }
 
     /// Progress, for the UI. `total` is 0 while idle.
@@ -57,6 +61,12 @@ final class ReplySync {
     /// "reconnect Gmail" prompt rather than an error alert, because that's the
     /// only thing that fixes it.
     private(set) var needsReconnect = false
+
+    /// For failures found outside a sync — a send refused because the Gmail
+    /// session has ended — so Profile offers the reconnect either way.
+    func noteReconnectNeeded() {
+        needsReconnect = true
+    }
 
     /// Set when the database is missing the reply-tracking columns — the app is
     /// newer than the schema, and the fix is the migration in the README.
@@ -125,6 +135,7 @@ final class ReplySync {
             let recovered = try await recoverThreadIDs(in: sends, emailByContact: emailByContact)
             outcome.recovered = recovered.count
             outcome.failed += recovered.failed
+            outcome.read += recovered.read
             // Fold the recovered ids back in so this run can check them straight
             // away, instead of finding a reply only on the next sync.
             sends = sends.map { send in
@@ -139,6 +150,7 @@ final class ReplySync {
             outcome.replies = checked.replies
             outcome.bounced = checked.bounced
             outcome.failed += checked.failed
+            outcome.read += checked.read
             // A delta sync only reads threads with new mail, so a bounce found
             // earlier is still a bounce: keep it unless the thread was re-read.
             // Contacts since marked invalid are dealt with and drop out.
@@ -149,8 +161,15 @@ final class ReplySync {
                 bouncedContactIDs.formUnion(checked.bouncedContacts)
             }
             bouncedContactIDs.subtract(excludingContactIDs)
-            completed = true
-        } catch let error as GmailAuthError where error.isScopeFailure {
+            // A run where every request failed (offline, Gmail down) read
+            // nothing, and stamping it "Checked just now" would say the silence
+            // on screen is current when it's just as stale as before.
+            if outcome.readNothing {
+                errorMessage = "Couldn't reach Gmail, so nothing was checked. Try again in a moment."
+            } else {
+                completed = true
+            }
+        } catch let error as GmailAuthError where error.needsReconnect {
             needsReconnect = true
         } catch let error as SupabaseError where error.isSchemaOutOfDate {
             needsMigration = true
@@ -165,6 +184,7 @@ final class ReplySync {
     private struct Recovered {
         var threadIDs: [String: GmailAuthStore.SentMessage] = [:]
         var failed = 0
+        var read = 0
         var count: Int { threadIDs.count }
     }
 
@@ -203,7 +223,7 @@ final class ReplySync {
                                 return .notFound(sendID: send.id)
                             }
                             return .attached(sendID: send.id, message: message)
-                        } catch let error as GmailAuthError where error.isScopeFailure {
+                        } catch let error as GmailAuthError where error.endsRun {
                             throw error
                         } catch let error as SupabaseError where error.isSchemaOutOfDate {
                             throw error
@@ -222,6 +242,7 @@ final class ReplySync {
             for outcome in chunkResults {
                 switch outcome {
                 case .attached(let sendID, let message):
+                    result.read += 1
                     do {
                         try await SupabaseAPI.attachThread(sendID: sendID,
                                                            messageID: message.id,
@@ -231,6 +252,7 @@ final class ReplySync {
                         result.failed += 1
                     }
                 case .notFound(let sendID):
+                    result.read += 1
                     unrecoverableSendIDs.insert(sendID)
                 case .skipped:
                     break
@@ -297,6 +319,7 @@ final class ReplySync {
         var replies = 0
         var bounced = 0
         var failed = 0
+        var read = 0
         var bouncedContacts: Set<String> = []
         /// Contacts whose threads were actually read this run.
         var checkedContacts: Set<String> = []
@@ -384,7 +407,7 @@ final class ReplySync {
                             case .silent:
                                 return .silent
                             }
-                        } catch let error as GmailAuthError where error.isScopeFailure {
+                        } catch let error as GmailAuthError where error.endsRun {
                             throw error
                         } catch let error as SupabaseError where error.isSchemaOutOfDate {
                             throw error
@@ -403,6 +426,7 @@ final class ReplySync {
             for outcome in chunkResults {
                 switch outcome {
                 case .reply(let sendID, let date, let sender, let snippet):
+                    result.read += 1
                     do {
                         try await SupabaseAPI.recordReply(sendID: sendID, at: date,
                                                           from: sender, snippet: snippet)
@@ -411,10 +435,11 @@ final class ReplySync {
                         result.failed += 1
                     }
                 case .bounce(let contactID):
+                    result.read += 1
                     result.bounced += 1
                     result.bouncedContacts.insert(contactID)
                 case .silent:
-                    break
+                    result.read += 1
                 case .failed:
                     result.failed += 1
                 }
@@ -538,15 +563,6 @@ nonisolated private struct GmailThread: Decodable {
         private func header(_ name: String) -> String? {
             payload?.headers?.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value
         }
-    }
-}
-
-private extension GmailAuthError {
-    /// Whether this failure means "the token can't read mail", which the UI
-    /// answers with a reconnect prompt rather than an error.
-    var isScopeFailure: Bool {
-        if case .insufficientScope = self { return true }
-        return false
     }
 }
 

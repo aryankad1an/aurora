@@ -73,6 +73,11 @@ struct Contact: Identifiable, Decodable {
     /// the row has no name.
     var displayName: String { name.isEmpty ? email : name }
 
+    /// Whether a mail can go to this contact at all: an address on file, and not
+    /// ruled out. The one bar every send in the app holds — Suggested, the send
+    /// chooser, a selection's Send, the compose screen and the follow-up queue.
+    var isMailable: Bool { isValid && email.contains("@") }
+
     /// Whether this contact answers a (trimmed, non-empty) search — by name,
     /// address or position. `Job.matches` runs the same test over its people.
     func matches(_ query: String) -> Bool {
@@ -83,6 +88,13 @@ struct Contact: Identifiable, Decodable {
 
     /// Whether this contact wrote back to the last mail we sent them.
     var hasReplied: Bool { repliedAt != nil }
+
+    /// What they said, without the quoted mail Gmail's snippet runs on into.
+    /// Nil when no preview was captured.
+    var replyPreview: String? {
+        guard let snippet = replySnippet?.withoutQuoteHeader, !snippet.isEmpty else { return nil }
+        return snippet
+    }
 
     /// Rows carry nulls for optional columns, so decode leniently and default.
     init(from decoder: Decoder) throws {
@@ -259,6 +271,18 @@ enum MailDomain {
 
     nonisolated static func isPersonal(_ domain: String) -> Bool {
         personalDomains.contains(domain)
+    }
+
+    /// Whether `email` has the shape of a deliverable address: one `@`, a
+    /// mailbox with no spaces before it and a well-formed domain after. What the
+    /// contact forms require before a row can be saved to the shared catalog —
+    /// `jane@` or `jane@acme` would only ever bounce.
+    nonisolated static func isPlausibleAddress(_ email: String) -> Bool {
+        let parts = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty,
+              !parts[0].contains(where: \.isWhitespace) else { return false }
+        return isWellFormed(parts[1].lowercased())
     }
 
     /// Letters, digits, dots and hyphens, with at least one dot and no empty

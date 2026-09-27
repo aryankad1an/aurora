@@ -19,7 +19,7 @@ enum AppConfig {
     /// auto-accepts this redirect for iOS clients, so no console setup is needed.
     static let googleRedirectScheme = "com.googleusercontent.apps.893359004595-r6vvkbkonur3qmkv17nupi6na9t49749"
 
-    /// Full redirect URI handed to Google and matched on the callback.r
+    /// Full redirect URI handed to Google and matched on the callback.
     static var googleRedirectURI: String { "\(googleRedirectScheme):/oauth2redirect" }
 
     /// Requested scopes: identify the account (openid/email), send mail on the

@@ -59,7 +59,7 @@ struct Insights {
         /// A follow-up can only go to a live address. Bounced and ruled-out
         /// contacts still appear — the silence is real and worth seeing — but
         /// they are never ticked and never sent.
-        var isMailable: Bool { contact.isValid && contact.email.contains("@") }
+        var isMailable: Bool { contact.isMailable }
     }
 
     var companies: [CompanyStat] = []

@@ -11,10 +11,13 @@ struct ProfileView: View {
     @State private var isEditing = false
     @State private var draft = Profile()
     @State private var isReconnecting = false
+    @State private var confirmingSignOut = false
 
     var body: some View {
         NavigationStack {
             PaperForm {
+                if !isEditing { header }
+
                 // Editable only in edit mode; otherwise a read-only snapshot.
                 ProfileFields(profile: isEditing ? $draft : .constant(store.profile),
                               isEditing: isEditing)
@@ -46,10 +49,48 @@ struct ProfileView: View {
                     .disabled(isReconnecting)
                     Divider()
                 }
-                Button(role: .destructive) { signOut() } label: {
+                Button(role: .destructive) { confirmingSignOut = true } label: {
                     Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                 }
             }
+            // Signing out drops the Gmail connection, and getting it back means
+            // the whole Google sign-in again — so it asks, as Settings does.
+            .confirmAlert("Sign out of Gmail?",
+                          message: "You'll need to sign in again to send or track mail. Nothing you've saved is deleted.",
+                          confirmLabel: "Sign Out", role: .destructive,
+                          isPresented: $confirmingSignOut) { signOut() }
+        }
+    }
+
+    /// Who's signed in, at the top — the way Settings opens on your account.
+    private var header: some View {
+        let name = store.profile.name.trimmingCharacters(in: .whitespaces)
+        let role = store.profile.isWorking && !store.profile.position.isEmpty
+            ? [store.profile.position, store.profile.company].filter { !$0.isEmpty }.joined(separator: " at ")
+            : (store.profile.isStudying && !store.profile.college.isEmpty ? "Student at \(store.profile.college)" : nil)
+        return Section {
+            HStack(spacing: 14) {
+                MonogramAvatar(text: name.isEmpty ? (gmail.connectedEmail ?? "?") : name, size: 60)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name.isEmpty ? "Add your name" : name)
+                        .font(.display(22))
+                        .foregroundStyle(name.isEmpty ? Color.inkMuted : Color.ink)
+                        .lineLimit(1)
+                    if let email = gmail.connectedEmail {
+                        Text(email)
+                            .font(.subheadline)
+                            .foregroundStyle(.inkMuted)
+                            .lineLimit(1)
+                    }
+                    if let role {
+                        Text(role)
+                            .font(.caption)
+                            .foregroundStyle(.inkFaint)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
         }
     }
 
@@ -64,7 +105,7 @@ struct ProfileView: View {
 
             if replySync.needsReconnect {
                 Label {
-                    Text("Reply tracking needs permission to read your mail.")
+                    Text("Gmail needs you to sign in again — the sign-in expired, or predates reply tracking.")
                         .font(.footnote)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -81,12 +122,12 @@ struct ProfileView: View {
                 .disabled(isReconnecting)
             }
 
-            Button("Sign Out", role: .destructive) { signOut() }
+            Button("Sign Out", role: .destructive) { confirmingSignOut = true }
         } header: {
             Label("Gmail", systemImage: "envelope.fill")
         } footer: {
             Text(replySync.needsReconnect
-                 ? "Reconnecting signs in to the same account and grants read access. Nothing is deleted."
+                 ? "Reconnecting signs in to the same account again. Nothing is deleted."
                  : "Used to send your mails and to check which ones were answered.")
         }
     }
@@ -117,11 +158,17 @@ struct ProfileView: View {
         Task {
             await gmail.connect()
             isReconnecting = false
+            // Check straight away with the new sign-in, which also clears the
+            // warning above rather than leaving it until the next sync.
+            if gmail.errorMessage == nil {
+                await jobStore.syncReplies(using: replySync, forceFullCheck: true)
+            }
         }
     }
 
     private func signOut() {
         Haptics.press()
+        UndoCoordinator.shared.dismiss()
         store.reset()
         jobStore.userEmail = nil
         gmail.disconnect()

@@ -214,11 +214,18 @@ struct RootView: View {
     /// mail, and what to do with the sends once a run finishes.
     private func connectMailQueue() {
         mailQueue.sender = { mail, fromName in
-            let message = try await gmailAuth.send(to: mail.recipient, subject: mail.subject,
-                                                   body: mail.body, fromName: fromName)
-            return message.map { MailQueue.Delivery(messageID: $0.id, threadID: $0.threadID) }
+            do {
+                let message = try await gmailAuth.send(to: mail.recipient, subject: mail.subject,
+                                                       body: mail.body, fromName: fromName)
+                return message.map { MailQueue.Delivery(messageID: $0.id, threadID: $0.threadID) }
+            } catch let error as GmailAuthError where error.needsReconnect {
+                // The shelf says "Reconnect Gmail in Profile"; make sure Profile
+                // is offering it.
+                replySync.noteReconnectNeeded()
+                throw error
+            }
         }
-        mailQueue.onCompletion = { records in
+        mailQueue.onRecord = { records in
             await jobStore.markContactsSent(records)
         }
         replySync.reader = { path, query in

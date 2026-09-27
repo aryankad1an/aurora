@@ -33,7 +33,7 @@ struct TemplateFinding: Identifiable, Hashable {
 enum TemplateDiagnostics {
 
     static func analyze(subject: String, content: String,
-                        profile: Profile, contacts: [Contact]) -> [TemplateFinding] {
+                        profile: Profile, recipients: RecipientCoverage = .none) -> [TemplateFinding] {
         var findings: [TemplateFinding] = []
         let text = subject + "\n" + content
 
@@ -42,7 +42,7 @@ enum TemplateDiagnostics {
 
         let used = Set(MailPlaceholder.allCases.filter { text.contains($0.token) })
         findings += profileGapFindings(used: used, profile: profile)
-        findings += recipientGapFindings(used: used, contacts: contacts)
+        findings += recipientGapFindings(used: used, recipients: recipients)
 
         return findings.sorted { ($0.severity, $0.id) < ($1.severity, $1.id) }
     }
@@ -129,15 +129,13 @@ enum TemplateDiagnostics {
     /// is affected rather than a yes/no. `{Receiver-Name}` is deliberately absent:
     /// `RecipientName` guarantees it a value, so it can't come out blank.
     private static func recipientGapFindings(used: Set<MailPlaceholder>,
-                                             contacts: [Contact]) -> [TemplateFinding] {
-        guard used.contains(.receiverPosition), !contacts.isEmpty else { return [] }
-        let missing = contacts.filter { $0.position.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard !missing.isEmpty else { return [] }
+                                             recipients: RecipientCoverage) -> [TemplateFinding] {
+        guard used.contains(.receiverPosition), recipients.missingPosition > 0 else { return [] }
 
         return [TemplateFinding(
             id: "recipients-position",
             severity: .warning,
-            title: "\(missing.count) of \(contacts.count) contacts have no position",
+            title: "\(recipients.missingPosition) of \(recipients.total) contacts have no position",
             detail: "\(MailPlaceholder.receiverPosition.token) will be blank for them — "
                 + "check the preview reads correctly with it empty.",
             token: MailPlaceholder.receiverPosition.token,
@@ -147,11 +145,14 @@ enum TemplateDiagnostics {
 
     // MARK: - Text scanning
 
+    /// A `{...}` run: anything that looks like a placeholder. Compiled once — the
+    /// checks and the editor's preview both run it on every keystroke.
+    static let bracedRun = try! NSRegularExpression(pattern: "\\{[^{}]*\\}")
+
     /// Every `{...}` run in the text, in order of appearance.
     static func bracedRuns(in text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: "\\{[^{}]*\\}") else { return [] }
         let ns = text as NSString
-        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        return bracedRun.matches(in: text, range: NSRange(location: 0, length: ns.length))
             .map { ns.substring(with: $0.range) }
     }
 
@@ -198,5 +199,26 @@ enum TemplateDiagnostics {
             swap(&previous, &current)
         }
         return previous[b.count]
+    }
+}
+
+// MARK: - Recipients
+
+/// What the recipient-side checks need to know about the catalog, counted once.
+/// The editor used to hand the checks every contact and have them re-filtered
+/// on each keystroke, several times per keystroke.
+struct RecipientCoverage {
+    var total = 0
+    var missingPosition = 0
+
+    static let none = RecipientCoverage()
+
+    init() {}
+
+    init(_ contacts: some Sequence<Contact>) {
+        for contact in contacts {
+            total += 1
+            if contact.position.trimmingCharacters(in: .whitespaces).isEmpty { missingPosition += 1 }
+        }
     }
 }

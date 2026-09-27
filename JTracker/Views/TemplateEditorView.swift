@@ -26,7 +26,14 @@ struct TemplateEditorView: View {
     @State private var subjectSelection: TextSelection?
     @State private var mode: Mode = .write
     @State private var showingIssues = false
-    @State private var sampleContactID: Contact.ID?
+    /// Every contact in the catalog with their company, gathered once when the
+    /// editor opens: Preview's random sample draws from it and the checks count
+    /// against it. Rebuilt on each keystroke — several times per keystroke — it
+    /// was the slowest thing on the screen.
+    @State private var catalog: [(contact: Contact, company: String)] = []
+    @State private var coverage = RecipientCoverage.none
+    /// The contact Preview renders for, once one has been picked.
+    @State private var pickedSample: (contact: Contact, company: String)?
     @State private var confirmingTestSend = false
     @State private var confirmingSaveWithErrors = false
     @State private var testSendResult: String?
@@ -45,6 +52,12 @@ struct TemplateEditorView: View {
         _content = State(initialValue: t.content)
     }
 
+    /// Anything typed that the sheet would lose on Cancel.
+    private var hasChanges: Bool {
+        let original = existing ?? MailTemplate(name: "", subject: "", content: "")
+        return name != original.name || subject != original.subject || content != original.content
+    }
+
     private var isValid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
             && !subject.trimmingCharacters(in: .whitespaces).isEmpty
@@ -53,24 +66,11 @@ struct TemplateEditorView: View {
 
     // MARK: - Diagnostics
 
-    /// Every contact in the catalog, used both as preview subjects and as the
-    /// sample the diagnostics measure "how many are missing this?" against.
-    private var allContacts: [(contact: Contact, company: String)] {
-        jobStore.allCompanies.flatMap { company in
-            company.contacts.map { (contact: $0, company: company.company) }
-        }
+    /// Run once per render, and handed to everything that shows a part of it.
+    private func diagnose() -> [TemplateFinding] {
+        TemplateDiagnostics.analyze(subject: subject, content: content,
+                                    profile: profileStore.profile, recipients: coverage)
     }
-
-    private var findings: [TemplateFinding] {
-        TemplateDiagnostics.analyze(
-            subject: subject,
-            content: content,
-            profile: profileStore.profile,
-            contacts: allContacts.map(\.contact)
-        )
-    }
-
-    private var errorCount: Int { findings.filter { $0.severity == .error }.count }
 
     // MARK: - Preview subject
 
@@ -84,10 +84,7 @@ struct TemplateEditorView: View {
     )
 
     private var sample: (contact: Contact, company: String) {
-        if let sampleContactID, let match = allContacts.first(where: { $0.contact.id == sampleContactID }) {
-            return match
-        }
-        return allContacts.first ?? Self.demoContact
+        pickedSample ?? catalog.first ?? Self.demoContact
     }
 
     private var sampleContext: MailContext {
@@ -96,11 +93,13 @@ struct TemplateEditorView: View {
     }
 
     var body: some View {
+        let findings = diagnose()
+        let errorCount = findings.count { $0.severity == .error }
         NavigationStack {
             VStack(spacing: 0) {
                 modePicker
                 Divider()
-                statusStrip
+                statusStrip(findings, errorCount: errorCount)
 
                 switch mode {
                 case .write: writePane
@@ -110,21 +109,19 @@ struct TemplateEditorView: View {
             .paperScreen()
             .navigationTitle(existing == nil ? "New Template" : "Edit Template")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
-            .confirmationDialog("Send a test to yourself?",
-                                isPresented: $confirmingTestSend, titleVisibility: .visible) {
-                Button("Send to \(gmail.connectedEmail ?? "me")") { Task { await sendTest() } }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("This sends one real mail to your own inbox, rendered with \(sample.contact.name.isEmpty ? "the sample contact" : sample.contact.name)'s details.")
-            }
-            .confirmationDialog("Save with \(errorCount) unresolved \(errorCount == 1 ? "issue" : "issues")?",
-                                isPresented: $confirmingSaveWithErrors, titleVisibility: .visible) {
-                Button("Save Anyway") { commit() }
+            .toolbar { toolbarContent(errorCount: errorCount) }
+            .confirmAlert("Send a test to yourself?",
+                          message: "One real mail goes to \(gmail.connectedEmail ?? "your inbox"), written as \(sample.contact.displayName) would get it.",
+                          confirmLabel: "Send Test",
+                          isPresented: $confirmingTestSend) { Task { await sendTest() } }
+            .alert("Save with \(errorCount) unresolved \(errorCount == 1 ? "issue" : "issues")?",
+                   isPresented: $confirmingSaveWithErrors) {
                 Button("Keep Editing", role: .cancel) { showingIssues = true }
+                Button("Save Anyway") { commit() }
             } message: {
                 Text("Text that isn't a real placeholder is sent to contacts exactly as written.")
             }
+            .discardableEdits(hasChanges, message: "What you've written in this template won't be saved.")
             .messageAlert("Test Mail", message: testSendResult) { testSendResult = nil }
             // A test send goes out to Gmail and back; the result lands after the
             // user has stopped watching the button.
@@ -135,6 +132,22 @@ struct TemplateEditorView: View {
             // pane it swaps into is a different height.
             .animation(Theme.Motion.bouncy, value: mode)
             .animation(Theme.Motion.bouncy, value: showingIssues)
+            .onAppear(perform: gatherCatalog)
+        }
+    }
+
+    /// Take the catalog in once, and start Preview on someone from Home — the
+    /// people this template is most likely about to go to.
+    private func gatherCatalog() {
+        guard catalog.isEmpty else { return }
+        catalog = jobStore.allCompanies.flatMap { company in
+            company.contacts.map { (contact: $0, company: company.company) }
+        }
+        coverage = RecipientCoverage(catalog.lazy.map(\.contact))
+        if pickedSample == nil,
+           let job = jobStore.jobs.first(where: { $0.validContacts.contains { !$0.position.isEmpty } }),
+           let contact = job.validContacts.first(where: { !$0.position.isEmpty }) {
+            pickedSample = (contact, job.company)
         }
     }
 
@@ -148,11 +161,8 @@ struct TemplateEditorView: View {
     }
 
     @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .cancellationAction) {
-            Button("Cancel") { dismiss() }
-        }
-        // Cancel and Save are the only bar items: with a third, the glass pills
+    private func toolbarContent(errorCount: Int) -> some ToolbarContent {
+        // Cancel (from `discardableEdits`) and Save are the only bar items: with a third, the glass pills
         // squeeze the title until "Edit Template" truncates to "Edit Tem…". The
         // test send moved into Preview, where it reads better anyway — you look
         // at the render, then mail it to yourself.
@@ -362,14 +372,28 @@ struct TemplateEditorView: View {
         .padding(.top, 4)
     }
 
+    /// People from Home, company by company — the ones a template is written
+    /// for — and a Random pick from the whole catalog, which is the quick way to
+    /// meet the rows with gaps. It used to list every contact in the catalog in
+    /// one flat menu, hundreds deep.
     private var samplePicker: some View {
         Menu {
-            ForEach(allContacts, id: \.contact.id) { item in
-                Button {
-                    Haptics.select()
-                    sampleContactID = item.contact.id
-                } label: {
-                    Text("\(displayName(item.contact)) · \(item.company)")
+            Button("Random Contact", systemImage: "shuffle") {
+                Haptics.select()
+                pickedSample = catalog.randomElement()
+            }
+            Section("On Home") {
+                // A submenu per company keeps the menu one line per company,
+                // however many people each has on file.
+                ForEach(jobStore.jobs.filter { !$0.validContacts.isEmpty }.prefix(25)) { job in
+                    Menu(job.company) {
+                        ForEach(job.validContacts.sortedByName()) { contact in
+                            Button(contact.displayName) {
+                                Haptics.select()
+                                pickedSample = (contact, job.company)
+                            }
+                        }
+                    }
                 }
             }
         } label: {
@@ -378,7 +402,7 @@ struct TemplateEditorView: View {
                 // Two lines rather than one: contact names run long, and at
                 // larger text sizes a single line clips the very name it's
                 // telling you about.
-                Text("Previewing as \(displayName(sample.contact))")
+                Text("Previewing as \(sample.contact.displayName)")
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -387,11 +411,7 @@ struct TemplateEditorView: View {
             }
             .font(.subheadline.weight(.medium))
         }
-        .disabled(allContacts.isEmpty)
-    }
-
-    private func displayName(_ contact: Contact) -> String {
-        contact.displayName
+        .disabled(catalog.isEmpty)
     }
 
     /// Side by side when there's room, stacked when there isn't — at larger text
@@ -432,11 +452,7 @@ struct TemplateEditorView: View {
         var out = AttributedString()
         var cursor = 0
 
-        guard let regex = try? NSRegularExpression(pattern: "\\{[^{}]*\\}") else {
-            return AttributedString(text)
-        }
-
-        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        for match in TemplateDiagnostics.bracedRun.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             out += AttributedString(ns.substring(with: NSRange(location: cursor,
                                                               length: match.range.location - cursor)))
             let literal = ns.substring(with: match.range)
@@ -474,7 +490,7 @@ struct TemplateEditorView: View {
     /// expands downward in place instead of opening a modal over the text you'd
     /// need to edit to fix the problem.
     @ViewBuilder
-    private var statusStrip: some View {
+    private func statusStrip(_ findings: [TemplateFinding], errorCount: Int) -> some View {
         if !findings.isEmpty {
             VStack(spacing: 0) {
                 Button {
@@ -482,9 +498,9 @@ struct TemplateEditorView: View {
                     withAnimation(Theme.Motion.bouncy) { showingIssues.toggle() }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: statusIcon)
-                            .foregroundStyle(statusColor)
-                        Text(statusText)
+                        Image(systemName: errorCount > 0 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(errorCount > 0 ? Color.danger : Color.kraft)
+                        Text("\(findings.count) \(findings.count == 1 ? "issue" : "issues") to check")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.ink)
                         Spacer(minLength: 4)
@@ -520,19 +536,6 @@ struct TemplateEditorView: View {
             .background(Color.paperRaised)
             .overlay(alignment: .top) { Divider().overlay(Color.hairline) }
         }
-    }
-
-    private var statusIcon: String {
-        errorCount > 0 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"
-    }
-
-    private var statusColor: Color {
-        errorCount > 0 ? .danger : .kraft
-    }
-
-    private var statusText: String {
-        let count = findings.count
-        return "\(count) \(count == 1 ? "issue" : "issues") to check"
     }
 
     private func findingRow(_ finding: TemplateFinding) -> some View {

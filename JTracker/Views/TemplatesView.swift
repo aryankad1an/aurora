@@ -189,7 +189,7 @@ private struct TemplateStatus {
 
     init(template: MailTemplate, profile: Profile) {
         let findings = TemplateDiagnostics.analyze(subject: template.subject, content: template.content,
-                                                   profile: profile, contacts: [])
+                                                   profile: profile)
         errors = findings.filter { $0.severity == .error }.count
         warnings = findings.count - errors
     }

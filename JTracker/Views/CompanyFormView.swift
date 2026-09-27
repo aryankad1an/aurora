@@ -24,6 +24,8 @@ struct CompanyFormView: View {
     @State private var domains: [String]
     @State private var newDomain = ""
     @FocusState private var isDomainFieldFocused: Bool
+    @FocusState private var focus: Field?
+    private enum Field { case name, sector }
     /// Other companies already using each domain, looked up as domains are added.
     @State private var owners: [String: [String]] = [:]
     @Environment(JobStore.self) private var jobStore
@@ -77,8 +79,23 @@ struct CompanyFormView: View {
                 Section("Company") {
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.words)
+                        .textContentType(.organizationName)
+                        .focused($focus, equals: .name)
+                        .submitLabel(.next)
+                        .onSubmit { focus = .sector }
+                        // A new company starts with the cursor in its name, once
+                        // the sheet has risen, as a new contact does in
+                        // Contacts; an edit leaves the keyboard down.
+                        .task {
+                            guard companyID == nil, focus == nil else { return }
+                            try? await Task.sleep(for: .milliseconds(400))
+                            focus = .name
+                        }
                     TextField("Sector (optional)", text: $sector)
                         .textInputAutocapitalization(.words)
+                        .focused($focus, equals: .sector)
+                        .submitLabel(.next)
+                        .onSubmit { isDomainFieldFocused = true }
                 }
                 domainsSection
             }
@@ -87,10 +104,8 @@ struct CompanyFormView: View {
             .animation(Theme.Motion.snappy, value: domains)
             .animation(Theme.Motion.snappy, value: owners)
             .task(id: finalDomains) { await lookUpOwners() }
+            .discardableEdits(hasChanges)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(confirmLabel) {
                         Haptics.success()

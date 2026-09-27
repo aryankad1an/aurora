@@ -158,7 +158,7 @@ enum SendAudience: CaseIterable, Identifiable {
     }
 
     func includes(_ contact: Contact, now: Date = .now) -> Bool {
-        guard contact.isValid, contact.email.contains("@") else { return false }
+        guard contact.isMailable else { return false }
         let sent = contact.sentAt ?? .distantPast
         switch self {
         case .fresh:

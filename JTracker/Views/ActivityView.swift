@@ -63,7 +63,8 @@ struct ActivityView: View {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let entries = Self.feed(jobStore.activity, lane: lane, query: query)
         return List {
-            ReplyCheckStrip(sync: replySync) { Task { await checkForReplies() } }
+            // No Check Now of its own: the bar's ↻ and a pull already ask.
+            ReplySyncBar(sync: replySync)
                 .padding(.horizontal, 4)
                 .cardRow(top: 6, bottom: 6)
 
@@ -284,7 +285,7 @@ private struct FeedRow: View {
             // Exactly one third line, whatever is on file: what they said if
             // they answered, else what was sent. Each was optional and up to two
             // lines, so the feed's cards came in five different heights.
-            if hasReplied, let snippet = entry.contact.replySnippet, !snippet.isEmpty {
+            if hasReplied, let snippet = entry.contact.replyPreview {
                 HStack(spacing: 7) {
                     Capsule().fill(Color.olive).frame(width: 2.5)
                     Text(snippet)
@@ -309,83 +310,6 @@ private struct FeedRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .panelAccented(hasReplied ? .olive : nil)
         .padding(.vertical, 4)
-    }
-}
-
-// MARK: - Reply check
-
-/// The one line on Activity that says whether the reply column can be trusted:
-/// when Gmail was last read, whether a read is running, and — when replies can't
-/// be read at all — why.
-private struct ReplyCheckStrip: View {
-    let sync: ReplySync
-    let onCheck: () -> Void
-
-    /// The blocking reason replies can't be read, if there is one. Both are things
-    /// only the user can fix, so both are stated rather than retried.
-    private var blocker: (symbol: String, message: String)? {
-        if sync.needsMigration {
-            return ("cylinder.split.1x2.fill",
-                    "Database is missing the reply columns — run the migration in the README")
-        }
-        if sync.needsReconnect {
-            return ("lock.trianglebadge.exclamationmark.fill",
-                    "Reconnect Gmail in Profile to read replies")
-        }
-        return nil
-    }
-
-    private var label: String {
-        if sync.isSyncing { return sync.progress.label.isEmpty ? "Checking Gmail…" : sync.progress.label }
-        guard let last = sync.lastSyncedAt else { return "Replies not checked yet" }
-        return "Checked \(last.activityLabelWithTime.lowercased())"
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            if sync.isSyncing && sync.progress.total > 0 {
-                ProgressView(value: sync.progress.fraction)
-                    .tint(.clay)
-            }
-
-            HStack(spacing: 8) {
-                if let blocker {
-                    Label {
-                        Text(blocker.message)
-                            .font(.caption)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: blocker.symbol).font(.caption)
-                    }
-                    .foregroundStyle(.statusInvalid)
-                } else {
-                    Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-                        .font(.caption2)
-                        .foregroundStyle(.inkMuted)
-                        .symbolEffect(.rotate, isActive: sync.isSyncing)
-                    Text(label)
-                        .font(.caption)
-                        .foregroundStyle(.inkMuted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 4)
-
-                Button {
-                    Haptics.press()
-                    onCheck()
-                } label: {
-                    Text(sync.isSyncing ? "Checking…" : "Check now")
-                        .font(.caption.weight(.semibold))
-                }
-                .secondaryButton()
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                .disabled(sync.isSyncing)
-            }
-        }
-        .animation(Theme.Motion.snappy, value: sync.isSyncing)
     }
 }
 

@@ -11,6 +11,9 @@ import SwiftUI
 struct ContactDetailView: View {
     let contact: Contact
     let company: String
+    /// Write to this person. The presenter closes this sheet and opens the
+    /// compose sheet in its place — two can't be up at once.
+    var onCompose: (() -> Void)? = nil
     let onSetValidity: (Bool) -> Void
     let onSave: (Contact) -> Void
 
@@ -28,16 +31,23 @@ struct ContactDetailView: View {
     /// Mirrors the contact's shared valid/invalid flag so the sheet updates the
     /// moment you tap, without waiting for the round-trip and reload behind it.
     @State private var isContactValid: Bool
+    /// The rule-in/rule-out tap, held until it's confirmed.
+    @State private var pendingValidity: ValidityChange?
 
     @State private var history: [MailSend] = []
     @State private var isLoadingHistory = true
     @State private var selectedSend: MailSend?
+    @State private var confirmingDiscard = false
+    /// Flips the Copy button to "Copied" for a moment after it's used.
+    @State private var copied = false
 
     init(contact: Contact, company: String,
+         onCompose: (() -> Void)? = nil,
          onSetValidity: @escaping (Bool) -> Void,
          onSave: @escaping (Contact) -> Void) {
         self.contact = contact
         self.company = company
+        self.onCompose = onCompose
         self.onSetValidity = onSetValidity
         self.onSave = onSave
         _email = State(initialValue: contact.email)
@@ -77,10 +87,13 @@ struct ContactDetailView: View {
     var body: some View {
         NavigationStack {
             PaperForm {
+                if !isEditing { header }
+
                 if !isContactValid { invalidBanner }
 
+                // No company header: the card above already names it.
                 ContactFields(email: $email, name: $name, position: $position, phone: $phone,
-                                greetingName: $greetingName, isEditing: isEditing, header: company)
+                              greetingName: $greetingName, isEditing: isEditing)
 
                 validitySection
 
@@ -106,27 +119,24 @@ struct ContactDetailView: View {
                     }
                 }
             }
-            // The screen is about a person, so it's titled with their name. It used
-            // to show the company, which is the one thing you already knew — you
-            // arrived from that company's list.
-            .navigationTitle(name.isEmpty ? email : name)
+            // The header carries the name, as a Contacts card does; the bar only
+            // says so while the fields are open for editing.
+            .navigationTitle(isEditing ? "Edit Contact" : "")
             .navigationBarTitleDisplayMode(.inline)
+            // Laid out as Contacts lays out a card: Edit on the trailing side,
+            // and while editing, Cancel and Save where Done and Edit were.
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        Haptics.tap()
-                        withAnimation(Theme.Motion.bouncy) {
-                            if isEditing { cancelEdit() } else { isEditing = true }
-                        }
-                    } label: {
-                        Image(systemName: isEditing ? "xmark" : "pencil")
-                            .contentTransition(.symbolEffect(.replace))
-                    }
-                    .accessibilityLabel(isEditing ? "Cancel editing" : "Edit contact")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .cancellationAction) {
                     if isEditing {
-                        Button("Save") { save() }.disabled(!canSave || !hasChanges)
+                        Button("Cancel") {
+                            if hasChanges {
+                                Haptics.warning()
+                                confirmingDiscard = true
+                            } else {
+                                Haptics.tap(0.5)
+                                withAnimation(Theme.Motion.bouncy) { cancelEdit() }
+                            }
+                        }
                     } else {
                         Button("Done") {
                             Haptics.tap(0.5)
@@ -134,8 +144,31 @@ struct ContactDetailView: View {
                         }
                     }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isEditing {
+                        Button("Save") { save() }.disabled(!canSave || !hasChanges)
+                    } else {
+                        Button("Edit") {
+                            Haptics.tap()
+                            withAnimation(Theme.Motion.bouncy) { isEditing = true }
+                        }
+                    }
+                }
+            }
+            .interactiveDismissDisabled(isEditing && hasChanges)
+            .alert("Discard your changes?", isPresented: $confirmingDiscard) {
+                Button("Keep Editing", role: .cancel) {}
+                Button("Discard Changes", role: .destructive) {
+                    withAnimation(Theme.Motion.bouncy) { cancelEdit() }
+                }
+            } message: {
+                Text("Your edits to this contact won't be saved.")
             }
             .task { await loadHistory() }
+            .validityAlert($pendingValidity) { change in
+                withAnimation(Theme.Motion.bouncy) { isContactValid = change.isValid }
+                onSetValidity(change.isValid)
+            }
             // An Undo tapped in the banner below reverts the stored contact; the
             // form follows it, unless it's mid-edit and the typing is the user's.
             .onChange(of: stored.map(Self.editableFields)) { _, _ in
@@ -148,6 +181,75 @@ struct ContactDetailView: View {
                 MailSummaryView(contact: contact(for: send), company: company)
             }
         }
+    }
+
+    /// Who this is, and the two things you open a contact to do: write to them,
+    /// or take their address somewhere else. Drawn the way a Contacts card
+    /// opens — the face, the name, the role — rather than as the first rows of
+    /// a form.
+    private var header: some View {
+        Section {
+            VStack(spacing: 12) {
+                MonogramAvatar(text: committed.displayName, size: 76)
+                    .grayscale(isContactValid ? 0 : 1)
+                VStack(spacing: 3) {
+                    Text(committed.displayName)
+                        .font(.display(24))
+                        .foregroundStyle(.ink)
+                        .multilineTextAlignment(.center)
+                    Text([committed.position, company].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.subheadline)
+                        .foregroundStyle(.inkMuted)
+                        .multilineTextAlignment(.center)
+                }
+                HStack(spacing: 10) {
+                    actionTile("Mail", systemImage: "paperplane.fill",
+                               isEnabled: onCompose != nil && isContactValid && committed.isMailable) {
+                        Haptics.press()
+                        onCompose?()
+                    }
+                    actionTile(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc",
+                               isEnabled: !committed.email.isEmpty) {
+                        UIPasteboard.general.string = committed.email
+                        Haptics.success()
+                        withAnimation(Theme.Motion.pop) { copied = true }
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.6))
+                            withAnimation(Theme.Motion.pop) { copied = false }
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        }
+    }
+
+    /// One of the card's action buttons: glyph over label in a small tile, the
+    /// shape Contacts uses for Message, Call and Mail.
+    private func actionTile(_ title: String, systemImage: String, isEnabled: Bool,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(height: 20)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .contentTransition(.opacity)
+            }
+            .foregroundStyle(isEnabled ? Color.clay : Color.inkFaint)
+            .frame(width: 84, height: 58)
+            .background(Color.paperRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .strokeBorder(Color.hairline, lineWidth: 1))
+        }
+        .buttonStyle(BouncyPress(scale: 0.92))
+        .disabled(!isEnabled)
     }
 
     /// Says the state plainly at the top of the sheet, so an invalid contact is
@@ -173,18 +275,15 @@ struct ContactDetailView: View {
     }
 
     /// The rule-in/rule-out control. Its own section under the fields: it isn't an
-    /// edit to the contact's details (it applies straight away, with no Save),
+    /// edit to the contact's details (it applies once confirmed, with no Save),
     /// and the footer spells out that it lands for every user.
     private var validitySection: some View {
         Section {
+            // It changes the shared row for every user, so it asks first; the
+            // confirm plays the haptic for whichever of the two opposite acts
+            // it was, since the banner above changing is ambiguous on its own.
             Button {
-                let next = !isContactValid
-                // Ruling someone out and putting them back are opposite acts, and
-                // the phone should say which one just happened — the banner above
-                // appears or disappears either way, which on its own is ambiguous.
-                if next { Haptics.success() } else { Haptics.thud() }
-                withAnimation(Theme.Motion.bouncy) { isContactValid = next }
-                onSetValidity(next)
+                pendingValidity = ValidityChange([committed], isValid: !isContactValid)
             } label: {
                 // Icon and text are coloured explicitly rather than via `.tint`:
                 // inside a Form the row keeps painting a button's icon with the

@@ -20,11 +20,19 @@ struct JobDetailView: View {
     /// the header finds it collapsed on the next company too.
     @AppStorage("companyDetail.contactsExpanded") private var isContactsExpanded = true
     @State private var composeRequest: ComposeRequest?
+    /// A compose asked for from the contact sheet, opened once that sheet is gone.
+    @State private var pendingCompose: ComposeRequest?
     @State private var detailContact: Contact?
     @State private var selection = ListSelection<Contact.ID>()
     @State private var confirmingDelete = false
     @State private var pendingDelete: Contact?
+    /// A Mark Invalid/Valid from a swipe, a menu or the selection bar, held until
+    /// it's confirmed: it rewrites the shared contact row for every user.
+    @State private var pendingValidity: ValidityChange?
     @State private var searchText = ""
+    /// This company, while the Send chooser (by rule: not mailed yet, quiet,
+    /// follow-ups…) is open for it.
+    @State private var sendingTo: SendTarget?
     /// True until the first attempt to fetch a company that isn't in memory has
     /// finished, so the screen shows a spinner rather than "not found" meanwhile.
     @State private var isResolving = true
@@ -60,7 +68,7 @@ struct JobDetailView: View {
     private var sendableCount: Int {
         guard let job else { return 0 }
         return job.contacts.filter {
-            selection.contains($0.id) && $0.isValid && $0.email.contains("@")
+            selection.contains($0.id) && $0.isMailable
         }.count
     }
 
@@ -146,6 +154,14 @@ struct JobDetailView: View {
             },
             isHidden: selection.isSelecting || job == nil
         ) {
+            // Writing to the company — not to one person, or to a hand-picked
+            // selection — had no way in from its own screen.
+            Button {
+                if let job { sendingTo = SendTarget(companies: [job]) }
+            } label: {
+                Label("Send…", systemImage: "paperplane")
+            }
+            .disabled(job?.validContacts.isEmpty ?? true)
             Button {
                 editingCompany = job
             } label: {
@@ -158,6 +174,31 @@ struct JobDetailView: View {
                 Label("Select", systemImage: "checkmark.circle")
             }
             .disabled(job?.contacts.isEmpty ?? true)
+            Divider()
+            // A company opened from the catalog could only be put on Home by
+            // going back and swiping its row.
+            if jobStore.isTracked(jobID) {
+                Button {
+                    // The same reversible edit as Home's swipe, with its Undo.
+                    Haptics.thud()
+                    jobStore.untrack(companyID: jobID)
+                    if let job {
+                        let store = jobStore
+                        UndoCoordinator.shared.stage(message: "Removed \(job.company) from Home") {
+                            store.restoreJob(job)
+                        }
+                    }
+                } label: {
+                    Label("Remove from Home", systemImage: "pin.slash")
+                }
+            } else {
+                Button {
+                    Haptics.press()
+                    jobStore.track(companyID: jobID)
+                } label: {
+                    Label("Track on Home", systemImage: "pin")
+                }
+            }
         }
         .selectionActions(
             selection,
@@ -182,12 +223,29 @@ struct JobDetailView: View {
         ) { contact in
             Task { await jobStore.deleteContact(contact) }
         }
+        .validityAlert($pendingValidity) { change in
+            // From the selection bar or a selection's menu: the act is done, so
+            // the mode is too. Cancelling leaves the selection as it was.
+            if selection.isSelecting { selection.exit() }
+            Task { await jobStore.setValidity(change.ids, isValid: change.isValid) }
+        }
         .companyEditor(for: $editingCompany)
+        .sendChooser(for: $sendingTo) {}
         .addContactSheet(isPresented: $isAdding, initialCompany: job)
-        .sheet(item: $detailContact) { contact in
+        .sheet(item: $detailContact, onDismiss: {
+            // Mail from the contact card: its sheet had to go first.
+            if let pendingCompose {
+                composeRequest = pendingCompose
+                self.pendingCompose = nil
+            }
+        }) { contact in
             ContactDetailView(
                 contact: contact,
                 company: job?.company ?? "",
+                onCompose: {
+                    pendingCompose = ComposeRequest(preselect: [contact.id])
+                    detailContact = nil
+                },
                 onSetValidity: { isValid in
                     Task { await jobStore.setValidity([contact.id], isValid: isValid) }
                 }
@@ -398,9 +456,7 @@ struct JobDetailView: View {
             systemImage: allInvalid ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
             tint: allInvalid ? Color.statusDone : Color.statusInvalid
         ) {
-            let ids = Array(selection.ids)
-            selection.exit()
-            Task { await jobStore.setValidity(ids, isValid: allInvalid) }
+            pendingValidity = ValidityChange(picked, isValid: allInvalid)
         }
     }
 
@@ -416,7 +472,7 @@ struct JobDetailView: View {
     private func contactMenu(_ ids: Set<Contact.ID>) -> some View {
         let contacts = job?.contacts.filter { ids.contains($0.id) } ?? []
         if !contacts.isEmpty {
-            let sendable = contacts.filter { $0.isValid && $0.email.contains("@") }
+            let sendable = contacts.filter(\.isMailable)
             let allInvalid = contacts.allSatisfy { !$0.isValid }
             Button {
                 startCompose(preselect: Set(sendable.map(\.id)))
@@ -430,8 +486,7 @@ struct JobDetailView: View {
                 }
             }
             Button {
-                if allInvalid { Haptics.success() } else { Haptics.thud() }
-                Task { await jobStore.setValidity(contacts.map(\.id), isValid: allInvalid) }
+                pendingValidity = ValidityChange(contacts, isValid: allInvalid)
             } label: {
                 Label(allInvalid ? "Mark Valid" : "Mark Invalid",
                       systemImage: allInvalid ? "checkmark.circle" : "exclamationmark.triangle")
@@ -480,9 +535,10 @@ struct JobDetailView: View {
                 }
             }
             .swipeActions(edge: .leading) {
+                // A full swipe fires this straight away, so it asks first
+                // rather than rewriting the shared row mid-gesture.
                 Button {
-                    if contact.isValid { Haptics.thud() } else { Haptics.success() }
-                    Task { await jobStore.setValidity([contact.id], isValid: !contact.isValid) }
+                    pendingValidity = ValidityChange([contact], isValid: !contact.isValid)
                 } label: {
                     Label(contact.isValid ? "Invalid" : "Valid",
                           systemImage: contact.isValid
@@ -497,7 +553,6 @@ struct JobDetailView: View {
 private struct ContactRow: View {
     let contact: Contact
     var onSend: (() -> Void)? = nil
-
 
     /// Always a second line, so every contact card is the same height: the job
     /// title, else the address — unless the address is already the headline.
@@ -527,8 +582,9 @@ private struct ContactRow: View {
                                      ? Color.inkMuted : Color.inkFaint)
                     .lineLimit(1)
             }
-
-            Spacer(minLength: 8)
+            // Fills the row rather than sharing it with a Spacer, so the address
+            // gets every point the chip and button leave.
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
                 if !contact.isValid {

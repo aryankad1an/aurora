@@ -16,7 +16,7 @@ import UIKit
 /// this batch.
 ///
 /// The queue holds no references to the auth or data stores; `sender` and
-/// `onCompletion` are supplied by `RootView`, which owns both.
+/// `onRecord` are supplied by `RootView`, which owns both.
 enum MailQueueError: LocalizedError {
     case noTransport
 
@@ -40,6 +40,9 @@ final class MailQueue {
     struct Outcome {
         let sent: Int
         let failed: [String]
+        /// Why the run stopped short, when it was for a reason every mail shared
+        /// (the Gmail session ended) rather than one address failing.
+        var stoppedBecause: String? = nil
     }
 
     /// What the transport reports back about a delivered mail. The thread id is
@@ -58,11 +61,18 @@ final class MailQueue {
     /// Random slack either side of `spacing`, so the send pattern isn't perfectly
     /// periodic the way only a machine's would be.
     private static let jitter = 400
+    /// How many delivered mails are held before they're written to the send
+    /// history. A run is recorded as it goes, not only at the end: if iOS ends
+    /// the app mid-run, at most this many sent mails go unrecorded — and an
+    /// unrecorded send is a contact the app will offer to mail a second time.
+    private static let recordEvery = 5
 
     private(set) var total = 0
     private(set) var sent = 0
     private(set) var failed: [String] = []
     private(set) var isRunning = false
+    /// Stop was tapped and the mail already in flight is finishing.
+    private(set) var isStopping = false
 
     /// Set when a run finishes so the UI can report it. Cleared by `acknowledge()`.
     private(set) var outcome: Outcome?
@@ -70,13 +80,19 @@ final class MailQueue {
     /// Delivers one mail and reports what the provider called it. Injected so the
     /// queue stays independent of Gmail auth.
     var sender: ((Mail, String) async throws -> Delivery?)?
-    /// Called once per run with everything that got through, so the store can
-    /// record the sends in a single write rather than one per mail.
-    var onCompletion: (([Contact.ID: SentMail]) async -> Void)?
+    /// Records delivered mails in the send history, a few at a time (see
+    /// `recordEvery`), and says whether the write landed. Ones that didn't are
+    /// offered again with the next batch.
+    var onRecord: (([Contact.ID: SentMail]) async -> Bool)?
 
     private var pending: [Mail] = []
-    private var task: Task<Void, Never>?
+    /// Mails confirmed after Stop, while the stopped run finishes the one mail
+    /// already in flight. They start the next run as soon as it ends — joining
+    /// the stopping one would have dropped them without a word.
+    private var nextRun: [Mail] = []
+    private var stoppedBecause: String?
     private var fromName = ""
+    private var assertion = UIBackgroundTaskIdentifier.invalid
 
     /// True whenever there's something for the UI to show — mid-run, or a result
     /// the user hasn't acknowledged yet.
@@ -98,24 +114,26 @@ final class MailQueue {
         guard !mails.isEmpty else { return }
         self.fromName = fromName
 
-        if isRunning {
+        if isStopping {
+            nextRun.append(contentsOf: mails)
+        } else if isRunning {
             pending.append(contentsOf: mails)
             total += mails.count
-            return
+        } else {
+            start(mails)
         }
-
-        pending = mails
-        total = mails.count
-        sent = 0
-        failed = []
-        outcome = nil
-        start()
     }
 
     /// Stop after the in-flight mail. Anything already sent stays sent.
+    ///
+    /// Emptying the queue is the whole mechanism: the loop runs out of mail and
+    /// ends. It used to cancel the run's task, and cancellation reaches into the
+    /// Gmail request already in flight — a mail Gmail may already have accepted
+    /// was aborted client-side, counted as failed and never recorded, so the app
+    /// would offer to mail that person again.
     func cancel() {
-        task?.cancel()
-        task = nil
+        guard isRunning, !isStopping else { return }
+        isStopping = true
         pending = []
     }
 
@@ -129,20 +147,26 @@ final class MailQueue {
 
     // MARK: - Draining
 
-    private func start() {
+    private func start(_ mails: [Mail]) {
+        pending = mails
+        total = mails.count
+        sent = 0
+        failed = []
+        stoppedBecause = nil
+        outcome = nil
         isRunning = true
-        task = Task { [weak self] in
+        Task { [weak self] in
             await self?.drain()
         }
     }
 
     private func drain() async {
-        let assertion = beginAssertion()
-        defer { endAssertion(assertion) }
+        beginAssertion()
+        defer { endAssertion() }
 
         var records: [Contact.ID: SentMail] = [:]
 
-        while !pending.isEmpty && !Task.isCancelled {
+        while !pending.isEmpty {
             let mail = pending.removeFirst()
             do {
                 // No transport means nothing was delivered. Recording these as
@@ -154,24 +178,45 @@ final class MailQueue {
                                             gmailMessageID: delivery?.messageID,
                                             gmailThreadID: delivery?.threadID)
                 sent += 1
+            } catch let error as GmailAuthError where error.endsRun {
+                // Every mail after this one would fail the same way, a second
+                // and a bit apart. Stop, and count the rest as not sent.
+                failed.append(mail.displayName)
+                failed.append(contentsOf: pending.map(\.displayName))
+                pending = []
+                stoppedBecause = error.localizedDescription
             } catch {
                 failed.append(mail.displayName)
             }
 
-            if !pending.isEmpty && !Task.isCancelled {
+            if records.count >= Self.recordEvery {
+                await record(&records)
+            }
+            if !pending.isEmpty {
                 try? await Task.sleep(for: Self.spacing + .milliseconds(Int.random(in: -Self.jitter...Self.jitter)))
             }
         }
 
-        // Record even a cancelled run's successes — those mails really were sent,
+        // Record even a stopped run's successes — those mails really were sent,
         // and losing them would offer to re-send people who've already been mailed.
-        if !records.isEmpty {
-            await onCompletion?(records)
-        }
+        await record(&records)
 
         isRunning = false
-        task = nil
-        outcome = Outcome(sent: records.count, failed: failed)
+        isStopping = false
+        outcome = Outcome(sent: sent, failed: failed, stoppedBecause: stoppedBecause)
+
+        if !nextRun.isEmpty {
+            let next = nextRun
+            nextRun = []
+            start(next)
+        }
+    }
+
+    /// Write what's been delivered so far to the send history. Kept for the next
+    /// attempt if the write fails; `onRecord` has already said why.
+    private func record(_ records: inout [Contact.ID: SentMail]) async {
+        guard !records.isEmpty, let onRecord else { return }
+        if await onRecord(records) { records = [:] }
     }
 
     // MARK: - Background execution
@@ -180,12 +225,19 @@ final class MailQueue {
     /// a guarantee of finishing: once iOS suspends the app the loop simply stops
     /// awaiting and picks up again on return, which is why the UI tells the user
     /// the queue continues when they come back rather than promising delivery.
-    private func beginAssertion() -> UIBackgroundTaskIdentifier {
-        UIApplication.shared.beginBackgroundTask(withName: "MailQueue") { }
+    ///
+    /// The time running out has to be answered by handing the assertion back.
+    /// An app that holds one past its expiry isn't suspended, it's terminated —
+    /// which used to take the run's unrecorded sends down with it.
+    private func beginAssertion() {
+        assertion = UIApplication.shared.beginBackgroundTask(withName: "MailQueue") { [weak self] in
+            MainActor.assumeIsolated { self?.endAssertion() }
+        }
     }
 
-    private func endAssertion(_ id: UIBackgroundTaskIdentifier) {
-        guard id != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(id)
+    private func endAssertion() {
+        guard assertion != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(assertion)
+        assertion = .invalid
     }
 }

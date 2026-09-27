@@ -104,8 +104,30 @@ struct ProfileFields: View {
                     .keyboardType(.URL)
             } else if profile.resumeLink.isEmpty {
                 Text("No resume link").foregroundStyle(.inkMuted)
+            } else if let url = URL(string: profile.resumeLink), url.scheme?.hasPrefix("http") == true {
+                // A link, as it is in Contacts: tap to check it's the right
+                // file, hold to copy it.
+                Link(destination: url) {
+                    LabeledContent {
+                        HStack(spacing: 4) {
+                            Text(url.host() ?? profile.resumeLink)
+                                .lineLimit(1)
+                            Image(systemName: "arrow.up.forward")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(.clay)
+                    } label: {
+                        Text("Link").foregroundStyle(.ink)
+                    }
+                }
+                .contextMenu {
+                    Button("Copy Link", systemImage: "doc.on.doc") {
+                        UIPasteboard.general.string = profile.resumeLink
+                    }
+                }
             } else {
                 LabeledContent("Link", value: profile.resumeLink)
+                    .textSelection(.enabled)
             }
         } header: {
             Text("Resume")

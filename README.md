@@ -39,7 +39,13 @@ Google (Gmail) OAuth for sending mail.
   and counts across the top, then three lanes you can tick and batch-send from —
   everyone still waiting (filtered by how many days they've been quiet), everyone
   who answered (with the first lines of what they said), and everyone who hasn't
-  been contacted yet.
+  been contacted yet, led by the companies on Home.
+- **Sending safely** — every send asks first; a batch holds at most 50 mails
+  (Gmail's daily cap and spam heuristics both punish more); a template that
+  names one company in plain text says so, and warns before it goes to anyone
+  else. Sends are recorded every few mails as a run goes, so a run cut short
+  can't lead to anyone being mailed twice, and Stop finishes the mail already
+  on its way instead of abandoning it mid-request.
 
 ## Architecture
 
@@ -81,7 +87,7 @@ matches. Two files hold all of it — `Support/Palette.swift` (colour and type) 
 list chrome, selection mode) — so a screen never picks a colour, a corner radius
 or a list style of its own.
 
-Four rules the components encode:
+The rules the components encode:
 
 - **One surface.** Anything raised is the same paper at the same radius behind
   the same hairline. Depth is a rule, not a shadow.
@@ -97,6 +103,10 @@ Four rules the components encode:
   floats over them is Liquid Glass. Tapping a card zooms it into its screen,
   and the splash is a graph seen through a glass lens whose droplets fuse into
   it as the app loads.
+- **Nothing is lost to one stray tap.** Every sheet that edits something asks
+  before Cancel throws the edits away and can't be swiped down while it has
+  them (`discardableEdits`); sending, signing out and ruling a contact in or out
+  all confirm in a centred alert (`confirmAlert`).
 - **System components before custom ones.** Lists are `List`s, so taps, holds
   (context menus), swipes and two-finger multi-select are the system's own.
   Selection mode swaps the tab bar for the system bottom toolbar, as Photos

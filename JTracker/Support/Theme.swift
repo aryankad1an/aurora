@@ -40,22 +40,24 @@ extension Color {
     /// enough to sit under the accent while still telling two rows apart, and
     /// mid-toned enough to hold white text in either appearance.
     static func monogram(for text: String) -> Color {
-        let palette: [Color] = [
-            Color(red: 0.62, green: 0.36, blue: 0.24),   // clay
-            Color(red: 0.42, green: 0.47, blue: 0.36),   // olive
-            Color(red: 0.35, green: 0.44, blue: 0.53),   // slate
-            Color(red: 0.55, green: 0.40, blue: 0.47),   // plum
-            Color(red: 0.63, green: 0.51, blue: 0.30),   // kraft
-            Color(red: 0.31, green: 0.48, blue: 0.47),   // teal
-            Color(red: 0.48, green: 0.42, blue: 0.56),   // iris
-            Color(red: 0.58, green: 0.34, blue: 0.33)    // rust
-        ]
         var hash: UInt64 = 5381
         for byte in text.utf8 {
             hash = (hash &* 33) ^ UInt64(byte)
         }
-        return palette[Int(hash % UInt64(palette.count))]
+        return monogramPalette[Int(hash % UInt64(monogramPalette.count))]
     }
+
+    /// Built once, not per avatar drawn.
+    private static let monogramPalette: [Color] = [
+        Color(red: 0.62, green: 0.36, blue: 0.24),   // clay
+        Color(red: 0.42, green: 0.47, blue: 0.36),   // olive
+        Color(red: 0.35, green: 0.44, blue: 0.53),   // slate
+        Color(red: 0.55, green: 0.40, blue: 0.47),   // plum
+        Color(red: 0.63, green: 0.51, blue: 0.30),   // kraft
+        Color(red: 0.31, green: 0.48, blue: 0.47),   // teal
+        Color(red: 0.48, green: 0.42, blue: 0.56),   // iris
+        Color(red: 0.58, green: 0.34, blue: 0.33)    // rust
+    ]
 }
 
 extension String {
@@ -117,6 +119,21 @@ extension String {
     }
 }
 
+extension String {
+    /// A reply's opening lines without the quoted mail after them. Gmail's
+    /// snippet runs straight on from the answer into the quote header —
+    /// "…please apply! On Wed, Sep 2, 2026 at 6:21 AM Aryan Kadian" — and that
+    /// tail is the sender's own mail, not what they were told. Gmail's, Apple
+    /// Mail's and Outlook's header shapes are recognised; a snippet that is
+    /// nothing but a header is left as it is.
+    var withoutQuoteHeader: String {
+        let header = #"(?s)\s+On\s+(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?|\d{1,2}\s+[A-Z][a-z]+\.?,?\s+\d{4},?|[A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4},?)\s.*$"#
+        guard let range = range(of: header, options: .regularExpression) else { return self }
+        let answer = self[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        return answer.isEmpty ? self : answer
+    }
+}
+
 extension Date {
     /// A compact, human label for activity timestamps:
     /// "Today", "Yesterday", "Aug 12", or "Aug 12, 2025" outside the current year.
@@ -130,10 +147,12 @@ extension Date {
         return formatted(.dateTime.month(.abbreviated).day().year())
     }
 
-    /// Like `activityLabel`, but appends the time for entries from today
-    /// (e.g. "Today, 11:05 AM"). Other days show the date only.
-    var activityLabelWithTime: String {
-        guard Calendar.current.isDateInToday(self) else { return activityLabel }
-        return "Today, " + formatted(date: .omitted, time: .shortened)
+    /// `activityLabel` for the middle of a sentence — "sent today", "sent Aug
+    /// 12". Only the relative words drop their capital; lowercasing the whole
+    /// label turned months into "aug".
+    var activityPhrase: String {
+        let cal = Calendar.current
+        return cal.isDateInToday(self) || cal.isDateInYesterday(self)
+            ? activityLabel.lowercased() : activityLabel
     }
 }

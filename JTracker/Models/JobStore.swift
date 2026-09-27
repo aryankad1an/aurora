@@ -10,7 +10,12 @@ import Observation
 final class JobStore {
     /// The user's tracked companies, with contacts and sent state. Drives Home's
     /// "Tracking" section.
-    private(set) var jobs: [Job] = []
+    private(set) var jobs: [Job] = [] {
+        didSet { trackedIDs = Set(jobs.map(\.id)) }
+    }
+    /// `jobs`' ids, so "is this tracked?" — asked by every row of the catalog —
+    /// is a lookup rather than a scan.
+    private var trackedIDs = Set<String>()
     /// Every company in the shared catalog, with contacts and this user's sent
     /// state overlaid. Drives the Companies list and the cross-company lanes of
     /// Quick Actions.
@@ -121,19 +126,26 @@ final class JobStore {
             ?? detachedCompanies[id] ?? searchResults.first { $0.id == id }
     }
 
-    /// A contact by id, from any company held in memory.
+    /// A contact by id, from any company held in memory. Walks the sources in
+    /// place rather than through `knownCompanies`, which copies and de-duplicates
+    /// every company on each call — and screens ask this from their body.
     func contact(id: Contact.ID) -> Contact? {
-        knownCompanies.lazy.flatMap(\.contacts).first { $0.id == id }
+        for source in [allCompanies, jobs, Array(detachedCompanies.values), searchResults] {
+            for company in source {
+                if let match = company.contacts.first(where: { $0.id == id }) { return match }
+            }
+        }
+        return nil
     }
 
     /// Load a specific company by id from Supabase if it isn't already in memory.
     @discardableResult
     func loadCompanyIfNeeded(id: String) async -> Job? {
         if let existing = company(id: id) { return existing }
-        guard var list = try? await SupabaseAPI.fetchCompany(id: id).map({ [$0] }) else { return nil }
-        overlaySends(latestSendByContact, into: &list)
-        detachedCompanies[id] = list[0]
-        return list[0]
+        guard let fetched = try? await SupabaseAPI.fetchCompany(id: id) else { return nil }
+        let company = Self.overlaying(latestSendByContact, onto: fetched)
+        detachedCompanies[id] = company
+        return company
     }
 
     /// Search the full catalog on Supabase for companies matching `query` (by name,
@@ -170,7 +182,7 @@ final class JobStore {
 
     /// Whether the company is on this user's Home.
     func isTracked(_ id: String) -> Bool {
-        jobs.contains { $0.id == id }
+        trackedIDs.contains(id)
     }
 
     /// Contacts across every company that can be mailed (well-formed address,
@@ -185,17 +197,25 @@ final class JobStore {
     /// Memoized to make row selection and interaction instantaneous.
     private(set) var suggestedGroups: [(company: Job, contacts: [Contact])] = []
 
+    ///
+    /// Companies on Home come first: they're the ones being gone after, and
+    /// they're there whether or not the catalog has paged in that far — the
+    /// lane used to be built from the loaded pages alone, alphabetically, so a
+    /// tracked company late in the alphabet only showed up after a long scroll.
     private func rebuildSuggested() {
         let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+        var seen = Set<String>()
         var result: [(company: Job, contact: Contact)] = []
-        for company in allCompanies {
-            for contact in company.contacts where contact.isValid && contact.email.contains("@") {
+        for company in jobs + allCompanies where seen.insert(company.id).inserted {
+            for contact in company.contacts where contact.isMailable {
                 if !contact.isSent || (contact.sentAt ?? .distantPast) < cutoff {
                     result.append((company, contact))
                 }
             }
         }
         let sorted = result.sorted { a, b in
+            let aTracked = isTracked(a.company.id), bTracked = isTracked(b.company.id)
+            if aTracked != bTracked { return aTracked }
             switch (a.contact.sentAt, b.contact.sentAt) {
             case (nil, nil):
                 return a.company.company.localizedCaseInsensitiveCompare(b.company.company) == .orderedAscending
@@ -262,12 +282,13 @@ final class JobStore {
     /// server write fired in the background.
     func track(companyID: String) {
         guard let email = userEmail else { return }
-        guard !jobs.contains(where: { $0.id == companyID }) else { return }
+        guard !isTracked(companyID) else { return }
         mutateTracked { if !$0.contains(companyID) { $0.append(companyID) } }
         if let company = company(id: companyID) {
             insertSorted(company)
         }
         pushTracked(add: true, companyID: companyID, email: email)
+        rebuildSuggested()
     }
 
     /// Untrack a company from this user's Home. Instant + background push; the
@@ -277,6 +298,7 @@ final class JobStore {
         mutateTracked { $0.removeAll { $0 == companyID } }
         jobs.removeAll { $0.id == companyID }
         pushTracked(add: false, companyID: companyID, email: email)
+        rebuildSuggested()
     }
 
     /// Track several companies at once (Companies multi-select).
@@ -293,13 +315,13 @@ final class JobStore {
         mutateTracked { if !$0.contains(job.id) { $0.append(job.id) } }
         pushTracked(add: true, companyID: job.id, email: email)
         insertSorted(job)
+        rebuildSuggested()
     }
 
     /// Insert a job keeping the alphabetical order Home displays.
     private func insertSorted(_ job: Job) {
-        guard !jobs.contains(where: { $0.id == job.id }) else { return }
-        jobs.append(job)
-        jobs = jobs.sortedByName()
+        guard !isTracked(job.id) else { return }
+        jobs = (jobs + [job]).sortedByName()
     }
 
     // MARK: - Catalog mutations (shared, upstream — change the DB for everyone)
@@ -345,13 +367,9 @@ final class JobStore {
         errorMessage = "The company was saved, but its mail domains weren't: the database needs a one-time update first. Run the “companies.domains” migration from the README in the Supabase SQL editor."
     }
 
-    /// Delete a company from the shared catalog (upstream). The reload afterwards
-    /// reconciles the tracked cache against server truth, so it drops off Home too.
-    func deleteCompanyUpstream(_ id: String) async {
-        await deleteCompanies([id])
-    }
-
-    /// Delete several catalog companies in one request and one reload.
+    /// Delete catalog companies (upstream, for everyone) in one request and one
+    /// reload. The reload reconciles the tracked cache against server truth, so
+    /// they drop off Home too.
     func deleteCompanies(_ ids: [String]) async {
         guard !ids.isEmpty else { return }
         await perform { try await SupabaseAPI.deleteCompanies(ids: ids) }
@@ -372,10 +390,6 @@ final class JobStore {
     enum ContactDestination {
         case existing(Job)
         case new(name: String)
-    }
-
-    func addContact(_ contact: Contact, to job: Job) async {
-        await addContact(contact, to: .existing(job))
     }
 
     /// Add a contact, and teach the catalog their mail domain.
@@ -441,19 +455,29 @@ final class JobStore {
     /// when no Gmail is connected — you can't send without it.
     ///
     /// Deliberately not routed through `perform`: this is called by `MailQueue`
-    /// when a background run finishes, which can be minutes after the user left
-    /// the send screen. Raising the app-wide "Saving…" block there would freeze
+    /// every few mails of a background run, which can be minutes after the user
+    /// left the send screen. Raising the app-wide "Saving…" block there would freeze
     /// whatever they'd moved on to, for a write they didn't ask for and aren't
     /// waiting on — the exact thing sending in the background is meant to avoid.
     /// The reload still happens, so the UI catches up; it just does it quietly.
-    func markContactsSent(_ records: [Contact.ID: SentMail]) async {
-        guard !records.isEmpty, let email = userEmail else { return }
+    ///
+    /// - Returns: whether the sends were recorded. A reload that fails afterwards
+    ///   doesn't count against it — recording them again would duplicate them.
+    @discardableResult
+    func markContactsSent(_ records: [Contact.ID: SentMail]) async -> Bool {
+        guard !records.isEmpty, let email = userEmail else { return false }
         do {
             try await SupabaseAPI.recordSends(userEmail: email, records: records, at: Date())
+        } catch {
+            report(error)
+            return false
+        }
+        do {
             try await reloadAll()
         } catch {
             report(error)
         }
+        return true
     }
 
     // MARK: - Helpers
@@ -479,35 +503,39 @@ final class JobStore {
             markMigrated(email)
         }
 
+        // Every read below is independent of the others, so they're all in
+        // flight at once: a reload — which every write in the app ends with,
+        // behind the "Saving…" veil — costs the slowest request rather than the
+        // sum of six or more round trips.
+        //
+        // The catalog refetches as many rows as were already paged in, not just
+        // the first page. Collapsing the list back to page one would yank the
+        // user out of wherever they'd scrolled — and drop the company they were
+        // editing out of memory.
+        let pageLimit = max(companyOffset, SupabaseAPI.defaultPageSize)
+        let query = searchQuery
+        let previousSearch = searchResults
+        async let tracked = SupabaseAPI.fetchTrackedCompanies(userEmail: email)
+        async let catalog = SupabaseAPI.fetchAllCompanies(limit: pageLimit, offset: 0)
+        async let history = Self.fetchHistory(userEmail: email)
+        async let detached = Self.refetch(Array(detachedCompanies.keys))
+        async let search: [Job] = query.isEmpty
+            ? [] : ((try? await SupabaseAPI.searchCompanies(query: query)) ?? previousSearch)
+
+        let companies = try await tracked
+        let all = try await catalog
+        let (sends, activity) = try await history
+        // Detached companies the catalog pages now cover are dropped from the
+        // side table; one that came back nil was deleted (e.g. merged away).
+        let catalogIDs = Set(all.map(\.id))
+        let refreshedDetached = (await detached).filter { !catalogIDs.contains($0.key) }
+        let refreshedSearch = await search
+
         // Server is the source of truth for membership; mirror it into the cache.
-        let companies = try await SupabaseAPI.fetchTrackedCompanies(userEmail: email)
         trackedByEmail[email] = companies.map(\.id)
         trackedFile.save(trackedByEmail)
-
-        // Refetch as many catalog rows as were already paged in, not just the
-        // first page. Every write ends in this reload, and collapsing the list
-        // back to page one would yank the user out of wherever they'd scrolled —
-        // and drop the company they were editing out of memory.
-        let pageLimit = max(companyOffset, SupabaseAPI.defaultPageSize)
-        let all = try await SupabaseAPI.fetchAllCompanies(limit: pageLimit, offset: 0)
         companyOffset = all.count
         hasMoreCompanies = all.count == pageLimit
-
-        // Refresh detached companies that the catalog pages still don't cover.
-        // One that comes back nil was deleted (e.g. merged away) and is dropped.
-        let catalogIDs = Set(all.map(\.id))
-        var refreshedDetached: [String: Job] = [:]
-        for id in detachedCompanies.keys where !catalogIDs.contains(id) {
-            if let fresh = try? await SupabaseAPI.fetchCompany(id: id) {
-                refreshedDetached[id] = fresh
-            }
-        }
-
-        let refreshedSearch = searchQuery.isEmpty
-            ? [] : ((try? await SupabaseAPI.searchCompanies(query: searchQuery)) ?? searchResults)
-
-        let sends = try await SupabaseAPI.fetchSends(userEmail: email, limit: 0)
-        let activity = try await SupabaseAPI.fetchActivity(sends: sends)
 
         // Assign everything together at the end, so no screen ever renders a
         // half-reloaded mix of new companies and old sent state.
@@ -522,9 +550,27 @@ final class JobStore {
     /// shared companies catalog from Supabase.
     private func reloadSendsOnly() async throws {
         guard let email = userEmail else { return }
-        let sends = try await SupabaseAPI.fetchSends(userEmail: email, limit: 0)
-        let activity = try await SupabaseAPI.fetchActivity(sends: sends)
+        let (sends, activity) = try await Self.fetchHistory(userEmail: email)
         apply(sends: sends, activity: activity)
+    }
+
+    /// The whole send history and the Activity feed built from it.
+    private static func fetchHistory(userEmail: String) async throws -> ([MailSend], [ActivityEntry]) {
+        let sends = try await SupabaseAPI.fetchSends(userEmail: userEmail, limit: 0)
+        return (sends, try await SupabaseAPI.fetchActivity(sends: sends))
+    }
+
+    /// Fresh copies of companies held outside the catalog pages, fetched all at
+    /// once. Best-effort: one that fails or no longer exists is left out.
+    private static func refetch(_ ids: [String]) async -> [String: Job] {
+        await withTaskGroup(of: Job?.self) { group in
+            for id in ids {
+                group.addTask { try? await SupabaseAPI.fetchCompany(id: id) }
+            }
+            var fresh: [String: Job] = [:]
+            for await case let job? in group { fresh[job.id] = job }
+            return fresh
+        }
     }
 
     /// Install a fresh send history: overlay it onto every company held in
@@ -535,11 +581,7 @@ final class JobStore {
         overlaySends(byContact, into: &jobs)
         overlaySends(byContact, into: &allCompanies)
         overlaySends(byContact, into: &searchResults)
-        for id in detachedCompanies.keys {
-            var list = [detachedCompanies[id]!]
-            overlaySends(byContact, into: &list)
-            detachedCompanies[id] = list[0]
-        }
+        detachedCompanies = detachedCompanies.mapValues { Self.overlaying(byContact, onto: $0) }
         // Activity is built from the send history (not the tracked list), so
         // removing a company from Home leaves its sent records here untouched, and
         // every send — including repeats to the same contact — is its own row.
@@ -606,18 +648,23 @@ final class JobStore {
 
     /// Overlay this user's per-contact sent state onto a set of companies.
     private func overlaySends(_ byContact: [String: MailSend], into companies: inout [Job]) {
-        for j in companies.indices {
-            for c in companies[j].contacts.indices {
-                guard let send = byContact[companies[j].contacts[c].id] else { continue }
-                companies[j].contacts[c].isSent = true
-                companies[j].contacts[c].sentAt = send.sentAt
-                companies[j].contacts[c].sentSubject = send.subject
-                companies[j].contacts[c].sentBody = send.body
-                companies[j].contacts[c].repliedAt = send.repliedAt
-                companies[j].contacts[c].replyFrom = send.replyFrom
-                companies[j].contacts[c].replySnippet = send.replySnippet
-            }
+        companies = companies.map { Self.overlaying(byContact, onto: $0) }
+    }
+
+    /// One company with this user's latest send to each of its contacts laid over it.
+    private static func overlaying(_ byContact: [String: MailSend], onto company: Job) -> Job {
+        var company = company
+        for index in company.contacts.indices {
+            guard let send = byContact[company.contacts[index].id] else { continue }
+            company.contacts[index].isSent = true
+            company.contacts[index].sentAt = send.sentAt
+            company.contacts[index].sentSubject = send.subject
+            company.contacts[index].sentBody = send.body
+            company.contacts[index].repliedAt = send.repliedAt
+            company.contacts[index].replyFrom = send.replyFrom
+            company.contacts[index].replySnippet = send.replySnippet
         }
+        return company
     }
 
     /// Where each contact's mail was addressed, for recovering the thread id of

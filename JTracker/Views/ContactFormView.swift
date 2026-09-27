@@ -59,11 +59,17 @@ struct ContactFormView: View {
         ContactFields.isValid(email: email, name: name) && destination != nil
     }
 
+    /// Anything typed, or a company chosen other than the one it opened with.
+    private var hasChanges: Bool {
+        ![email, name, phone, position, greetingName].allSatisfy { $0.isEmpty }
+            || selectedCompany?.id != initialCompany?.id
+    }
+
     var body: some View {
         NavigationStack {
             PaperForm {
                 ContactFields(email: $email, name: $name, position: $position, phone: $phone,
-                              greetingName: $greetingName)
+                              greetingName: $greetingName, focusesFirstField: true)
                 companySection
             }
             .navigationTitle("Add Contact")
@@ -74,10 +80,8 @@ struct ContactFormView: View {
                     withAnimation(Theme.Motion.snappy) { destination = picked }
                 }
             }
+            .discardableEdits(hasChanges)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
                         .disabled(!canSave)
@@ -329,9 +333,15 @@ struct ContactFields: View {
     @Binding var greetingName: String
     var isEditing = true
     var header = "Contact"
+    /// Put the cursor in the first field as the form opens — for adding someone,
+    /// where typing is the only thing to do next.
+    var focusesFirstField = false
+
+    @FocusState private var focus: Field?
+    private enum Field { case email, name, greeting, position, phone }
 
     static func isValid(email: String, name: String) -> Bool {
-        email.contains("@") && !name.trimmingCharacters(in: .whitespaces).isEmpty
+        MailDomain.isPlausibleAddress(email) && !name.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// What a mail to this contact would open with, as edited right now — the
@@ -345,23 +355,59 @@ struct ContactFields: View {
     var body: some View {
         Section {
             if isEditing {
+                // Return moves down the form, the way Contacts' does.
                 TextField("Email", text: $email)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.emailAddress)
+                    .textContentType(.emailAddress)
+                    .focused($focus, equals: .email)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .name }
+                    // On the field, not the Section: a modifier on a Section
+                    // stops the Form treating it as one, and its header and
+                    // footer fall inside the card.
+                    .task {
+                        guard focusesFirstField, focus == nil else { return }
+                        // Once the sheet has finished rising, as Contacts does.
+                        try? await Task.sleep(for: .milliseconds(400))
+                        focus = .email
+                    }
                     .onChange(of: email) { _, value in
                         if value != value.lowercased() { email = value.lowercased() }
                     }
                 TextField("Name", text: $name)
+                    .textContentType(.name)
+                    .textInputAutocapitalization(.words)
+                    .focused($focus, equals: .name)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .greeting }
                 TextField("Greeting Name (optional)", text: $greetingName)
+                    .textInputAutocapitalization(.words)
+                    .focused($focus, equals: .greeting)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .position }
                 TextField("Position (optional)", text: $position)
+                    .textContentType(.jobTitle)
+                    .textInputAutocapitalization(.words)
+                    .focused($focus, equals: .position)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .phone }
                 TextField("Phone Number (optional)", text: $phone)
                     .keyboardType(.phonePad)
+                    .textContentType(.telephoneNumber)
+                    .focused($focus, equals: .phone)
             } else {
+                // Selectable, so a hold copies the address the way it does in
+                // Contacts — this screen is often where it's looked up.
                 if !name.isEmpty { LabeledContent("Name", value: name) }
                 LabeledContent("Email", value: email)
+                    .textSelection(.enabled)
                 if !position.isEmpty { LabeledContent("Position", value: position) }
-                if !phone.isEmpty { LabeledContent("Phone", value: phone) }
+                if !phone.isEmpty {
+                    LabeledContent("Phone", value: phone)
+                        .textSelection(.enabled)
+                }
             }
         } header: {
             Text(header)
