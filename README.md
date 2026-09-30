@@ -41,6 +41,37 @@ through the Gmail API using Google OAuth.
   marked invalid. They can't be mailed or suggested again until marked valid.
   This is shared across users, since a dead address is dead for everyone.
 
+## Screenshots
+
+Taken from a demo account. The companies, people and replies are made up.
+
+<table>
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/home.png" alt="Home"><br><sub><b>Home.</b> Tracked companies, the reply rate, and a scheduled batch on the shelf.</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/companies.png" alt="Companies"><br><sub><b>Companies.</b> The shared catalog, searchable by company, sector or person.</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/company.png" alt="Company"><br><sub><b>Company.</b> Its mail domains, counts, and contacts, bounced ones first.</sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/contact.png" alt="Contact"><br><sub><b>Contact.</b> Details, the greeting mail will open with, and sent history.</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/compose.png" alt="Compose"><br><sub><b>Compose.</b> Recipients, a row of templates, and a deck of the actual mails.</sub></td>
+    <td align="center"><img src="docs/screenshots/schedule.png" alt="Schedule"><br><sub><b>Schedule.</b> Send later: in an hour, tomorrow, Monday, or any time.</sub></td>
+    <td align="center"><img src="docs/screenshots/queue.png" alt="Mail queue"><br><sub><b>Mail queue.</b> A batch with its saved templates and each person's status.</sub></td>
+    <td align="center"><img src="docs/screenshots/quick-actions.png" alt="Quick Actions"><br><sub><b>Quick Actions.</b> Who's waiting, who replied, who's new, ready to send to.</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/activity.png" alt="Activity"><br><sub><b>Activity.</b> Every mail sent, by day, with replies marked.</sub></td>
+    <td align="center"><img src="docs/screenshots/reply.png" alt="Reply"><br><sub><b>Reply.</b> What they said, above the mail that was sent.</sub></td>
+    <td align="center"><img src="docs/screenshots/bounced.png" alt="Bounced"><br><sub><b>Bounced.</b> Addresses that came back, with the reason.</sub></td>
+    <td align="center"><img src="docs/screenshots/bounce-detail.png" alt="Bounce detail"><br><sub><b>Bounce.</b> The server's own message, and ways to fix it.</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/templates.png" alt="Templates"><br><sub><b>Templates.</b> Each one's placeholders and whether it's ready.</sub></td>
+    <td align="center"><img src="docs/screenshots/template-editor.png" alt="Template editor"><br><sub><b>Editor.</b> Placeholders inserted from the bar above the keyboard.</sub></td>
+    <td align="center"><img src="docs/screenshots/template-preview.png" alt="Template preview"><br><sub><b>Preview.</b> The template filled in for one of your contacts.</sub></td>
+    <td align="center"><img src="docs/screenshots/profile.png" alt="Profile"><br><sub><b>Profile.</b> The sender details placeholders fill from.</sub></td>
+  </tr>
+</table>
+
 ## How sending works
 
 ### Compose
@@ -373,6 +404,7 @@ Aurora/
 Tests/                      Standalone Swift test scripts
 scripts/company_verification/  Catalog verification pipeline (Python)
 scripts/app_icon/           Draws the app icon (Swift, Core Graphics)
+docs/screenshots/           Screenshots used in this README
 ```
 
 `data_verification/`, `db_backups/` and the CSV exports at the root are
