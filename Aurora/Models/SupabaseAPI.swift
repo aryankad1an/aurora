@@ -254,6 +254,9 @@ enum SupabaseAPI {
             let name: String?
             let email: String?
             let position: String?
+            /// Selected so a ruled-out contact reads as one here too; left out,
+            /// every contact in the feed defaulted to valid.
+            let is_valid: Bool?
             struct Company: Decodable { let name: String }
             let companies: Company?
         }
@@ -262,7 +265,7 @@ enum SupabaseAPI {
         // chunks at once rather than one after another.
         let requests = stride(from: 0, to: allIDs.count, by: defaultPageSize).map { start in
             makeRequest(path: "recruiters", query: [
-                URLQueryItem(name: "select", value: "id,name,email,position,companies(name)"),
+                URLQueryItem(name: "select", value: "id,name,email,position,is_valid,companies(name)"),
                 URLQueryItem(name: "id", value: "in.(\(allIDs[start..<min(start + defaultPageSize, allIDs.count)].joined(separator: ",")))")
             ])
         }
@@ -279,7 +282,8 @@ enum SupabaseAPI {
         return sends.compactMap { send -> ActivityEntry? in
             guard let row = byID[send.contactID] else { return nil }
             let contact = Contact(id: row.id, email: row.email ?? "", name: row.name ?? "",
-                                  position: row.position ?? "", isSent: true, sentAt: send.sentAt,
+                                  position: row.position ?? "", isValid: row.is_valid ?? true,
+                                  isSent: true, sentAt: send.sentAt,
                                   sentSubject: send.subject, sentBody: send.body,
                                   repliedAt: send.repliedAt, replyFrom: send.replyFrom,
                                   replySnippet: send.replySnippet)
