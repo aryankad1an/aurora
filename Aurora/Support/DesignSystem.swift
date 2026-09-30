@@ -260,20 +260,67 @@ extension View {
 ///
 /// Cards scrolling under the tab bar, or under the search field while it's
 /// in use, stayed sharp and legible there — a company name printed across the
-/// search text. The hard edge lays paper under those bars instead of the soft
-/// fade, which on this black ground barely showed.
+/// search text. On this black ground the system's soft fade barely shows.
 ///
-/// But a hard edge is a flat sheet, and it hides the graph paper behind the
-/// bar — at the top of every screen, behind the title's buttons, even with
-/// nothing scrolled under it. So the top edge goes hard only while searching,
-/// when the field sits there with results running under it.
+/// The hard edge fixed that, but it's a flat sheet: under the tab bar it was a
+/// band of plain black across the bottom of every screen, hiding the graph
+/// paper. So the bottom uses `PaperFloor` instead, a strip of the paper itself
+/// that cards dissolve into. The top keeps the system edge, going hard only
+/// while searching, when the field sits there with results running under it.
 private struct CardListEdges: ViewModifier {
     @Environment(\.isSearching) private var isSearching
 
     func body(content: Content) -> some View {
         content
-            .scrollEdgeEffectStyle(.hard, for: .bottom)
+            .paperBottomEdge()
             .scrollEdgeEffectStyle(isSearching ? .hard : .automatic, for: .top)
+    }
+}
+
+extension View {
+    /// Content scrolling under the tab bar dissolves into the graph paper,
+    /// in place of the system's scroll-edge backdrop, which on this ground
+    /// is a plain dark band. Apply it to the scroll view; `cardList`,
+    /// `PaperForm` and `PaperList` already have it.
+    func paperBottomEdge() -> some View {
+        scrollEdgeEffectHidden(true, for: .bottom)
+            .overlay(alignment: .bottom) { PaperFloor() }
+    }
+}
+
+/// The strip of paper under the tab bar: as tall as the bar's safe area,
+/// fading in over its top few points and opaque below.
+///
+/// The ground's tile starts at the top of the screen, and this strip starts
+/// wherever the bar does, so the tile inside it is shifted by the difference
+/// (mod one tile) to keep the grid unbroken across the seam.
+private struct PaperFloor: View {
+    private static let fade: CGFloat = 24
+
+    var body: some View {
+        GeometryReader { proxy in
+            let height = proxy.safeAreaInsets.bottom
+            if height > Self.fade {
+                let frame = proxy.frame(in: .global)
+                let phase = frame.maxY.truncatingRemainder(dividingBy: GraphPaper.tileSide)
+                GraphPaper()
+                    .frame(width: frame.width, height: height + GraphPaper.tileSide)
+                    .offset(y: -phase)
+                    .frame(width: frame.width, height: height, alignment: .top)
+                    .clipped()
+                    .background(Color.paper)
+                    .mask {
+                        LinearGradient(stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: Self.fade / height),
+                            .init(color: .black, location: 1)
+                        ], startPoint: .top, endPoint: .bottom)
+                    }
+                    .offset(y: proxy.size.height)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -293,6 +340,8 @@ struct GraphPaper: View {
     }
 
     private static let spacing: CGFloat = 22
+    /// One repeat of the pattern, for anything that has to line up with it.
+    static let tileSide: CGFloat = spacing * 4
 
     private static let tile: UIImage = {
         let side = spacing * 4
@@ -559,6 +608,7 @@ struct PaperForm<Content: View>: View {
                 .listRowBackground(Color.paperRaised)
         }
         .scrollContentBackground(.hidden)
+        .paperBottomEdge()
         .paperScreen()
     }
 }
@@ -573,6 +623,7 @@ struct PaperList<Content: View>: View {
                 .listRowBackground(Color.paperRaised)
         }
         .scrollContentBackground(.hidden)
+        .paperBottomEdge()
         .paperScreen()
     }
 }
