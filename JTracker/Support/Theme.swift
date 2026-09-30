@@ -73,8 +73,17 @@ extension String {
     /// "\n". So a paragraph that only ever wrapped on screen can arrive with an
     /// unintended break in it even though the sender never pressed Return.
     /// Actual "\n"/"\n\n" from a real Return keypress are left untouched.
+    ///
+    /// Scanned before anything is copied: nearly every string has none, and this
+    /// runs on every piece of every mail a batch writes. It used to be a regular
+    /// expression, compiled afresh on each call.
     var sanitizedLineSeparators: String {
-        replacingOccurrences(of: "[\u{2028}\u{2029}\u{0085}]", with: " ", options: .regularExpression)
+        guard unicodeScalars.contains(where: Self.isStrayLineSeparator) else { return self }
+        return String(String.UnicodeScalarView(unicodeScalars.map { Self.isStrayLineSeparator($0) ? " " : $0 }))
+    }
+
+    nonisolated private static func isStrayLineSeparator(_ scalar: Unicode.Scalar) -> Bool {
+        scalar == "\u{2028}" || scalar == "\u{2029}" || scalar == "\u{0085}"
     }
 }
 

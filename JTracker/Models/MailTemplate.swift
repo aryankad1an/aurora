@@ -59,14 +59,9 @@ struct MailContext {
     var values: [MailPlaceholder: String] = [:]
 
     /// Replace every placeholder token in `text` with its value (empty if unset).
-    ///
-    /// Also cleans up stray Unicode line separators (see `sanitizedLineSeparators`)
-    /// so templates saved before that fix — which may have baked-in ones from the
-    /// keyboard bug — render correctly too, not just newly-saved ones.
+    /// Filling one template for many people? Parse it once with `MailText`.
     func fill(_ text: String) -> String {
-        MailPlaceholder.allCases.reduce(text) { result, placeholder in
-            result.replacingOccurrences(of: placeholder.token, with: values[placeholder] ?? "")
-        }.sanitizedLineSeparators
+        MailText(text).filled(with: self)
     }
 
     /// Build a context from a recipient contact, its company, and the sender profile.
@@ -81,6 +76,61 @@ struct MailContext {
             .senderPosition: profile.position,
             .senderResume: profile.resumeLink
         ])
+    }
+}
+
+/// Template text split once into its literal runs and placeholders, so filling
+/// it in for a person is a single concatenation rather than a search of the
+/// whole text per placeholder. A batch writes one template for every recipient
+/// — 150 letters is 150 fills — and switching templates does it all again.
+///
+/// Also cleans up stray Unicode line separators (see `sanitizedLineSeparators`)
+/// so templates saved before that fix — which may have baked-in ones from the
+/// keyboard bug — render correctly too, not just newly-saved ones.
+struct MailText {
+    private enum Piece {
+        case text(String)
+        case placeholder(MailPlaceholder)
+    }
+
+    private let pieces: [Piece]
+    /// The placeholders the text uses.
+    let placeholders: Set<MailPlaceholder>
+
+    init(_ raw: String) {
+        var pieces: [Piece] = []
+        var placeholders: Set<MailPlaceholder> = []
+        var literalStart = raw.startIndex
+        var cursor = raw.startIndex
+        while let brace = raw[cursor...].firstIndex(of: "{") {
+            guard let placeholder = MailPlaceholder.allCases.first(where: { raw[brace...].hasPrefix($0.token) }) else {
+                cursor = raw.index(after: brace)
+                continue
+            }
+            if literalStart < brace {
+                pieces.append(.text(String(raw[literalStart..<brace]).sanitizedLineSeparators))
+            }
+            pieces.append(.placeholder(placeholder))
+            placeholders.insert(placeholder)
+            cursor = raw.index(brace, offsetBy: placeholder.token.count)
+            literalStart = cursor
+        }
+        if literalStart < raw.endIndex {
+            pieces.append(.text(String(raw[literalStart...]).sanitizedLineSeparators))
+        }
+        self.pieces = pieces
+        self.placeholders = placeholders
+    }
+
+    func filled(with context: MailContext) -> String {
+        var result = ""
+        for piece in pieces {
+            switch piece {
+            case .text(let text): result += text
+            case .placeholder(let placeholder): result += (context.values[placeholder] ?? "").sanitizedLineSeparators
+            }
+        }
+        return result
     }
 }
 
@@ -101,7 +151,9 @@ extension MailTemplate {
         let text = subject + "\n" + content
         guard !text.contains(MailPlaceholder.receiverCompany.token) else { return nil }
         // Longest first, so "Goldman Sachs" wins over a "Goldman" also on file.
-        for name in companies.sorted(by: { $0.count > $1.count }) where name.count >= 3 {
+        // A plain substring check first: it rules out nearly every company, and
+        // each one it doesn't would otherwise compile a regular expression.
+        for name in companies.sorted(by: { $0.count > $1.count }) where name.count >= 3 && text.contains(name) {
             let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: name) + "(?![\\p{L}\\p{N}])"
             if text.range(of: pattern, options: .regularExpression) != nil { return name }
         }

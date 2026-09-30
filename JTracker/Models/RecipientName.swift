@@ -51,8 +51,10 @@ enum RecipientName {
         if text.contains("@") { return nil }
 
         // Drop pronouns and notes in brackets: "Anjali Kumari (she/her)".
-        text = text.replacingOccurrences(of: "\\([^)]*\\)|\\[[^]]*\\]", with: " ",
-                                         options: .regularExpression)
+        if text.contains("(") || text.contains("[") {
+            text = text.replacingOccurrences(of: "\\([^)]*\\)|\\[[^]]*\\]", with: " ",
+                                             options: .regularExpression)
+        }
 
         // "KUMARI, Anjali" files the surname first, so the given name follows the
         // comma. Credentials do too ("Rohit Sharma, PMP"), but those trail a
