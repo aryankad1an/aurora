@@ -231,6 +231,11 @@ extension View {
     func cardList() -> some View {
         listStyle(.plain)
             .scrollContentBackground(.hidden)
+            // Cards scrolling under the floating search field and the tab bar
+            // stayed sharp and legible there — a company name printed across
+            // the search text. The hard edge lays paper under the bars instead
+            // of the soft fade, which on this black ground barely showed.
+            .scrollEdgeEffectStyle(.hard, for: .all)
             // Rows are as tall as their cards, not padded up to the system's 44pt
             // minimum — a day label in Activity is shorter than that.
             .environment(\.defaultMinListRowHeight, 0)
