@@ -51,7 +51,9 @@ struct SendMailView: View {
     /// be moved onto another one from their own menu.
     @State private var templateID: MailTemplate.ID?
     /// The letter the deck is showing.
-    @State private var focusedID: MailPreview.ID?
+    @State private var focus = DeckFocus()
+    /// How tall every letter is drawn: the longest one's height (see `deckSizer`).
+    @State private var deckHeight: CGFloat = 0
     @State private var editing: MailPreview?
     /// A template tap that would overwrite hand edits, held until confirmed.
     @State private var pendingTemplate: MailTemplate?
@@ -83,10 +85,6 @@ struct SendMailView: View {
     private var templates: [MailTemplate] { templateStore.templates }
 
     private var companyCount: Int { Set(letters.map(\.company)).count }
-
-    private var focusedIndex: Int {
-        letters.firstIndex { $0.id == focusedID } ?? 0
-    }
 
     var body: some View {
         NavigationStack {
@@ -129,7 +127,6 @@ struct SendMailView: View {
             // Templates can arrive after the screen does (a cold start, a pull
             // on another device); the first one to land writes the letters.
             .onChange(of: templates.map(\.id)) { start() }
-            .sensoryFeedback(.selection, trigger: focusedID)
         }
     }
 
@@ -175,21 +172,7 @@ struct SendMailView: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        ScrollViewReader { proxy in
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 6) {
-                                    ForEach(letters) { letter in
-                                        recipientChip(letter).id(letter.id)
-                                    }
-                                }
-                            }
-                            // The chip for the letter on show stays in view as
-                            // the deck is swiped.
-                            .onChange(of: focusedID) { _, id in
-                                guard let id else { return }
-                                withAnimation(Theme.Motion.snappy) { proxy.scrollTo(id, anchor: .center) }
-                            }
-                        }
+                        RecipientStrip(letters: letters, focus: focus)
                         Text("\(letters.count) people" + (companyCount > 1 ? " · \(companyCount) companies" : ""))
                             .font(.caption)
                             .foregroundStyle(.inkMuted)
@@ -218,38 +201,6 @@ struct SendMailView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
-    }
-
-    /// One person on the To line. Tapping it brings their letter to the front;
-    /// a dot says their letter needs a look (a blank) or has been hand-edited.
-    private func recipientChip(_ letter: MailPreview) -> some View {
-        let isFocused = letter.id == (focusedID ?? letters.first?.id)
-        // No haptic of its own: the deck's selection tick plays as it lands.
-        return Button {
-            withAnimation(Theme.Motion.snappy) { focusedID = letter.id }
-        } label: {
-            HStack(spacing: 6) {
-                MonogramAvatar(text: letter.name, size: 22)
-                Text(letter.name.split(separator: " ").first.map(String.init) ?? letter.name)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(isFocused ? Color.ink : Color.inkMuted)
-                    .lineLimit(1)
-                if !letter.missing.isEmpty {
-                    Circle().fill(Color.kraft).frame(width: 6, height: 6)
-                } else if letter.isEdited {
-                    Circle().fill(Color.slate).frame(width: 6, height: 6)
-                }
-            }
-            .padding(.leading, 3)
-            .padding(.trailing, 10)
-            .padding(.vertical, 3)
-            .background(isFocused ? Color.clay.opacity(0.16) : Color.paperSunken, in: Capsule())
-            .overlay(Capsule().strokeBorder(isFocused ? Color.clay.opacity(0.7) : .clear, lineWidth: 1))
-            .animation(Theme.Motion.pop, value: isFocused)
-        }
-        .buttonStyle(BouncyPress(scale: 0.9))
-        .accessibilityLabel(letter.name)
-        .accessibilityHint("Shows the mail to \(letter.name)")
     }
 
     // MARK: - Templates
@@ -345,60 +296,47 @@ struct SendMailView: View {
                     SectionLabel(title: letters.count == 1 ? "Mail" : "Mails", systemImage: "envelope")
                     Spacer()
                     if letters.count > 1 {
-                        Text("\(focusedIndex + 1) of \(letters.count)")
-                            .font(.caption.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.inkMuted)
-                            .contentTransition(.numericText())
-                            .animation(Theme.Motion.snappy, value: focusedIndex)
+                        DeckCounter(letters: letters, focus: focus)
                     }
                 }
                 .padding(.horizontal, Theme.Space.gutter)
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    // Not lazy: every letter is measured, so they're all drawn
-                    // at the height of the longest and the deck doesn't change
-                    // height under the finger as it's swiped.
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(letters) { letter in
-                            LetterCard(letter: letter,
-                                       hasTemplate: letter.templateID != nil,
-                                       onEdit: { editing = letter }) {
-                                letterMenu(letter)
-                            }
-                            // The next letter peeks in from the edge, so a batch
-                            // reads as a stack to swipe rather than one mail.
-                            .containerRelativeFrame(.horizontal) { width, _ in
-                                width - Theme.Space.gutter * 2 - (letters.count > 1 ? 18 : 0)
-                            }
-                            .id(letter.id)
-                        }
+                DeckScroller(letters: letters, focus: focus) { letter in
+                    LetterCard(letter: letter,
+                               hasTemplate: letter.templateID != nil,
+                               minHeight: deckHeight,
+                               onEdit: { editing = letter }) {
+                        letterMenu(letter)
                     }
-                    .scrollTargetLayout()
                 }
-                .contentMargins(.horizontal, Theme.Space.gutter, for: .scrollContent)
-                .scrollTargetBehavior(.viewAligned)
-                .scrollPosition(id: $focusedID)
-                .scrollDisabled(letters.count == 1)
+                .background(alignment: .topLeading) { deckSizer }
 
                 if letters.count > 1 && letters.count <= 16 {
-                    pageDots
+                    PageDots(letters: letters, focus: focus)
                 }
             }
         }
     }
 
-    private var pageDots: some View {
-        HStack(spacing: 5) {
-            ForEach(Array(letters.enumerated()), id: \.element.id) { index, letter in
-                Capsule()
-                    .fill(index == focusedIndex ? Color.clay
-                          : (letter.missing.isEmpty ? Color.inkFaint.opacity(0.5) : Color.kraft.opacity(0.7)))
-                    .frame(width: index == focusedIndex ? 16 : 6, height: 6)
+    /// The deck is lazy — only the letters near the one on show exist, which is
+    /// what keeps a batch of a hundred and more smooth — so it can no longer
+    /// size itself by drawing every letter. Instead the longest is laid out
+    /// once, unseen, at a card's width, and every card takes its height: the
+    /// deck still doesn't change height under the finger as it's swiped.
+    @ViewBuilder
+    private var deckSizer: some View {
+        if let longest = letters.max(by: { $0.roughLength < $1.roughLength }) {
+            LetterCard(letter: longest, hasTemplate: longest.templateID != nil, onEdit: {}) {
+                EmptyView()
             }
+            .padding(.leading, Theme.Space.gutter)
+            .padding(.trailing, Theme.Space.gutter + (letters.count > 1 ? deckPeek : 0))
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { deckHeight = $0 }
+            .hidden()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
-        .frame(maxWidth: .infinity)
-        .animation(Theme.Motion.snappy, value: focusedIndex)
-        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -560,7 +498,7 @@ struct SendMailView: View {
         let template = templateID.flatMap { id in templates.first { $0.id == id } } ?? defaultTemplate
         templateID = template?.id
         letters = recipients.map { render($0.contact, company: $0.company, template: template) }
-        if focusedID == nil { focusedID = letters.first?.id }
+        if focus.id == nil { focus.id = letters.first?.id }
     }
 
     /// What a fresh batch is written from: the template written for this very
@@ -640,7 +578,7 @@ struct SendMailView: View {
         let next = letters.indices.contains(index + 1) ? letters[index + 1].id : letters[max(0, index - 1)].id
         withAnimation(Theme.Motion.snappy) {
             letters.remove(at: index)
-            focusedID = letters.contains { $0.id == next } ? next : letters.first?.id
+            focus.id = letters.contains { $0.id == next } ? next : letters.first?.id
         }
     }
 
@@ -662,6 +600,148 @@ struct SendMailView: View {
     }
 }
 
+// MARK: - Deck
+
+/// How much of the next letter peeks in from the edge, so a batch reads as a
+/// stack to swipe rather than one mail.
+private let deckPeek: CGFloat = 18
+
+/// Which letter the deck is showing. An observable object rather than `@State`
+/// on the compose screen: it changes on every swipe, and only the few views
+/// that show it — the counter, the dots, the To-line chips — should redraw,
+/// not the whole screen with every letter in it.
+@Observable
+@MainActor
+private final class DeckFocus {
+    var id: MailPreview.ID?
+}
+
+/// The letters as a deck to swipe through. Lazy: a card exists only while it's
+/// near the one on show, so a batch of 150 costs what a batch of three does.
+private struct DeckScroller<Card: View>: View {
+    let letters: [MailPreview]
+    @Bindable var focus: DeckFocus
+    @ViewBuilder let card: (MailPreview) -> Card
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: 12) {
+                ForEach(letters) { letter in
+                    card(letter)
+                        .containerRelativeFrame(.horizontal) { width, _ in
+                            width - Theme.Space.gutter * 2 - (letters.count > 1 ? deckPeek : 0)
+                        }
+                        .id(letter.id)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .contentMargins(.horizontal, Theme.Space.gutter, for: .scrollContent)
+        .scrollTargetBehavior(.viewAligned)
+        .scrollPosition(id: $focus.id)
+        .scrollDisabled(letters.count == 1)
+    }
+}
+
+/// "3 of 150" over the deck. Also plays the selection tick as each letter lands.
+private struct DeckCounter: View {
+    let letters: [MailPreview]
+    let focus: DeckFocus
+
+    var body: some View {
+        let index = letters.firstIndex { $0.id == focus.id } ?? 0
+        Text("\(index + 1) of \(letters.count)")
+            .font(.caption.weight(.semibold).monospacedDigit())
+            .foregroundStyle(.inkMuted)
+            .contentTransition(.numericText())
+            .animation(Theme.Motion.snappy, value: index)
+            .sensoryFeedback(.selection, trigger: focus.id)
+    }
+}
+
+/// A dot per letter under a small deck; the one on show is drawn long.
+private struct PageDots: View {
+    let letters: [MailPreview]
+    let focus: DeckFocus
+
+    var body: some View {
+        let focusedIndex = letters.firstIndex { $0.id == focus.id } ?? 0
+        HStack(spacing: 5) {
+            ForEach(Array(letters.enumerated()), id: \.element.id) { index, letter in
+                Capsule()
+                    .fill(index == focusedIndex ? Color.clay
+                          : (letter.missing.isEmpty ? Color.inkFaint.opacity(0.5) : Color.kraft.opacity(0.7)))
+                    .frame(width: index == focusedIndex ? 16 : 6, height: 6)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .animation(Theme.Motion.snappy, value: focusedIndex)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The To line's row of people, one chip each. Lazy like the deck; the chip
+/// for the letter on show stays in view as the deck is swiped.
+private struct RecipientStrip: View {
+    let letters: [MailPreview]
+    let focus: DeckFocus
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 6) {
+                    ForEach(letters) { letter in
+                        RecipientChip(letter: letter,
+                                      isFocused: letter.id == (focus.id ?? letters.first?.id)) {
+                            withAnimation(Theme.Motion.snappy) { focus.id = letter.id }
+                        }
+                        .id(letter.id)
+                    }
+                }
+            }
+            .onChange(of: focus.id) { _, id in
+                guard let id else { return }
+                withAnimation(Theme.Motion.snappy) { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+}
+
+/// One person on the To line. Tapping it brings their letter to the front;
+/// a dot says their letter needs a look (a blank) or has been hand-edited.
+private struct RecipientChip: View {
+    let letter: MailPreview
+    let isFocused: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        // No haptic of its own: the deck's selection tick plays as it lands.
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                MonogramAvatar(text: letter.name, size: 22)
+                Text(letter.name.split(separator: " ").first.map(String.init) ?? letter.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isFocused ? Color.ink : Color.inkMuted)
+                    .lineLimit(1)
+                if !letter.missing.isEmpty {
+                    Circle().fill(Color.kraft).frame(width: 6, height: 6)
+                } else if letter.isEdited {
+                    Circle().fill(Color.slate).frame(width: 6, height: 6)
+                }
+            }
+            .padding(.leading, 3)
+            .padding(.trailing, 10)
+            .padding(.vertical, 3)
+            .background(isFocused ? Color.clay.opacity(0.16) : Color.paperSunken, in: Capsule())
+            .overlay(Capsule().strokeBorder(isFocused ? Color.clay.opacity(0.7) : .clear, lineWidth: 1))
+            .animation(Theme.Motion.pop, value: isFocused)
+        }
+        .buttonStyle(BouncyPress(scale: 0.9))
+        .accessibilityLabel(letter.name)
+        .accessibilityHint("Shows the mail to \(letter.name)")
+    }
+}
+
 // MARK: - Letter
 
 /// One mail, drawn as a sheet of letter paper: who it's to, the subject set
@@ -669,6 +749,8 @@ struct SendMailView: View {
 private struct LetterCard<MenuItems: View>: View {
     let letter: MailPreview
     let hasTemplate: Bool
+    /// The deck's shared height, so a short letter matches its neighbours.
+    var minHeight: CGFloat = 0
     let onEdit: () -> Void
     @ViewBuilder let menu: () -> MenuItems
 
@@ -715,7 +797,7 @@ private struct LetterCard<MenuItems: View>: View {
                              action: "Fill in", onTap: onEdit)
             }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(minHeight: minHeight, maxHeight: .infinity, alignment: .top)
         .panelAccented(letter.missing.isEmpty && letter.writtenFor == nil ? nil : Color.kraft,
                        radius: Theme.Radius.hero)
     }
@@ -808,6 +890,13 @@ struct MailPreview: Identifiable {
     var writtenFor: String?
     /// Changed by hand since it was rendered.
     var isEdited = false
+
+    /// A cheap stand-in for how tall this letter draws, to find the longest
+    /// without laying any out. UTF-8 counts are O(1); character counts aren't.
+    var roughLength: Int {
+        subject.utf8.count + body.utf8.count
+            + (missing.isEmpty ? 0 : 120) + (writtenFor == nil ? 0 : 120)
+    }
 }
 
 /// A drawer for tailoring a single mail's subject and body before sending.
