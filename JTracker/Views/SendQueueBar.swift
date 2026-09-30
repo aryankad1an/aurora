@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// The send queue's presence in the UI: a compact strip that rides above the tab
-/// bar while mails go out, and reports the result when they're done.
+/// The mail queue's presence in the UI: a compact strip that rides above the tab
+/// bar whenever the queue has something to say — mail going out, a run's
+/// result, a batch paused or due, the next one scheduled. Tapping it opens the
+/// queue.
 ///
 /// It lives in the tab bar's accessory slot — the same shelf a music app uses for
 /// its mini player — because that's the one place in iOS that means "something of
@@ -9,10 +11,26 @@ import SwiftUI
 /// no longer something you wait on, so it shouldn't own a screen.
 struct SendQueueBar: View {
     @Environment(MailQueue.self) private var queue
+    let onOpen: () -> Void
 
     /// How long a clean result stays up before clearing itself. Failures don't
     /// auto-clear — those need to be read.
     private static let successLinger = Duration.seconds(5)
+
+    private enum Mode {
+        case sending, result(MailQueue.Outcome), due(MailBatch), paused([MailBatch]), scheduled(MailBatch), idle
+    }
+
+    /// What matters most right now, in that order.
+    private var mode: Mode {
+        if queue.isRunning { return .sending }
+        if let outcome = queue.outcome { return .result(outcome) }
+        if let due = queue.readyBatch { return .due(due) }
+        let paused = queue.pausedBatches
+        if !paused.isEmpty { return .paused(paused) }
+        if let next = queue.nextScheduled { return .scheduled(next) }
+        return .idle
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -38,19 +56,16 @@ struct SendQueueBar: View {
             trailingControl
         }
         .padding(.horizontal, 14)
-        // A finished run's shelf says "Tap to dismiss", so the whole shelf is the
-        // target — it used to be only the small × at its end.
         .contentShape(.rect)
         .onTapGesture {
-            guard !queue.isRunning, queue.outcome != nil else { return }
             Haptics.tap(0.5)
-            queue.acknowledge()
+            onOpen()
         }
         // The result is the one thing on this shelf the user is waiting for, and
         // by the time it lands they've usually navigated away from the screen
         // they sent from. Two tones so the answer arrives before the words are
         // read: the success chime for a clean run, the error buzz for a partial.
-        .sensoryFeedback(trigger: queue.outcome?.failed.isEmpty) { _, clean -> SensoryFeedback? in
+        .sensoryFeedback(trigger: queue.outcome.map { $0.failed.isEmpty && !$0.isPaused }) { _, clean -> SensoryFeedback? in
             switch clean {
             case .some(true): return .success
             case .some(false): return .error
@@ -58,9 +73,9 @@ struct SendQueueBar: View {
             }
         }
         .animation(Theme.Motion.bouncy, value: queue.isRunning)
-        .task(id: queue.outcome?.failed.isEmpty) {
+        .task(id: queue.outcome.map { $0.failed.isEmpty && !$0.isPaused }) {
             // Only a fully successful run clears itself.
-            guard let outcome = queue.outcome, outcome.failed.isEmpty else { return }
+            guard let outcome = queue.outcome, outcome.failed.isEmpty, !outcome.isPaused else { return }
             try? await Task.sleep(for: Self.successLinger)
             guard !Task.isCancelled else { return }
             queue.acknowledge()
@@ -69,7 +84,8 @@ struct SendQueueBar: View {
 
     @ViewBuilder
     private var icon: some View {
-        if queue.isRunning {
+        switch mode {
+        case .sending:
             // Drawn by hand rather than with ProgressView: the circular style on
             // iOS ignores `value` and spins indeterminately, which would say
             // "working" while hiding how far along a long batch actually is.
@@ -85,49 +101,90 @@ struct SendQueueBar: View {
             .frame(width: 21, height: 21)
             .animation(Theme.Motion.settle, value: queue.progress)
             .transition(LiquidMaterialize(scale: 0.5))
-        } else if let outcome = queue.outcome {
-            Image(systemName: outcome.failed.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+        case .result(let outcome):
+            let clean = outcome.failed.isEmpty && !outcome.isPaused
+            Image(systemName: clean ? "checkmark.circle.fill"
+                  : outcome.isPaused ? "pause.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.title3)
-                .foregroundStyle(outcome.failed.isEmpty ? Color.statusDone : Color.statusInvalid)
+                .foregroundStyle(clean ? Color.statusDone : outcome.isPaused ? Color.kraft : Color.statusInvalid)
                 // The tick replaces the progress ring in the same 21pt slot, so
                 // it springs in rather than swapping — the run visibly finishes.
                 .symbolEffect(.bounce, value: outcome.sent)
                 .transition(LiquidMaterialize(scale: 0.4))
+        case .due:
+            Image(systemName: "bell.badge.fill")
+                .font(.title3)
+                .foregroundStyle(.clay)
+                .symbolEffect(.bounce, options: .nonRepeating)
+        case .paused:
+            Image(systemName: "pause.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.kraft)
+        case .scheduled:
+            Image(systemName: "clock.fill")
+                .font(.title3)
+                .foregroundStyle(.statusWaiting)
+        case .idle:
+            EmptyView()
         }
     }
 
     private var title: String {
-        if queue.isStopping { return "Stopping…" }
-        if queue.isRunning { return "Sending mail" }
-        guard let outcome = queue.outcome else { return "" }
-        if outcome.failed.isEmpty {
-            return outcome.sent == 1 ? "Mail sent" : "\(outcome.sent) mails sent"
+        switch mode {
+        case .sending:
+            return queue.isStopping ? "Pausing…" : "Sending mail"
+        case .result(let outcome):
+            if outcome.isPaused { return "\(outcome.sent) sent · paused" }
+            if outcome.failed.isEmpty {
+                return outcome.sent == 1 ? "Mail sent" : "\(outcome.sent) mails sent"
+            }
+            return "\(outcome.sent) sent · \(outcome.failed.count) failed"
+        case .due(let batch):
+            return "Scheduled mail is ready"
+                + (batch.pending > 1 ? " · \(batch.pending)" : "")
+        case .paused(let batches):
+            let waiting = batches.reduce(0) { $0 + $1.pending }
+            return "Queue paused · \(waiting) to go"
+        case .scheduled(let batch):
+            return "Scheduled · " + (batch.scheduledFor?.formatted(date: .omitted, time: .shortened) ?? "")
+        case .idle:
+            return ""
         }
-        return "\(outcome.sent) sent · \(outcome.failed.count) failed"
     }
 
     private var subtitle: String {
-        if queue.isStopping {
-            return "Finishing the mail already on its way"
+        switch mode {
+        case .sending:
+            if queue.isStopping { return "Finishing the mail already on its way" }
+            return "\(queue.completed) of \(queue.total) · \(queue.running?.title ?? "")"
+        case .result(let outcome):
+            if let reason = outcome.stoppedBecause { return reason }
+            if outcome.isPaused { return "Tap to see the queue and resume" }
+            guard !outcome.failed.isEmpty else { return "Tap to see the queue" }
+            return "Couldn't reach \(outcome.failed.prefix(2).joined(separator: ", "))"
+                + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
+        case .due(let batch):
+            return "\(batch.title) · tap Review to see it and send"
+        case .paused(let batches):
+            return batches.count == 1 ? "\(batches[0].title) · tap to see it" : "\(batches.count) batches · tap to see them"
+        case .scheduled(let batch):
+            let day = batch.scheduledFor.map { Calendar.current.isDateInToday($0) ? "today" : $0.formatted(.dateTime.weekday(.wide)) } ?? ""
+            return "\(batch.pending) mail\(batch.pending == 1 ? "" : "s") · \(batch.title) · \(day)"
+        case .idle:
+            return ""
         }
-        if queue.isRunning {
-            return "\(queue.completed) of \(queue.total) · keep the app open"
-        }
-        guard let outcome = queue.outcome, !outcome.failed.isEmpty else { return "Tap to dismiss" }
-        if let reason = outcome.stoppedBecause { return reason }
-        return "Couldn't reach \(outcome.failed.prefix(2).joined(separator: ", "))"
-            + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
     }
 
     @ViewBuilder
     private var trailingControl: some View {
-        if queue.isRunning {
+        switch mode {
+        case .sending:
             Button {
                 // Stopping a run mid-flight is the destructive control here.
                 Haptics.thud()
-                queue.cancel()
+                if let id = queue.runningBatchID { queue.pause(id) }
             } label: {
-                Text("Stop")
+                Text("Pause")
                     .font(.caption.weight(.semibold))
             }
             // Bordered, not glass: the shelf is already glass, and glass on glass
@@ -136,7 +193,7 @@ struct SendQueueBar: View {
             .buttonBorderShape(.capsule)
             .controlSize(.small)
             .disabled(queue.isStopping)
-        } else if queue.outcome != nil {
+        case .result:
             Button {
                 Haptics.tap(0.5)
                 queue.acknowledge()
@@ -146,6 +203,30 @@ struct SendQueueBar: View {
                     .foregroundStyle(.inkMuted)
             }
             .buttonStyle(BouncyPress(scale: 0.8))
+        case .due(let batch):
+            Button {
+                Haptics.press()
+                queue.unsnooze(batch.id)
+            } label: {
+                Text("Review")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+        case .paused(let batches):
+            Button {
+                Haptics.press()
+                if let first = batches.first { queue.resume(first.id) }
+            } label: {
+                Text("Resume")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+        case .scheduled, .idle:
+            EmptyView()
         }
     }
 }

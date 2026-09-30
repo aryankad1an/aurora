@@ -18,6 +18,10 @@ struct RootView: View {
     @State private var replySync = ReplySync()
     @State private var selectionChrome = SelectionChrome()
     @State private var selectedTab: Tab = .home
+    @State private var showingQueue = false
+    /// Taps on scheduled-mail notifications, which can arrive before the app
+    /// has finished opening.
+    private let notifications = NotificationRouter.shared
     @Environment(\.scenePhase) private var scenePhase
 
     /// How many of the launch loads have finished, out of `bootUnits`. Drives the
@@ -148,7 +152,10 @@ struct RootView: View {
                 // Replies arrive while the app is closed, so coming back is
                 // exactly when the answer on screen is most likely to be stale.
                 .onChange(of: scenePhase) { _, phase in
-                    guard phase == .active, !replySync.isSyncing else { return }
+                    guard phase == .active else { return }
+                    // Back in the app: a scheduled batch may have come due.
+                    mailQueue.tick()
+                    guard !replySync.isSyncing else { return }
                     let last = replySync.lastSyncedAt ?? .distantPast
                     guard Date().timeIntervalSince(last) > Self.resyncAfter else { return }
                     Task { await jobStore.syncReplies(using: replySync) }
@@ -174,6 +181,7 @@ struct RootView: View {
         bootDone = 0
         jobStore.userEmail = email
         connectMailQueue()
+        mailQueue.load(account: email)
 
         let started = ContinuousClock.now
         async let profile: Void = load { await profileStore.load(email: email) }
@@ -194,6 +202,13 @@ struct RootView: View {
         Haptics.success()
         withAnimation(.smooth(duration: 0.75)) { isBooted = true }
 
+        // A notification tapped to open the app: its batch is asked about now.
+        openTappedBatch()
+        // Settle anything the last session left mid-send: whether each mail cut
+        // off went out, and any send not yet in the history. Not awaited — a
+        // mail cut off moments ago is given a few seconds to show up in Sent.
+        Task { await mailQueue.reconcile() }
+
         // Full, not delta: the sync state may be left over from another account,
         // and a delta against its timestamp would skip this account's threads.
         await jobStore.syncReplies(using: replySync, forceFullCheck: true)
@@ -213,10 +228,10 @@ struct RootView: View {
     /// Hand the queue the two things it deliberately doesn't own: how to deliver a
     /// mail, and what to do with the sends once a run finishes.
     private func connectMailQueue() {
-        mailQueue.sender = { mail, fromName in
+        mailQueue.sender = { recipient, subject, body, fromName in
             do {
-                let message = try await gmailAuth.send(to: mail.recipient, subject: mail.subject,
-                                                       body: mail.body, fromName: fromName)
+                let message = try await gmailAuth.send(to: recipient, subject: subject,
+                                                       body: body, fromName: fromName)
                 return message.map { MailQueue.Delivery(messageID: $0.id, threadID: $0.threadID) }
             } catch let error as GmailAuthError where error.needsReconnect {
                 // The shelf says "Reconnect Gmail in Profile"; make sure Profile
@@ -224,6 +239,10 @@ struct RootView: View {
                 replySync.noteReconnectNeeded()
                 throw error
             }
+        }
+        mailQueue.verifier = { recipient, since in
+            try await gmailAuth.findSent(to: recipient, since: since)
+                .map { MailQueue.Delivery(messageID: $0.id, threadID: $0.threadID) }
         }
         mailQueue.onRecord = { records in
             await jobStore.markContactsSent(records)
@@ -233,6 +252,22 @@ struct RootView: View {
         }
     }
 
+    /// Ask about the batch whose notification was tapped.
+    private func openTappedBatch() {
+        guard let id = notifications.openedBatchID else { return }
+        notifications.openedBatchID = nil
+        mailQueue.unsnooze(id)
+    }
+
+    /// A due batch, shown as its summary until it's sent or put off. Swiping it
+    /// away is "Not Now".
+    private var dueBatch: Binding<MailBatch?> {
+        Binding(get: { mailQueue.dueBatch },
+                set: { batch in
+                    if batch == nil, let due = mailQueue.dueBatch { mailQueue.snooze(due.id) }
+                })
+    }
+
     /// The send queue's shelf above the tab bar, shown only while the queue has
     /// something to say. It steps aside while a list is selecting: the tab bar
     /// leaves then, and the shelf would drop into its place on top of the
@@ -240,8 +275,20 @@ struct RootView: View {
     private var tabs: some View {
         tabStack
             .tabViewBottomAccessory(isEnabled: mailQueue.isActive && !selectionChrome.isSelecting) {
-                SendQueueBar()
+                SendQueueBar { showingQueue = true }
             }
+            .sheet(isPresented: $showingQueue) {
+                MailQueueView()
+            }
+            .sheet(item: dueBatch) { batch in
+                DueBatchSheet(batch: batch) {
+                    mailQueue.sendNow(batch.id)
+                } onLater: {
+                    mailQueue.snooze(batch.id)
+                }
+                .presentationDetents([.large])
+            }
+            .onChange(of: notifications.openedBatchID) { openTappedBatch() }
             // The shelf appearing pushes the tab bar up — a real object arriving on
             // screen, and the one event here the user didn't just tap for.
             .sensoryFeedback(trigger: mailQueue.isActive) { _, active in

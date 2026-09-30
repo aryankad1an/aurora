@@ -122,6 +122,17 @@ struct MailText {
         self.placeholders = placeholders
     }
 
+    /// How long the filled-in text runs, in UTF-8 bytes, without writing it —
+    /// enough to find the longest of many letters.
+    func length(with context: MailContext) -> Int {
+        pieces.reduce(0) { total, piece in
+            switch piece {
+            case .text(let text): total + text.utf8.count
+            case .placeholder(let placeholder): total + (context.values[placeholder]?.utf8.count ?? 0)
+            }
+        }
+    }
+
     func filled(with context: MailContext) -> String {
         var result = ""
         for piece in pieces {

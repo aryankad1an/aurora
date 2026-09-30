@@ -16,6 +16,7 @@ struct ActivityView: View {
     @State private var lane: Lane = .all
     @State private var searchText = ""
     @State private var summaryItem: ActivityEntry?
+    @State private var showingQueue = false
     /// How many entries are built. The feed is attached 50 at a time: the next
     /// page when the end of the current one scrolls into view.
     @State private var limit = 50
@@ -41,6 +42,9 @@ struct ActivityView: View {
                     Task { await checkForReplies() }
                 }
             ) {
+                // What hasn't gone yet lives beside what has.
+                Button("Mail Queue", systemImage: "tray.and.arrow.up") { showingQueue = true }
+                Divider()
                 Picker(selection: $lane.animation(Theme.Motion.bouncy)) {
                     Label("All", systemImage: "tray.full").tag(Lane.all)
                     Label("Replied", systemImage: "arrowshape.turn.up.left").tag(Lane.replied)
@@ -52,6 +56,9 @@ struct ActivityView: View {
             }
             .sheet(item: $summaryItem) { item in
                 MailSummaryView(contact: item.contact, company: item.company)
+            }
+            .sheet(isPresented: $showingQueue) {
+                MailQueueView()
             }
         }
     }

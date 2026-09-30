@@ -131,6 +131,25 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
         return data
     }
 
+    /// The mail sent to `recipient` since `since`, if Sent mail has one — how a
+    /// send cut off by the app closing is found to have gone out or not.
+    ///
+    /// Throws when it can't tell (offline, or an address that can't be searched
+    /// safely), so the caller never mistakes "couldn't look" for "not sent".
+    func findSent(to recipient: String, since: Date) async throws -> SentMessage? {
+        guard ReplySync.isSearchable(recipient) else {
+            throw GmailAuthError.server("Can't search Sent mail for \(recipient).")
+        }
+        // A minute's slack before: the recorded time is the app's, not Gmail's.
+        let after = Int(since.addingTimeInterval(-60).timeIntervalSince1970)
+        let data = try await gmailGET(path: "messages", query: [
+            URLQueryItem(name: "q", value: "in:sent to:\(recipient) after:\(after)"),
+            URLQueryItem(name: "maxResults", value: "1")
+        ])
+        struct Listing: Decodable { let messages: [SentMessage]? }
+        return try JSONDecoder().decode(Listing.self, from: data).messages?.first
+    }
+
     /// Translate a Gmail *read* failure into something a person can act on. A
     /// token minted before reply tracking existed is missing the read scope, and
     /// Google says so with a 403 that reads like a bug — it isn't, it just needs
