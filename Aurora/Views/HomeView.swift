@@ -299,7 +299,9 @@ private struct QuickActionsCard: View {
                     }
                 }
 
-                HStack(spacing: 8) {
+                // Wraps rather than squeezing: at large text sizes two chips
+                // side by side broke their words ("replie / d").
+                WrappingHStack(spacing: 8, lineSpacing: 6) {
                     countChip(insights.totalReplies, "replied", .statusDone)
                     countChip(insights.waitingMails.count, "waiting", .statusWaiting)
                 }
@@ -337,6 +339,8 @@ private struct QuickActionsCard: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(tint.opacity(0.14), in: Capsule())
+        // Whole or not at all: a chip never breaks its number or its word.
+        .fixedSize()
         .animation(Theme.Motion.pop, value: value)
     }
 }

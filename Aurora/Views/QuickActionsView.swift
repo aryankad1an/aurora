@@ -582,9 +582,9 @@ private struct WaitingRow: View {
                     .foregroundStyle(.inkMuted)
                     .lineLimit(1)
             }
-            .layoutPriority(1)
-
-            Spacer(minLength: 8)
+            // The words give way, not the figure: it was the figure that was
+            // squeezed, into a column of single letters at large text sizes.
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .trailing, spacing: -1) {
                 Text("\(mail.days)")
@@ -592,9 +592,10 @@ private struct WaitingRow: View {
                     .monospacedDigit()
                     .foregroundStyle(heat)
                 Text(mail.days == 1 ? "day" : "days")
-                    .font(.system(size: 9))
+                    .font(.caption2)
                     .foregroundStyle(.inkMuted)
             }
+            .fixedSize()
         }
         .padding(12)
         .opacity(mail.isMailable ? 1 : 0.6)
@@ -726,9 +727,7 @@ private struct GroupPersonRow: View {
                     .foregroundStyle(.inkMuted)
                     .lineLimit(1)
             }
-            .layoutPriority(1)
-
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(badge.text)
                 .font(.caption2.weight(.semibold))
@@ -736,6 +735,7 @@ private struct GroupPersonRow: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(badge.tint.opacity(0.14), in: Capsule())
+                .fixedSize()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)

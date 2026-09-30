@@ -38,13 +38,18 @@ struct StatusChip: View {
 /// had been mailed, so a company you'd started on was a line taller than one you
 /// hadn't, and the list's rows jumped between two heights as you scrolled.
 /// Saying "not mailed yet" is also more use than saying nothing.
+///
+/// The chips wrap onto a second line when they don't fit side by side. Chips
+/// never shrink (their words mustn't truncate), so in a plain HStack two of
+/// them at a large text size were wider than the card: the whole row then
+/// overflowed the list, centred, running past both edges of the screen.
 struct OutreachChips: View {
     let job: Job
 
     var body: some View {
         let replied = job.repliedContacts.count
         let quiet = job.quietDays
-        HStack(spacing: 6) {
+        WrappingHStack(spacing: 6, lineSpacing: 6) {
             if replied > 0 {
                 StatusChip(text: "\(replied) replied",
                            systemImage: "arrowshape.turn.up.left.fill",
