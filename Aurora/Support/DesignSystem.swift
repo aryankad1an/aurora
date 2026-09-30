@@ -235,11 +235,7 @@ extension View {
     func cardList() -> some View {
         listStyle(.plain)
             .scrollContentBackground(.hidden)
-            // Cards scrolling under the floating search field and the tab bar
-            // stayed sharp and legible there — a company name printed across
-            // the search text. The hard edge lays paper under the bars instead
-            // of the soft fade, which on this black ground barely showed.
-            .scrollEdgeEffectStyle(.hard, for: .all)
+            .modifier(CardListEdges())
             // Rows are as tall as their cards, not padded up to the system's 44pt
             // minimum — a day label in Activity is shorter than that.
             .environment(\.defaultMinListRowHeight, 0)
@@ -258,6 +254,27 @@ extension View {
                                       bottom: bottom, trailing: Theme.Space.gutter))
     }
 
+}
+
+/// How a `cardList` meets the bars floating over it.
+///
+/// Cards scrolling under the tab bar, or under the search field while it's
+/// in use, stayed sharp and legible there — a company name printed across the
+/// search text. The hard edge lays paper under those bars instead of the soft
+/// fade, which on this black ground barely showed.
+///
+/// But a hard edge is a flat sheet, and it hides the graph paper behind the
+/// bar — at the top of every screen, behind the title's buttons, even with
+/// nothing scrolled under it. So the top edge goes hard only while searching,
+/// when the field sits there with results running under it.
+private struct CardListEdges: ViewModifier {
+    @Environment(\.isSearching) private var isSearching
+
+    func body(content: Content) -> some View {
+        content
+            .scrollEdgeEffectStyle(.hard, for: .bottom)
+            .scrollEdgeEffectStyle(isSearching ? .hard : .automatic, for: .top)
+    }
 }
 
 /// Graph paper: faint rules on a square grid, every fourth one a shade
