@@ -54,7 +54,208 @@ struct BounceParsingTests {
         check(BounceParsing.reason(in: "Something went wrong.") == .other, "anything else")
         check(BounceParsing.reason(in: nil) == .other, "no text")
 
+        // Reasons from status codes
+        check(BounceParsing.reason(status: "5.1.1", text: nil) == .addressNotFound, "5.1.1 is no such mailbox")
+        check(BounceParsing.reason(status: "5.1.10", text: nil) == .addressNotFound, "Exchange 5.1.10")
+        check(BounceParsing.reason(status: "5.1.2", text: nil) == .domainNotFound, "5.1.2 is a bad domain")
+        check(BounceParsing.reason(status: "5.4.310", text: nil) == .domainNotFound, "Exchange 5.4.310")
+        check(BounceParsing.reason(status: "5.2.2", text: nil) == .mailboxFull, "5.2.2 is a full mailbox")
+        check(BounceParsing.reason(status: "5.7.1", text: "user unknown") == .rejected, "the code beats the text")
+        check(BounceParsing.reason(status: "5.0.0", text: "No such user here") == .addressNotFound, "a vague code falls back to the text")
+        check(BounceParsing.statusCode(in: "550 5.1.1 <a@b.com>: Recipient address rejected") == "5.1.1", "status code from text")
+        check(BounceParsing.statusCode(in: "Version 2026.10") == nil, "no status code in plain numbers")
+
+        // Whole notices
+        let gmail = gmailFailure.replacingOccurrences(of: "\n", with: "\r\n")
+        let parsed = BounceParsing.parseNotice(raw: gmail)
+        check(parsed.isNotice, "Gmail DSN is a notice")
+        check(parsed.report?.count == 1, "Gmail DSN has one recipient")
+        check(parsed.originalMessageID == "CAJx+abc=123@mail.gmail.com", "original Message-ID from the quoted mail")
+        let failed = parsed.failures(snippet: nil)
+        check(failed == [BounceFailure(address: "jane.doe@acme.com", status: "5.1.1",
+                                       diagnostic: "The email account that you tried to reach does not exist. Please try double-checking the recipient's email address for typos.")],
+              "Gmail DSN: address, status, and a clean diagnostic")
+
+        let encoded = Data(gmailFailure.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        check(BounceParsing.parseNotice(base64URL: encoded)?.failures(snippet: nil).first?.address == "jane.doe@acme.com",
+              "reads Gmail's base64url raw format")
+
+        let delay = BounceParsing.parseNotice(raw: gmailDelay)
+        check(delay.isNotice && delay.failures(snippet: nil).isEmpty, "Action: delayed is not a bounce")
+
+        let exchange = BounceParsing.parseNotice(raw: exchangeFailure)
+        check(exchange.isNotice, "Exchange NDR is a notice")
+        check(exchange.originalMessageID == "abc123@mail.gmail.com", "Message-ID from text/rfc822-headers")
+        check(exchange.failures(snippet: nil) == [BounceFailure(address: "bob@corp.example", status: "5.1.10",
+                                                                diagnostic: "RESOLVER.ADR.RecipientNotFound; Recipient not found by SMTP address lookup")],
+              "Exchange NDR, base64 prose and all")
+        check(BounceParsing.reason(status: "5.1.10", text: nil) == .addressNotFound, "Exchange reason")
+
+        let forwarded = BounceParsing.parseNotice(raw: forwardedFailure)
+        check(forwarded.failures(snippet: nil).map(\.address) == ["jane@acme.com"], "Original-Recipient wins over Final-Recipient")
+
+        let qmail = BounceParsing.parseNotice(raw: qmailFailure)
+        check(qmail.report == nil && qmail.isNotice, "a prose-only notice is still a notice")
+        check(qmail.failures(snippet: nil) == [BounceFailure(address: "sam@oldco.example", status: "5.1.1", diagnostic: nil)],
+              "prose-only: address and status from the text")
+
+        let person = BounceParsing.parseNotice(raw: personalMail)
+        check(!person.isNotice && person.failures(snippet: nil).isEmpty, "a person's mail titled 'Returned mail' isn't a bounce")
+
+        check(BounceParsing.isBounceSender("Microsoft Outlook <MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e@corp.example>"),
+              "Exchange's service account is a bounce sender")
+
         print("Bounce parsing: \(passed) passed, \(failures) failed")
         exit(failures == 0 ? 0 : 1)
     }
 }
+
+
+// MARK: - Sample notices, shaped like the real ones
+
+private let gmailFailure = """
+Return-Path: <>
+From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>
+To: me@gmail.com
+Subject: Delivery Status Notification (Failure)
+Content-Type: multipart/report; boundary="000000000000abc"; report-type=delivery-status
+
+--000000000000abc
+Content-Type: multipart/related; boundary="000000000000def"
+
+--000000000000def
+Content-Type: multipart/alternative; boundary="000000000000ghi"
+
+--000000000000ghi
+Content-Type: text/plain; charset="UTF-8"
+
+** Address not found **
+
+Your message wasn't delivered to jane.doe@acme.com because the address couldn't be found, or is unable to receive mail.
+
+--000000000000ghi
+Content-Type: text/html; charset="UTF-8"
+
+<html><body>Address not found</body></html>
+--000000000000ghi--
+--000000000000def--
+--000000000000abc
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; googlemail.com
+Received-From-MTA: dns; me@gmail.com
+Arrival-Date: Tue, 29 Sep 2026 10:00:00 -0700 (PDT)
+
+Final-Recipient: rfc822; jane.doe@acme.com
+Action: failed
+Status: 5.1.1
+Remote-MTA: dns; mx.acme.com. (1.2.3.4, the server for the domain acme.com.)
+Diagnostic-Code: smtp; 550-5.1.1 The email account that you tried to reach does
+ not exist. Please try
+ 550-5.1.1 double-checking the recipient's email address for typos.
+Last-Attempt-Date: Tue, 29 Sep 2026 10:00:01 -0700 (PDT)
+
+--000000000000abc
+Content-Type: message/rfc822
+
+From: Me <me@gmail.com>
+To: jane.doe@acme.com
+Subject: Hello
+Message-ID: <CAJx+abc=123@mail.gmail.com>
+
+Hi Jane, …
+--000000000000abc--
+"""
+
+private let gmailDelay = """
+From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>
+Subject: Delivery Status Notification (Delay)
+Content-Type: multipart/report; boundary="b1"; report-type=delivery-status
+
+--b1
+Content-Type: text/plain
+
+Message not delivered. There was a temporary problem delivering your message to jane@acme.com. Gmail will retry for 46 more hours.
+--b1
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; googlemail.com
+
+Final-Recipient: rfc822; jane@acme.com
+Action: delayed
+Status: 4.4.1
+--b1--
+"""
+
+private let exchangeFailure = """
+From: Microsoft Outlook <MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e@corp.example>
+To: <me@gmail.com>
+Subject: Undeliverable: Hello
+Content-Type: multipart/report; report-type=delivery-status;
+\tboundary="_000_NDR_"
+
+--_000_NDR_
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: base64
+
+\(Data("Delivery has failed to these recipients or groups:\n\nbob@corp.example\nThe email address you entered couldn't be found.".utf8).base64EncodedString())
+
+--_000_NDR_
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns;EX01.corp.example
+
+Final-recipient: RFC822; bob@corp.example
+Action: failed
+Status: 5.1.10
+Diagnostic-code: smtp; 550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient not found by SMTP address lookup
+
+--_000_NDR_
+Content-Type: text/rfc822-headers
+
+From: Me <me@gmail.com>
+To: bob@corp.example
+Subject: Hello
+Message-ID: <abc123@mail.gmail.com>
+
+--_000_NDR_--
+"""
+
+private let forwardedFailure = """
+From: MAILER-DAEMON@relay.acme.com
+Subject: Undelivered Mail Returned to Sender
+Content-Type: multipart/report; report-type=delivery-status; boundary="xyz"
+
+--xyz
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; relay.acme.com
+
+Original-Recipient: rfc822;jane@acme.com
+Final-Recipient: rfc822;jane.personal@elsewhere.example
+Action: failed
+Status: 5.1.1
+--xyz--
+"""
+
+private let qmailFailure = """
+From: MAILER-DAEMON@mail.oldco.example
+Subject: failure notice
+
+Hi. This is the qmail-send program at mail.oldco.example.
+I'm afraid I wasn't able to deliver your message to the following addresses.
+This is a permanent error; I've given up. Sorry it didn't work out.
+
+<sam@oldco.example>:
+550 5.1.1 Sorry, no mailbox here by that name.
+"""
+
+private let personalMail = """
+From: Priya <priya@friend.example>
+Subject: Returned mail from the trip
+Content-Type: text/plain
+
+Returned the mail you left at mine, it's with the front desk.
+"""

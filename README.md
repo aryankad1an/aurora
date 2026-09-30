@@ -29,7 +29,8 @@ through the Gmail API using Google OAuth.
 - **Reply tracking.** Each send records its Gmail thread. The app reads those
   threads to find replies, skipping auto-replies and bounces.
 - **Bounce detection.** Mail that comes back undelivered is found in its thread
-  or in the inbox, matched to the contact it names, and listed with the reason.
+  or in the inbox, matched to the exact send by the `Message-ID` the failure
+  notice quotes, and listed with the reason its status code gives.
 - **Activity.** Every mail sent, grouped by day, filterable by replied/waiting
   and by search. A Bounced lane lists the addresses that bounced, with a button
   to mark each (or all) invalid; the tab shows a badge while any are waiting.
@@ -153,17 +154,36 @@ does a full check.
 A bounce is found two ways during the same sync:
 
 - **In the thread.** A failure notice that Gmail filed with the original mail,
-  from a `mailer-daemon` or `postmaster` sender.
-- **In the inbox.** Many servers send notices that never join the thread, so
-  the sync also searches `from:(mailer-daemon OR postmaster) newer_than:120d`
-  and reads each notice it hasn't seen before. The failed address comes from
-  the `X-Failed-Recipients` header, or from the notice's text when there isn't
-  one. A notice only counts against a contact who was mailed before it arrived.
+  from a `mailer-daemon` or `postmaster` sender (or Exchange's
+  `MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e` service account). The
+  thread already says which send it was.
+- **In the inbox.** Many servers send notices that never join the thread. The
+  sync searches for the usual senders and the usual subjects ("Undeliverable",
+  "Delivery Status Notification", "Returned mail", "Delivery failure", …) from
+  the last 120 days, Spam and Trash included. It reads only the notices it
+  hasn't seen before.
 
-"Delivery delayed" notices are skipped, because Gmail is still retrying and
-most of those mails arrive in the end. The reason shown (address not found,
-domain doesn't exist, mailbox full, rejected) is read from the notice's text.
-This lives in `BounceParsing`, which has its own tests.
+Either way, the notice is read whole (`format=raw`), not just its preview.
+Most notices carry a machine-readable report (RFC 3464) that gives each failed
+address, what happened (`Action: failed` or `delayed`), a status code (`5.1.1`)
+and the receiving server's own explanation. They also quote the original
+mail's `Message-ID`, which a `rfc822msgid:` search turns back into the exact
+send. What the app does with that:
+
+- Only `Action: failed` counts. "Delayed" reports are skipped, because Gmail
+  is still retrying and most of those mails arrive in the end.
+- The reason comes from the status code: `5.1.1` (and Exchange's `5.1.10`)
+  address not found, `5.1.2` domain doesn't exist, `x.2.2` mailbox full,
+  `5.7.x` rejected by their server's policy or spam filter.
+- A notice is matched to the send its `Message-ID` names. Without one, it's
+  matched by address, and then only to a contact who was mailed before it
+  arrived.
+- A mail whose subject says "Returned mail" but isn't a notice (no report, not
+  from a mail server, no `X-Failed-Recipients`) is ignored.
+
+Servers that send prose alone fall back to reading the text: the address from
+`X-Failed-Recipients` or the prose, the reason from its wording and any status
+code in it. All of this lives in `BounceParsing`, which has its own tests.
 
 Bounces are saved per account in `Documents/bounces-<account>.json`, so they
 survive a relaunch. A bounce leaves the list when the contact is marked

@@ -189,12 +189,12 @@ struct BounceSection: View {
             .padding(.vertical, 4)
             .accessibilityElement(children: .combine)
 
-            if let snippet = bounce.snippet, !snippet.isEmpty {
+            if let message = bounce.serverMessage, !message.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("What their server said")
+                    Text(bounce.status.map { "What their server said · \($0)" } ?? "What their server said")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.inkMuted)
-                    Text(snippet)
+                    Text(message)
                         .font(.callout)
                         .foregroundStyle(.ink)
                         .textSelection(.enabled)

@@ -11,8 +11,19 @@ struct Bounce: Codable, Identifiable {
     let at: Date
     /// The notice's opening text, which says why.
     let snippet: String?
+    /// The enhanced status code from the notice's report (`5.1.1`), when it had
+    /// one. Nil for bounces found before reports were read.
+    let status: String?
+    /// The receiving server's own explanation, from the report.
+    let diagnostic: String?
 
-    var reason: BounceReason { BounceParsing.reason(in: snippet) }
+    var reason: BounceReason {
+        BounceParsing.reason(status: status, text: [diagnostic, snippet].compactMap { $0 }.joined(separator: " "))
+    }
+
+    /// What the receiving server said: its own words from the report where
+    /// there are some, the notice's opening text otherwise.
+    var serverMessage: String? { diagnostic ?? snippet }
 }
 
 /// What `ReplySync` keeps on disk about bounces, per account.
