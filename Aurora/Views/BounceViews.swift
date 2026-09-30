@@ -151,7 +151,7 @@ struct BounceListRow: View {
             // Its action is already on the row for VoiceOver.
             .accessibilityHidden(true)
         }
-        .padding(14)
+        .padding(12)
         .panel(accent: .statusInvalid)
         .contextMenu {
             Button(action: onOpen) { Label("Open Contact", systemImage: "person.text.rectangle") }

@@ -246,6 +246,11 @@ extension View {
     }
 
     /// One card in a `cardList`: no separator, no row fill, the gutter either side.
+    ///
+    /// Apply it to each row, never to a `Section`. Set on a section it reaches
+    /// the rows through the list's traits, and a row the list rebuilds in place
+    /// (its content changed while on screen) can come back without it — its
+    /// card then runs almost to the screen's edges.
     func cardRow(top: CGFloat = 4, bottom: CGFloat = 4) -> some View {
         listRowSeparator(.hidden)
             .listRowBackground(Color.clear)

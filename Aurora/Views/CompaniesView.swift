@@ -68,13 +68,17 @@ struct CompaniesView: View {
                     }
                 } else {
                     List(selection: $selection.ids) {
+                        // Margins go on each row (see `cardRow`), not on the
+                        // section: a row rebuilt in place — a company whose
+                        // chips update after a reply sync — lost the section's
+                        // and spread to the screen edges.
                         Section {
                             companyRows(rows)
                             if jobStore.isLoadingMoreCompanies || jobStore.isSearchingServer {
                                 LoadingRow()
+                                    .cardRow()
                             }
                         }
-                        .cardRow()
                     }
                     .cardList()
                     .listRows(selection) { path.append($0) } menu: { rowMenu($0) }
@@ -169,6 +173,7 @@ struct CompaniesView: View {
             let tracked = jobStore.isTracked(company.id)
             CompanyRow(job: company, isTracked: tracked)
                 .matchedTransitionSource(id: company.id, in: zoom)
+                .cardRow()
                 // Ask for the next 50 while ten rows are still to come, so the
                 // page lands before the list runs out rather than after.
                 .onAppear {

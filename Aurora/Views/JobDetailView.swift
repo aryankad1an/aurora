@@ -94,10 +94,11 @@ struct JobDetailView: View {
 
                 List(selection: $selection.ids) {
                     // Company details card (always visible at top)
+                    // Margins on each row, not the section (see `cardRow`).
                     Section {
                         companyHeaderCard(job)
+                            .cardRow(top: 8, bottom: 8)
                     }
-                    .cardRow(top: 8, bottom: 8)
 
                     if !bounces.isEmpty {
                         Section {
@@ -105,23 +106,24 @@ struct JobDetailView: View {
                                               message: "Mail to \(bounces.count == 1 ? "this contact" : "these contacts") came back undelivered. They're first in the list below, marked Bounced — open one to see why or fix the address.") {
                                 pendingValidity = ValidityChange(bounces.map(\.contact), isValid: false)
                             }
+                            .cardRow(top: 0, bottom: 8)
                         }
-                        .cardRow(top: 0, bottom: 8)
                     }
 
                     // Contacts list disclosure button & items
                     Section {
                         contactsToggleButton(job: job, active: active.count, invalid: invalid.count)
+                            .cardRow()
 
                         if showsContacts {
                             if contacts.isEmpty {
                                 emptyContactsNotice
+                                    .cardRow()
                             } else {
                                 contactRows(active, bounced: bouncedIDs)
                             }
                         }
                     }
-                    .cardRow()
 
                     // Ruled-out contacts keep their place in the company — they're
                     // the record of who has already been tried — but sit below
@@ -141,7 +143,6 @@ struct JobDetailView: View {
                                 .foregroundStyle(.inkMuted)
                                 .padding(.top, 4)
                         }
-                        .cardRow()
                     }
                 }
                 .cardList()
@@ -570,6 +571,7 @@ struct JobDetailView: View {
                 isBounced: bounced.contains(contact.id),
                 onSend: contact.isValid ? { startCompose(preselect: [contact.id]) } : nil
             )
+            .cardRow()
             .tag(contact.id)
             .swipeActions(edge: .trailing) {
                 if !contact.isSent {

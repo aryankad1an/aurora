@@ -376,8 +376,7 @@ private struct QueuedMailRow: View {
             Spacer(minLength: 6)
             status
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(12)
         .panel()
     }
 
