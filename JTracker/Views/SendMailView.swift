@@ -45,8 +45,9 @@ struct SendMailView: View {
     /// cap here; the deck only draws the letters near the one on show.
     private let recipients: [(contact: Contact, company: String)]
 
-    /// The mails as they stand — rendered from a template, then tailored.
-    @State private var letters: [MailPreview] = []
+    /// The mails as they stand — rendered from a template, then tailored — and
+    /// what the screen says about them.
+    @State private var batch = LetterBatch()
     /// The template the whole batch was last written from. Individual letters can
     /// be moved onto another one from their own menu.
     @State private var templateID: MailTemplate.ID?
@@ -84,7 +85,10 @@ struct SendMailView: View {
 
     private var templates: [MailTemplate] { templateStore.templates }
 
-    private var companyCount: Int { Set(letters.map(\.company)).count }
+    private var letters: [MailPreview] { batch.letters }
+    private var tally: LetterBatch.Tally { batch.tally }
+
+    private var companyCount: Int { tally.companies.count }
 
     var body: some View {
         NavigationStack {
@@ -100,7 +104,7 @@ struct SendMailView: View {
             .paperScreen()
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .discardableEdits(letters.contains(where: \.isEdited),
+            .discardableEdits(tally.anyEdited,
                               message: "The mails you edited by hand won't be kept.")
             .safeAreaInset(edge: .bottom) { sendBar }
             .sheet(item: $editing) { letter in
@@ -233,7 +237,7 @@ struct SendMailView: View {
     }
 
     private func templateTile(_ template: MailTemplate) -> some View {
-        let count = letters.count { $0.templateID == template.id }
+        let count = tally.perTemplate[template.id, default: 0]
         let isAll = !letters.isEmpty && count == letters.count
         let isSome = count > 0 && !isAll
         return Button {
@@ -325,7 +329,7 @@ struct SendMailView: View {
     /// deck still doesn't change height under the finger as it's swiped.
     @ViewBuilder
     private var deckSizer: some View {
-        if let longest = letters.max(by: { $0.roughLength < $1.roughLength }) {
+        if let longest = tally.longestID.flatMap({ id in letters.first { $0.id == id } }) {
             LetterCard(letter: longest, hasTemplate: longest.templateID != nil, onEdit: {}) {
                 EmptyView()
             }
@@ -380,7 +384,7 @@ struct SendMailView: View {
         if templates.isEmpty && letters.allSatisfy({ $0.templateID == nil && !$0.isEdited }) {
             return "Write a template first."
         }
-        let unwritten = letters.count { $0.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let unwritten = tally.unwritten
         if unwritten > 0 {
             return unwritten == 1 && letters.count == 1
                 ? "This mail has no subject."
@@ -391,16 +395,16 @@ struct SendMailView: View {
 
     /// Blanks don't block — a missing role often reads fine — but they're
     /// counted here, where they're the last thing seen before sending.
-    private var blankCount: Int { letters.count { !$0.missing.isEmpty } }
+    private var blankCount: Int { tally.blanks }
 
     /// Mails written from a template meant for another company. Not a blocker
     /// — the text may have been fixed by hand — but it's the first warning.
-    private var mismatchCount: Int { letters.count { $0.writtenFor != nil } }
+    private var mismatchCount: Int { tally.mismatched }
 
     /// Whether picking `template` would write mails naming the wrong company.
     private func isMismatched(_ template: MailTemplate) -> Bool {
         guard let company = templateCompany[template.id] else { return false }
-        return letters.contains { $0.company != company }
+        return tally.companies.contains { $0 != company }
     }
 
     private var sendConfirmation: String {
@@ -494,10 +498,18 @@ struct SendMailView: View {
         templateCompany = templates.reduce(into: [:]) { result, template in
             result[template.id] = template.writtenFor(amongst: tracked)
         }
-        guard letters.isEmpty || (templateID == nil && !letters.contains(where: \.isEdited)) else { return }
+        guard letters.isEmpty || (templateID == nil && !tally.anyEdited) else { return }
         let template = templateID.flatMap { id in templates.first { $0.id == id } } ?? defaultTemplate
         templateID = template?.id
-        letters = recipients.map { render($0.contact, company: $0.company, template: template) }
+        let parsed = template.map(parse)
+        let profile = profileStore.profile
+        batch.letters = recipients.map { contact, company in
+            let blank = MailPreview(id: contact.id, contact: contact, company: company,
+                                    context: MailContext.make(contact: contact, company: company, profile: profile),
+                                    name: contact.displayName, email: contact.email,
+                                    subject: "", body: "", templateID: nil)
+            return parsed.map { blank.rewritten(from: $0) } ?? blank
+        }
         if focus.id == nil { focus.id = letters.first?.id }
     }
 
@@ -522,7 +534,7 @@ struct SendMailView: View {
     /// purpose, so if there are any this asks first.
     private func choose(_ template: MailTemplate) {
         Haptics.press()
-        if letters.contains(where: \.isEdited) && template.id != templateID {
+        if tally.anyEdited && template.id != templateID {
             pendingTemplate = template
         } else {
             write(template, to: Set(letters.map(\.id)))
@@ -530,46 +542,41 @@ struct SendMailView: View {
     }
 
     /// Re-write the given letters from `template`, replacing any hand edits.
+    ///
+    /// The template is parsed once for the lot, and the new letters are built
+    /// before anything on screen changes, then swapped in as one change — so
+    /// the counts are worked out once, not once per letter.
     private func write(_ template: MailTemplate, to ids: Set<MailPreview.ID>) {
+        let parsed = parse(template)
+        var rewritten = letters
+        for index in rewritten.indices where ids.contains(rewritten[index].id) {
+            rewritten[index] = rewritten[index].rewritten(from: parsed)
+        }
         withAnimation(Theme.Motion.snappy) {
-            for index in letters.indices where ids.contains(letters[index].id) {
-                letters[index] = render(letters[index].contact, company: letters[index].company, template: template)
-            }
-            if ids.count == letters.count { templateID = template.id }
+            batch.letters = rewritten
+            if ids.count == rewritten.count { templateID = template.id }
         }
     }
 
-    private func render(_ contact: Contact, company: String, template: MailTemplate?) -> MailPreview {
-        guard let template else {
-            return MailPreview(id: contact.id, contact: contact, company: company,
-                               name: contact.displayName, email: contact.email,
-                               subject: "", body: "", templateID: nil)
-        }
-        let context = MailContext.make(contact: contact, company: company, profile: profileStore.profile)
-        let used = template.subject + template.content
-        let missing = MailPlaceholder.allCases.filter { placeholder in
-            used.contains(placeholder.token)
-                && (context.values[placeholder] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
-        }
-        return MailPreview(id: contact.id, contact: contact, company: company,
-                           name: contact.displayName, email: contact.email,
-                           subject: context.fill(template.subject),
-                           body: context.fill(template.content),
-                           templateID: template.id,
-                           missing: missing,
-                           writtenFor: templateCompany[template.id].flatMap { $0 == company ? nil : $0 })
+    private func parse(_ template: MailTemplate) -> ParsedTemplate {
+        ParsedTemplate(id: template.id,
+                       subject: MailText(template.subject),
+                       body: MailText(template.content),
+                       writtenFor: templateCompany[template.id])
     }
 
     /// Write a hand edit back into its letter. The letter has been read and
     /// written by a person now, so its blanks stop being flagged.
     private func apply(id: MailPreview.ID, subject: String, body: String) {
         guard let index = letters.firstIndex(where: { $0.id == id }) else { return }
-        letters[index].subject = subject
-        letters[index].body = body
-        letters[index].isEdited = true
-        letters[index].missing = []
+        var letter = letters[index]
+        letter.subject = subject
+        letter.body = body
+        letter.isEdited = true
+        letter.missing = []
         // Read and rewritten by a person: whatever it names is now on purpose.
-        letters[index].writtenFor = nil
+        letter.writtenFor = nil
+        batch.letters[index] = letter
     }
 
     private func leaveOut(_ letter: MailPreview) {
@@ -577,7 +584,7 @@ struct SendMailView: View {
         guard let index = letters.firstIndex(where: { $0.id == letter.id }) else { return }
         let next = letters.indices.contains(index + 1) ? letters[index + 1].id : letters[max(0, index - 1)].id
         withAnimation(Theme.Motion.snappy) {
-            letters.remove(at: index)
+            batch.letters.remove(at: index)
             focus.id = letters.contains { $0.id == next } ? next : letters.first?.id
         }
     }
@@ -691,10 +698,12 @@ private struct RecipientStrip: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 6) {
                     ForEach(letters) { letter in
-                        RecipientChip(letter: letter,
+                        RecipientChip(name: letter.name,
+                                      mark: letter.missing.isEmpty ? (letter.isEdited ? .edited : nil) : .blank,
                                       isFocused: letter.id == (focus.id ?? letters.first?.id)) {
                             withAnimation(Theme.Motion.snappy) { focus.id = letter.id }
                         }
+                        .equatable()
                         .id(letter.id)
                     }
                 }
@@ -709,24 +718,34 @@ private struct RecipientStrip: View {
 
 /// One person on the To line. Tapping it brings their letter to the front;
 /// a dot says their letter needs a look (a blank) or has been hand-edited.
-private struct RecipientChip: View {
-    let letter: MailPreview
+///
+/// Takes only what it draws, and compares on that, so a template switch —
+/// which rewrites every letter — leaves the chips alone.
+private struct RecipientChip: View, Equatable {
+    enum Mark { case blank, edited }
+
+    let name: String
+    let mark: Mark?
     let isFocused: Bool
     let onTap: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.name == rhs.name && lhs.mark == rhs.mark && lhs.isFocused == rhs.isFocused
+    }
 
     var body: some View {
         // No haptic of its own: the deck's selection tick plays as it lands.
         Button(action: onTap) {
             HStack(spacing: 6) {
-                MonogramAvatar(text: letter.name, size: 22)
-                Text(letter.name.split(separator: " ").first.map(String.init) ?? letter.name)
+                MonogramAvatar(text: name, size: 22)
+                Text(name.split(separator: " ").first.map(String.init) ?? name)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(isFocused ? Color.ink : Color.inkMuted)
                     .lineLimit(1)
-                if !letter.missing.isEmpty {
-                    Circle().fill(Color.kraft).frame(width: 6, height: 6)
-                } else if letter.isEdited {
-                    Circle().fill(Color.slate).frame(width: 6, height: 6)
+                switch mark {
+                case .blank: Circle().fill(Color.kraft).frame(width: 6, height: 6)
+                case .edited: Circle().fill(Color.slate).frame(width: 6, height: 6)
+                case nil: EmptyView()
                 }
             }
             .padding(.leading, 3)
@@ -737,8 +756,8 @@ private struct RecipientChip: View {
             .animation(Theme.Motion.pop, value: isFocused)
         }
         .buttonStyle(BouncyPress(scale: 0.9))
-        .accessibilityLabel(letter.name)
-        .accessibilityHint("Shows the mail to \(letter.name)")
+        .accessibilityLabel(name)
+        .accessibilityHint("Shows the mail to \(name)")
     }
 }
 
@@ -878,6 +897,10 @@ struct MailPreview: Identifiable {
     let id: Contact.ID
     let contact: Contact
     let company: String
+    /// What the placeholders fill in with for this person, worked out once —
+    /// the greeting alone takes some reading of their name — and reused by
+    /// every template the letter is written from.
+    let context: MailContext
     let name: String
     let email: String
     var subject: String
@@ -897,6 +920,73 @@ struct MailPreview: Identifiable {
         subject.utf8.count + body.utf8.count
             + (missing.isEmpty ? 0 : 120) + (writtenFor == nil ? 0 : 120)
     }
+
+    /// This letter written afresh from `template`, hand edits and all replaced.
+    fileprivate func rewritten(from template: ParsedTemplate) -> MailPreview {
+        var letter = self
+        letter.subject = template.subject.filled(with: context)
+        letter.body = template.body.filled(with: context)
+        letter.templateID = template.id
+        letter.missing = MailPlaceholder.allCases.filter { placeholder in
+            (template.subject.placeholders.contains(placeholder) || template.body.placeholders.contains(placeholder))
+                && (context.values[placeholder] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        letter.writtenFor = template.writtenFor.flatMap { $0 == company ? nil : $0 }
+        letter.isEdited = false
+        return letter
+    }
+}
+
+/// A template parsed once for a whole batch (see `MailText`).
+private struct ParsedTemplate {
+    let id: MailTemplate.ID
+    let subject: MailText
+    let body: MailText
+    /// The company it was written for, if it's one company's template.
+    let writtenFor: String?
+}
+
+/// The letters, and the counts the screen shows about them — how many use
+/// each template, have a blank, lack a subject — worked out once per change
+/// rather than by every view that shows one, each time it draws.
+private struct LetterBatch {
+    struct Tally {
+        var perTemplate: [MailTemplate.ID: Int] = [:]
+        var companies: Set<String> = []
+        var unwritten = 0
+        var blanks = 0
+        var mismatched = 0
+        var anyEdited = false
+        /// The letter that draws tallest, roughly — the deck sizes to it.
+        var longestID: MailPreview.ID?
+
+        init() {}
+
+        init(_ letters: [MailPreview]) {
+            var longest = -1
+            for letter in letters {
+                if let id = letter.templateID { perTemplate[id, default: 0] += 1 }
+                companies.insert(letter.company)
+                if letter.subject.unicodeScalars.allSatisfy(CharacterSet.whitespacesAndNewlines.contains) {
+                    unwritten += 1
+                }
+                if !letter.missing.isEmpty { blanks += 1 }
+                if letter.writtenFor != nil { mismatched += 1 }
+                if letter.isEdited { anyEdited = true }
+                let length = letter.roughLength
+                if length > longest {
+                    longest = length
+                    longestID = letter.id
+                }
+            }
+        }
+    }
+
+    /// Set whole — not letter by letter — so the tally is redone once.
+    var letters: [MailPreview] = [] {
+        didSet { tally = Tally(letters) }
+    }
+    private(set) var tally = Tally()
 }
 
 /// A drawer for tailoring a single mail's subject and body before sending.
