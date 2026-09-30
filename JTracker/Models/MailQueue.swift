@@ -93,6 +93,10 @@ final class MailQueue {
     /// Due batches the user has put off for this session with "Not Now". Still
     /// due, and still in the queue — just not asked about again until reopened.
     private(set) var snoozed: Set<UUID> = []
+    /// Whether the queue screen is up. One sheet shows it, from the root, however
+    /// it was opened (the shelf, Activity) — and while it's up, it's the one to
+    /// show a batch that comes due, since only one sheet can be up at a time.
+    var isShowingQueue = false
 
     // MARK: - Transport
 

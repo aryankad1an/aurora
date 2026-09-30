@@ -113,6 +113,34 @@ struct ScheduleSendSheet: View {
     }
 }
 
+extension View {
+    /// A scheduled batch whose time has come, shown as its summary until it's
+    /// sent or put off; swiping it away is "Not Now". Attached where sheets are
+    /// shown from — the root, and the queue screen while that's up, since only
+    /// one sheet can be on screen at a time.
+    func dueBatchSummary(isEnabled: Bool = true) -> some View {
+        modifier(DueBatchSummary(isEnabled: isEnabled))
+    }
+}
+
+private struct DueBatchSummary: ViewModifier {
+    let isEnabled: Bool
+    @Environment(MailQueue.self) private var queue
+
+    func body(content: Content) -> some View {
+        content.sheet(item: Binding(get: { isEnabled ? queue.dueBatch : nil },
+                                    set: { batch in
+                                        if batch == nil, isEnabled, let due = queue.dueBatch { queue.snooze(due.id) }
+                                    })) { batch in
+            DueBatchSheet(batch: batch) {
+                queue.sendNow(batch.id)
+            } onLater: {
+                queue.snooze(batch.id)
+            }
+        }
+    }
+}
+
 /// A scheduled batch whose time has come: what's going, to whom, from which
 /// template — and one tap to send it. Shown when its notification is tapped,
 /// or when the app is opened (or already open) once it's due.

@@ -3,7 +3,7 @@ import SwiftUI
 /// The mail queue's presence in the UI: a compact strip that rides above the tab
 /// bar whenever the queue has something to say — mail going out, a run's
 /// result, a batch paused or due, the next one scheduled. Tapping it opens the
-/// queue.
+/// queue — that's all a tap on it does; nothing on it clears anything.
 ///
 /// It lives in the tab bar's accessory slot — the same shelf a music app uses for
 /// its mini player — because that's the one place in iOS that means "something of
@@ -159,14 +159,16 @@ struct SendQueueBar: View {
             return "\(queue.completed) of \(queue.total) · \(queue.running?.title ?? "")"
         case .result(let outcome):
             if let reason = outcome.stoppedBecause { return reason }
-            if outcome.isPaused { return "Tap to see the queue and resume" }
-            guard !outcome.failed.isEmpty else { return "Tap to see the queue" }
+            if outcome.isPaused { return "Tap to open the queue and resume" }
+            guard !outcome.failed.isEmpty else {
+                return (queue.batch(outcome.batchID)?.title).map { "\($0) · tap to open the queue" } ?? "Tap to open the queue"
+            }
             return "Couldn't reach \(outcome.failed.prefix(2).joined(separator: ", "))"
                 + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
         case .due(let batch):
             return "\(batch.title) · tap Review to see it and send"
         case .paused(let batches):
-            return batches.count == 1 ? "\(batches[0].title) · tap to see it" : "\(batches.count) batches · tap to see them"
+            return batches.count == 1 ? "\(batches[0].title) · tap to open the queue" : "\(batches.count) batches · tap to open the queue"
         case .scheduled(let batch):
             let day = batch.scheduledFor.map { Calendar.current.isDateInToday($0) ? "today" : $0.formatted(.dateTime.weekday(.wide)) } ?? ""
             return "\(batch.pending) mail\(batch.pending == 1 ? "" : "s") · \(batch.title) · \(day)"
@@ -193,16 +195,11 @@ struct SendQueueBar: View {
             .buttonBorderShape(.capsule)
             .controlSize(.small)
             .disabled(queue.isStopping)
-        case .result:
-            Button {
-                Haptics.tap(0.5)
-                queue.acknowledge()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.inkMuted)
-            }
-            .buttonStyle(BouncyPress(scale: 0.8))
+        case .result, .scheduled:
+            // Says what a tap does: opens the queue.
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.inkMuted)
         case .due(let batch):
             Button {
                 Haptics.press()
@@ -225,7 +222,7 @@ struct SendQueueBar: View {
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
             .controlSize(.small)
-        case .scheduled, .idle:
+        case .idle:
             EmptyView()
         }
     }

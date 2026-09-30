@@ -18,7 +18,6 @@ struct RootView: View {
     @State private var replySync = ReplySync()
     @State private var selectionChrome = SelectionChrome()
     @State private var selectedTab: Tab = .home
-    @State private var showingQueue = false
     /// Taps on scheduled-mail notifications, which can arrive before the app
     /// has finished opening.
     private let notifications = NotificationRouter.shared
@@ -259,15 +258,6 @@ struct RootView: View {
         mailQueue.unsnooze(id)
     }
 
-    /// A due batch, shown as its summary until it's sent or put off. Swiping it
-    /// away is "Not Now".
-    private var dueBatch: Binding<MailBatch?> {
-        Binding(get: { mailQueue.dueBatch },
-                set: { batch in
-                    if batch == nil, let due = mailQueue.dueBatch { mailQueue.snooze(due.id) }
-                })
-    }
-
     /// The send queue's shelf above the tab bar, shown only while the queue has
     /// something to say. It steps aside while a list is selecting: the tab bar
     /// leaves then, and the shelf would drop into its place on top of the
@@ -275,19 +265,18 @@ struct RootView: View {
     private var tabs: some View {
         tabStack
             .tabViewBottomAccessory(isEnabled: mailQueue.isActive && !selectionChrome.isSelecting) {
-                SendQueueBar { showingQueue = true }
+                // The shelf only ever opens the queue; a result it was showing
+                // has been seen once the queue is open.
+                SendQueueBar {
+                    mailQueue.acknowledge()
+                    mailQueue.isShowingQueue = true
+                }
             }
-            .sheet(isPresented: $showingQueue) {
+            .sheet(isPresented: $mailQueue.isShowingQueue) {
                 MailQueueView()
             }
-            .sheet(item: dueBatch) { batch in
-                DueBatchSheet(batch: batch) {
-                    mailQueue.sendNow(batch.id)
-                } onLater: {
-                    mailQueue.snooze(batch.id)
-                }
-                .presentationDetents([.large])
-            }
+            // While the queue is up, it shows the summary itself.
+            .dueBatchSummary(isEnabled: !mailQueue.isShowingQueue)
             .onChange(of: notifications.openedBatchID) { openTappedBatch() }
             // The shelf appearing pushes the tab bar up — a real object arriving on
             // screen, and the one event here the user didn't just tap for.

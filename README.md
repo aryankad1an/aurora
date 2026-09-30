@@ -76,9 +76,11 @@ written when the app closes is written the next time it opens.
 
 The shelf above the tab bar shows what the queue is doing (sending, paused,
 due, scheduled, or the last result). Tapping it opens the queue, where each
-batch can be paused, resumed, rescheduled, retried or removed, and each mail can
-be opened to read exactly what was or will be sent. The queue is also under
-Activity → ⋯ → Mail Queue.
+batch can be paused, resumed, rescheduled, retried or removed. Each batch lists
+the saved copies of its templates (flagged if the template has been edited or
+deleted in Templates since), each person's row says which one their mail is
+written from, and any mail can be opened to read exactly what was or will be
+sent. The queue is also under Activity → ⋯ → Mail Queue.
 
 ### Interruptions
 

@@ -303,10 +303,19 @@ private struct TemplateCard: View {
         .fixedSize()
     }
 
-    /// The body with each placeholder token coloured clay and set semibold, and
-    /// line breaks folded to spaces so three lines show three lines of prose.
+    /// The body with its placeholders lit, and line breaks folded to spaces so
+    /// three lines show three lines of prose.
     private static func highlighted(_ content: String, font: Font) -> AttributedString {
-        var result = AttributedString(content.replacingOccurrences(of: "\n", with: " "))
+        .placeholdersLit(in: content, font: font, foldingLines: true)
+    }
+}
+
+extension AttributedString {
+    /// Template text with each placeholder token coloured clay and set in
+    /// `font` — how a template is shown wherever it's shown as a template, on
+    /// its card here and as a batch's saved copy in the mail queue.
+    static func placeholdersLit(in text: String, font: Font, foldingLines: Bool = false) -> AttributedString {
+        var result = AttributedString(foldingLines ? text.replacingOccurrences(of: "\n", with: " ") : text)
         for placeholder in MailPlaceholder.allCases {
             var searchRange = result.startIndex..<result.endIndex
             while let range = result[searchRange].range(of: placeholder.token) {

@@ -108,6 +108,7 @@ struct MailQueueView: View {
                 BatchDetailView(batchID: id)
             }
         }
+        .dueBatchSummary()
     }
 
     /// What needs the user first — sending, then due and paused, then what's
@@ -266,6 +267,7 @@ private struct BatchDetailView: View {
     @State private var filter: Filter = .all
     @State private var previewing: QueuedMail?
     @State private var confirmingRemove = false
+    @State private var viewingTemplate: MailTemplate.ID?
 
     var body: some View {
         Group {
@@ -293,13 +295,17 @@ private struct BatchDetailView: View {
             BatchCard(batch: batch, showsChevron: false)
                 .cardRow(top: 6, bottom: 6)
 
+            SavedTemplatesCard(batch: batch) { viewingTemplate = $0 }
+                .cardRow(top: 6, bottom: 6)
+
             SegmentedSelector(segments: [
                 (.all, "All"), (.waiting, "To Go"), (.sent, "Sent"), (.failed, "Failed")
             ], selection: $filter)
                 .cardRow(top: 6, bottom: 8)
 
             ForEach(mails) { mail in
-                QueuedMailRow(mail: mail, isSending: isInFlight(mail, phase: phase))
+                QueuedMailRow(mail: mail, template: batch.templateName(for: mail),
+                              isSending: isInFlight(mail, phase: phase))
                     .contentShape(.rect)
                     .onTapGesture {
                         Haptics.tap(0.5)
@@ -328,6 +334,9 @@ private struct BatchDetailView: View {
         .sheet(item: $previewing) { mail in
             QueuedMailPreview(mail: mail, batch: batch)
         }
+        .navigationDestination(item: $viewingTemplate) { id in
+            SavedTemplateView(batch: batch, templateID: id)
+        }
     }
 
     /// The one mail being handed to Gmail right now.
@@ -340,6 +349,8 @@ private struct BatchDetailView: View {
 /// One person in a batch, and where their mail has got to.
 private struct QueuedMailRow: View {
     let mail: QueuedMail
+    /// The saved template it's written from; nil when written by hand.
+    let template: String?
     let isSending: Bool
 
     var body: some View {
@@ -354,6 +365,13 @@ private struct QueuedMailRow: View {
                     .font(.caption)
                     .foregroundStyle(.inkMuted)
                     .lineLimit(1)
+                HStack(spacing: 4) {
+                    Image(systemName: template == nil ? "pencil" : "doc.text")
+                    Text(template ?? "Written by hand")
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(template == nil ? Color.slate : Color.inkFaint)
+                .lineLimit(1)
             }
             Spacer(minLength: 6)
             status
@@ -408,6 +426,18 @@ private struct QueuedMailPreview: View {
                         .font(.subheadline)
                         .foregroundStyle(mail.status.isFailed ? Color.statusInvalid : Color.inkMuted)
                 }
+                Section("Written from") {
+                    if mail.override == nil, let id = mail.templateID, let name = batch.templateName(for: mail) {
+                        NavigationLink {
+                            SavedTemplateView(batch: batch, templateID: id)
+                        } label: {
+                            Label("\(name) · saved copy", systemImage: "doc.text")
+                        }
+                    } else {
+                        Label("Written by hand on the compose screen", systemImage: "pencil")
+                            .foregroundStyle(.inkMuted)
+                    }
+                }
                 if let text {
                     Section("Subject") {
                         Text(text.subject).textSelection(.enabled)
@@ -442,5 +472,124 @@ private struct QueuedMailPreview: View {
             "Sent " + at.formatted(date: .abbreviated, time: .shortened) + (recorded ? "" : " · saving to history")
         case .failed(let reason): "Couldn't send: \(reason)"
         }
+    }
+}
+
+// MARK: - Saved templates
+
+extension MailBatch {
+    /// The name of the saved template `mail` is written from; nil when it was
+    /// written by hand.
+    func templateName(for mail: QueuedMail) -> String? {
+        guard mail.override == nil, let id = mail.templateID else { return nil }
+        return templates[id]?.name ?? "Missing template"
+    }
+}
+
+/// The templates a batch is written from, as it saved them — each opens to the
+/// exact text its mails are written from, and says when the one in Templates
+/// has been changed since.
+private struct SavedTemplatesCard: View {
+    let batch: MailBatch
+    let onOpen: (MailTemplate.ID) -> Void
+
+    @Environment(TemplateStore.self) private var templateStore
+
+    var body: some View {
+        let used = Dictionary(grouping: batch.mails.filter { $0.override == nil }, by: \.templateID)
+        let byHand = batch.mails.count { $0.override != nil }
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(title: "Saved templates", systemImage: "doc.on.doc")
+            ForEach(batch.templates.keys.filter { used[$0] != nil }.sorted { name($0) < name($1) }, id: \.self) { id in
+                Button {
+                    Haptics.tap(0.5)
+                    onOpen(id)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "doc.text.fill")
+                            .foregroundStyle(.clay)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(name(id))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.ink)
+                            Text("\(used[id]?.count ?? 0) mail\(used[id]?.count == 1 ? "" : "s") · saved "
+                                 + batch.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption)
+                                .foregroundStyle(.inkMuted)
+                        }
+                        Spacer(minLength: 6)
+                        if let change = SavedTemplateView.change(of: batch.templates[id], live: templateStore.templates.first { $0.id == id }) {
+                            StatusChip(text: change, systemImage: "pencil", color: .kraft)
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.inkFaint)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+            if byHand > 0 {
+                Label(byHand == 1 ? "1 mail written by hand" : "\(byHand) mails written by hand", systemImage: "pencil")
+                    .font(.caption)
+                    .foregroundStyle(.inkMuted)
+            }
+        }
+        .padding(14)
+        .panel()
+    }
+
+    private func name(_ id: MailTemplate.ID) -> String { batch.templates[id]?.name ?? "" }
+}
+
+/// One of a batch's templates exactly as it was saved when the batch was
+/// confirmed — the text every mail on it is written from, placeholders and all.
+private struct SavedTemplateView: View {
+    let batch: MailBatch
+    let templateID: MailTemplate.ID
+
+    @Environment(TemplateStore.self) private var templateStore
+
+    var body: some View {
+        let saved = batch.templates[templateID]
+        let change = Self.change(of: saved, live: templateStore.templates.first { $0.id == templateID })
+        PaperList {
+            Section {
+                Label("Saved " + batch.createdAt.formatted(date: .abbreviated, time: .shortened)
+                      + ", when this batch was confirmed. Its mails are written from this copy as they go.",
+                      systemImage: "doc.on.doc")
+                    .font(.footnote)
+                    .foregroundStyle(.inkMuted)
+                if let change {
+                    Label(change == "Deleted since"
+                          ? "Deleted from Templates since. This batch still sends the copy below."
+                          : "Edited in Templates since. This batch still sends the copy below, not the new text.",
+                          systemImage: "exclamationmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.kraft)
+                }
+            }
+            if let saved {
+                Section("Subject") {
+                    Text(AttributedString.placeholdersLit(in: saved.subject.isEmpty ? "No subject" : saved.subject,
+                                                          font: .body.weight(.semibold)))
+                        .textSelection(.enabled)
+                }
+                Section("Message") {
+                    Text(AttributedString.placeholdersLit(in: saved.content, font: .callout.weight(.semibold)))
+                        .font(.callout)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .navigationTitle(saved?.name ?? "Template")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// How the template in Templates differs from the saved copy, if it does.
+    static func change(of saved: MailBatch.TemplateSnapshot?, live: MailTemplate?) -> String? {
+        guard let saved else { return nil }
+        guard let live else { return "Deleted since" }
+        return live.subject == saved.subject && live.content == saved.content ? nil : "Edited since"
     }
 }

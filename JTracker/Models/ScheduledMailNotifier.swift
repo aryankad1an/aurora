@@ -60,18 +60,30 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     /// The batch whose notification was tapped, waiting to be shown.
     @MainActor var openedBatchID: UUID?
 
+    /// The completion-handler form, answered on the main thread — not the
+    /// `async` form. Swift finishes an `async` delegate call on a background
+    /// thread, and the completion it then hands to UIKit is what brings the app
+    /// to the front: run off the main thread it trips a UIKit assertion, and the
+    /// app that the tap had just opened crashes straight back to the Home
+    /// Screen.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            didReceive response: UNNotificationResponse) async {
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
         let id = (response.notification.request.content.userInfo[ScheduledMailNotifier.batchKey] as? String)
             .flatMap(UUID.init(uuidString:))
-        guard let id else { return }
-        await MainActor.run { NotificationRouter.shared.openedBatchID = id }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                if let id { NotificationRouter.shared.openedBatchID = id }
+            }
+            completionHandler()
+        }
     }
 
     /// In the app already: the summary sheet appears by itself when the time
     /// comes, so the banner would only say the same thing twice.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        []
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        DispatchQueue.main.async { completionHandler([]) }
     }
 }
