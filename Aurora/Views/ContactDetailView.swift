@@ -18,6 +18,7 @@ struct ContactDetailView: View {
     let onSave: (Contact) -> Void
 
     @Environment(JobStore.self) private var jobStore
+    @Environment(ReplySync.self) private var replySync
     @Environment(\.dismiss) private var dismiss
 
     @State private var isEditing = false
@@ -59,6 +60,13 @@ struct ContactDetailView: View {
         _isContactValid = State(initialValue: contact.isValid)
     }
 
+    /// The address's bounce, while there's one to deal with. Gone as soon as the
+    /// address is corrected, the contact is ruled out, or it's dismissed.
+    private var bounce: Bounce? {
+        guard replySync.bounces[contact.id] != nil else { return nil }
+        return jobStore.bouncedContacts(from: replySync).first { $0.contact.id == contact.id }?.bounce
+    }
+
     /// Whether the edited fields are complete enough to save. (Not to be confused
     /// with `isContactValid`, which is whether the *person* is still worth mailing.)
     private var canSave: Bool {
@@ -91,11 +99,26 @@ struct ContactDetailView: View {
 
                 if !isContactValid { invalidBanner }
 
+                // A bounced address is the one thing about this contact that
+                // needs deciding, so it comes before the fields.
+                if let bounce, isContactValid, !isEditing {
+                    BounceSection(bounce: bounce) {
+                        pendingValidity = ValidityChange([committed], isValid: false)
+                    } onFixAddress: {
+                        Haptics.tap()
+                        withAnimation(Theme.Motion.bouncy) { isEditing = true }
+                    } onDismiss: {
+                        Haptics.tap(0.5)
+                        withAnimation(Theme.Motion.snappy) { replySync.dismissBounce(contact.id) }
+                    }
+                }
+
                 // No company header: the card above already names it.
                 ContactFields(email: $email, name: $name, position: $position, phone: $phone,
                               greetingName: $greetingName, isEditing: isEditing)
 
-                validitySection
+                // The bounce section above has its own Mark as Invalid.
+                if bounce == nil || !isContactValid { validitySection }
 
                 Section("Sent History") {
                     if isLoadingHistory {

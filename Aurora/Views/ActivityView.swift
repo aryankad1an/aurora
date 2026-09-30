@@ -20,6 +20,8 @@ struct ActivityView: View {
     @State private var summaryItem: ActivityEntry?
     /// A Mark Invalid from the Bounced lane, held until it's confirmed.
     @State private var pendingValidity: ValidityChange?
+    /// A bounced contact opened from the lane, to fix or rule out.
+    @State private var openBounce: BouncedContact?
     @Environment(MailQueue.self) private var mailQueue
     /// How many entries are built. The feed is attached 50 at a time: the next
     /// page when the end of the current one scrolls into view.
@@ -65,6 +67,19 @@ struct ActivityView: View {
             .validityAlert($pendingValidity) { change in
                 Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }
             }
+            .sheet(item: $openBounce) { item in
+                ContactDetailView(contact: item.contact, company: item.company) { isValid in
+                    Task {
+                        if isValid {
+                            await jobStore.setValidity([item.contact.id], isValid: true)
+                        } else {
+                            await jobStore.markBouncedInvalid([item.contact.id], sync: replySync)
+                        }
+                    }
+                } onSave: { updated in
+                    Task { await jobStore.updateContact(updated) }
+                }
+            }
         }
     }
 
@@ -91,7 +106,7 @@ struct ActivityView: View {
             if lane == .bounced {
                 BouncedLane(bounced: bounced.filter { query.isEmpty || $0.contact.matches(query) || $0.company.localizedCaseInsensitiveContains(query) },
                             total: bounced.count,
-                            onOpen: { summaryItem = ActivityEntry(id: $0.contact.id, company: $0.company, contact: $0.contact) },
+                            onOpen: { openBounce = $0 },
                             onMark: { pendingValidity = ValidityChange($0.map(\.contact), isValid: false) },
                             onDismiss: { item in
                                 Haptics.tap(0.5)
@@ -155,8 +170,9 @@ struct ActivityView: View {
 
 // MARK: - Bounced
 
-/// Mail that came back: a card saying what that means with Mark All Invalid,
-/// then one card per address, each with its own Mark Invalid and Not a Bounce.
+/// Mail that came back: a card saying what that means with Mark All as
+/// Invalid, then a row per address. A row opens the contact, where a bounce
+/// can be fixed, ruled out or dismissed.
 private struct BouncedLane: View {
     let bounced: [BouncedContact]
     /// Before the search narrowed it.
@@ -168,22 +184,25 @@ private struct BouncedLane: View {
     var body: some View {
         if total == 0 {
             InlineEmptyState(title: "No bounced mail", systemImage: "checkmark.seal",
-                             message: "When Gmail can't deliver a mail you sent, it shows up here, and you can mark the address invalid so it's never mailed again.",
+                             message: "When Gmail can't deliver a mail you sent, it's listed here with the reason, so you can fix the address or mark it invalid.",
                              tint: .statusDone)
                 .cardRow()
         } else {
-            header
-                .cardRow(top: 0, bottom: 8)
+            BounceSummaryCard(count: bounced.isEmpty ? total : bounced.count,
+                              message: "Gmail couldn't deliver to these. Open one to see why and fix a typo'd address; marking one invalid stops it being mailed again, by anyone.") {
+                onMark(bounced)
+            }
+            .cardRow(top: 0, bottom: 8)
             if bounced.isEmpty {
                 InlineEmptyState(title: "Nothing here", systemImage: "line.3.horizontal.decrease",
                                  message: "No bounced address matches the search.")
                     .cardRow()
             }
             ForEach(bounced) { item in
-                BounceRow(item: item,
-                          onOpen: { onOpen(item) },
-                          onMark: { onMark([item]) },
-                          onDismiss: { onDismiss(item) })
+                BounceListRow(item: item,
+                              onOpen: { onOpen(item) },
+                              onMark: { onMark([item]) },
+                              onDismiss: { onDismiss(item) })
                     .cardRow(top: 4, bottom: 4)
                     .swipeActions(edge: .trailing) {
                         Button { onMark([item]) } label: {
@@ -199,109 +218,6 @@ private struct BouncedLane: View {
                     }
             }
         }
-    }
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title3)
-                .foregroundStyle(.statusInvalid)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(total == 1 ? "1 address bounced" : "\(total) addresses bounced")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.ink)
-                Text("Gmail couldn't deliver to these. Marking one invalid takes it out of every send, for every user. You can mark it valid again later.")
-                    .font(.caption)
-                    .foregroundStyle(.inkMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                if bounced.count > 1 {
-                    Button {
-                        Haptics.press()
-                        onMark(bounced)
-                    } label: {
-                        Label("Mark All \(bounced.count) Invalid", systemImage: "person.2.slash")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .filledButton(.statusInvalid)
-                    .controlSize(.small)
-                    .padding(.top, 6)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(14)
-        .panel(accent: .statusInvalid)
-    }
-}
-
-/// One address that bounced: who, why, when — and what to do about it.
-private struct BounceRow: View {
-    let item: BouncedContact
-    let onOpen: () -> Void
-    let onMark: () -> Void
-    let onDismiss: () -> Void
-
-    var body: some View {
-        let reason = item.bounce.reason
-        VStack(alignment: .leading, spacing: 10) {
-            Button(action: onOpen) {
-                HStack(alignment: .top, spacing: 12) {
-                    MonogramAvatar(text: item.contact.displayName, size: Theme.Avatar.small)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(item.contact.displayName)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.ink)
-                            .lineLimit(1)
-                        Text([item.contact.email, item.company].filter { !$0.isEmpty }.joined(separator: " · "))
-                            .font(.caption)
-                            .foregroundStyle(.inkMuted)
-                            .lineLimit(1)
-                        HStack(spacing: 6) {
-                            StatusChip(text: reason.label, systemImage: reason.systemImage, color: .statusInvalid)
-                            Text("Bounced " + item.bounce.at.activityPhrase)
-                                .font(.caption2)
-                                .foregroundStyle(.inkFaint)
-                                .lineLimit(1)
-                        }
-                        .padding(.top, 2)
-                        if let snippet = item.bounce.snippet, !snippet.isEmpty {
-                            Text(snippet)
-                                .font(.caption2)
-                                .foregroundStyle(.inkFaint)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint("Shows the mail that bounced")
-
-            HStack(spacing: 8) {
-                Button {
-                    Haptics.press()
-                    onMark()
-                } label: {
-                    Label("Mark Invalid", systemImage: "person.crop.circle.badge.xmark")
-                        .font(.caption.weight(.semibold))
-                }
-                .filledButton(.statusInvalid)
-                .controlSize(.small)
-
-                Button(action: onDismiss) {
-                    Text("Not a Bounce")
-                        .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                .tint(.inkMuted)
-            }
-        }
-        .padding(14)
-        .panel(accent: .statusInvalid)
     }
 }
 

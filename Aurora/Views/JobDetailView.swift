@@ -12,6 +12,7 @@ private struct ComposeRequest: Identifiable {
 /// button revealing the editable list of contacts.
 struct JobDetailView: View {
     @Environment(JobStore.self) private var jobStore
+    @Environment(ReplySync.self) private var replySync
     let jobID: Job.ID
 
     @State private var isAdding = false
@@ -50,6 +51,13 @@ struct JobDetailView: View {
         isContactsExpanded || !searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// This company's contacts whose mail came back, newest first.
+    private func bounced(_ job: Job) -> [BouncedContact] {
+        guard !replySync.bounces.isEmpty else { return [] }
+        let ids = Set(job.contacts.map(\.id))
+        return jobStore.bouncedContacts(from: replySync).filter { ids.contains($0.contact.id) }
+    }
+
     /// All the company's contacts, sorted by display name, in one list.
     private func sortedContacts(_ job: Job) -> [Contact] {
         let query = searchText.trimmingCharacters(in: .whitespaces)
@@ -76,7 +84,12 @@ struct JobDetailView: View {
         VStack(spacing: 0) {
             if let job {
                 let contacts = sortedContacts(job)
-                let active = contacts.filter(\.isValid)
+                let bounces = bounced(job)
+                let bouncedIDs = Set(bounces.map(\.contact.id))
+                // Bounced contacts lead the list: they're the ones waiting on a
+                // decision, and the card above points down to them.
+                let active = contacts.filter { $0.isValid && bouncedIDs.contains($0.id) }
+                    + contacts.filter { $0.isValid && !bouncedIDs.contains($0.id) }
                 let invalid = contacts.filter { !$0.isValid }
 
                 List(selection: $selection.ids) {
@@ -86,6 +99,16 @@ struct JobDetailView: View {
                     }
                     .cardRow(top: 8, bottom: 8)
 
+                    if !bounces.isEmpty {
+                        Section {
+                            BounceSummaryCard(count: bounces.count,
+                                              message: "Mail to \(bounces.count == 1 ? "this contact" : "these contacts") came back undelivered. They're first in the list below, marked Bounced — open one to see why or fix the address.") {
+                                pendingValidity = ValidityChange(bounces.map(\.contact), isValid: false)
+                            }
+                        }
+                        .cardRow(top: 0, bottom: 8)
+                    }
+
                     // Contacts list disclosure button & items
                     Section {
                         contactsToggleButton(job: job, active: active.count, invalid: invalid.count)
@@ -94,7 +117,7 @@ struct JobDetailView: View {
                             if contacts.isEmpty {
                                 emptyContactsNotice
                             } else {
-                                contactRows(active)
+                                contactRows(active, bounced: bouncedIDs)
                             }
                         }
                     }
@@ -105,7 +128,7 @@ struct JobDetailView: View {
                     // everything live, in a sibling section (Lists don't nest them).
                     if showsContacts && !invalid.isEmpty {
                         Section {
-                            contactRows(invalid)
+                            contactRows(invalid, bounced: [])
                         } header: {
                             Label("Invalid · \(invalid.count)",
                                   systemImage: "exclamationmark.triangle.fill")
@@ -227,7 +250,14 @@ struct JobDetailView: View {
             // From the selection bar or a selection's menu: the act is done, so
             // the mode is too. Cancelling leaves the selection as it was.
             if selection.isSelecting { selection.exit() }
-            Task { await jobStore.setValidity(change.ids, isValid: change.isValid) }
+            Task {
+                if change.isValid {
+                    await jobStore.setValidity(change.ids, isValid: true)
+                } else {
+                    // Clears any bounce they had, too.
+                    await jobStore.markBouncedInvalid(change.ids, sync: replySync)
+                }
+            }
         }
         .companyEditor(for: $editingCompany)
         .sendChooser(for: $sendingTo) {}
@@ -247,7 +277,13 @@ struct JobDetailView: View {
                     detailContact = nil
                 },
                 onSetValidity: { isValid in
-                    Task { await jobStore.setValidity([contact.id], isValid: isValid) }
+                    Task {
+                        if isValid {
+                            await jobStore.setValidity([contact.id], isValid: true)
+                        } else {
+                            await jobStore.markBouncedInvalid([contact.id], sync: replySync)
+                        }
+                    }
                 }
             ) { updated in
                 Task { await jobStore.updateContact(updated) }
@@ -481,8 +517,18 @@ struct JobDetailView: View {
             }
             .disabled(sendable.isEmpty)
             if contacts.count == 1, let contact = contacts.first {
+                let isBounced = replySync.bounces[contact.id] != nil && contact.isValid
                 Button { detailContact = contact } label: {
-                    Label("Details", systemImage: "person.text.rectangle")
+                    Label(isBounced ? "Why It Bounced" : "Details",
+                          systemImage: isBounced ? "arrow.uturn.backward.circle" : "person.text.rectangle")
+                }
+                if isBounced {
+                    Button {
+                        Haptics.tap(0.5)
+                        withAnimation(Theme.Motion.snappy) { replySync.dismissBounce(contact.id) }
+                    } label: {
+                        Label("Not a Bounce", systemImage: "arrow.uturn.backward")
+                    }
                 }
             }
             Button {
@@ -517,10 +563,11 @@ struct JobDetailView: View {
     }
 
     @ViewBuilder
-    private func contactRows(_ contacts: [Contact]) -> some View {
+    private func contactRows(_ contacts: [Contact], bounced: Set<Contact.ID>) -> some View {
         ForEach(contacts) { contact in
             ContactRow(
                 contact: contact,
+                isBounced: bounced.contains(contact.id),
                 onSend: contact.isValid ? { startCompose(preselect: [contact.id]) } : nil
             )
             .tag(contact.id)
@@ -552,6 +599,8 @@ struct JobDetailView: View {
 
 private struct ContactRow: View {
     let contact: Contact
+    /// Their last mail came back undelivered.
+    var isBounced = false
     var onSend: (() -> Void)? = nil
 
     /// Always a second line, so every contact card is the same height: the job
@@ -589,6 +638,8 @@ private struct ContactRow: View {
             HStack(spacing: 8) {
                 if !contact.isValid {
                     InvalidPill()
+                } else if isBounced {
+                    BouncedPill()
                 } else if contact.hasReplied {
                     RepliedPill(at: contact.repliedAt)
                 } else {
@@ -621,6 +672,7 @@ private struct ContactRow: View {
 
     private var cardAccent: Color? {
         if !contact.isValid { return .inkFaint }
+        if isBounced { return .statusInvalid }
         return contact.hasReplied ? .statusDone : nil
     }
 }

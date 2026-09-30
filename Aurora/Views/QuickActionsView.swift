@@ -408,31 +408,10 @@ struct QuickActionsView: View {
 
     private var bounceBanner: some View {
         let contacts = bouncedContacts
-        return HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title3)
-                .foregroundStyle(.statusInvalid)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(contacts.count == 1 ? "1 address bounced" : "\(contacts.count) addresses bounced")
-                    .font(.subheadline.weight(.semibold))
-                Text("Gmail couldn't deliver these. Mark them invalid to drop them from every send.")
-                    .font(.caption)
-                    .foregroundStyle(.inkMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 8)
-
-            Button("Mark") {
-                pendingValidity = ValidityChange(contacts, isValid: false)
-            }
-            .font(.subheadline.weight(.semibold))
-            .primaryButton(.statusInvalid)
-            .fixedSize()
+        return BounceSummaryCard(count: contacts.count,
+                                 message: "Gmail couldn't deliver these. Marking them invalid drops them from every send; Activity's Bounced lane shows why each one came back.") {
+            pendingValidity = ValidityChange(contacts, isValid: false)
         }
-        .padding(14)
-        .panel(accent: .statusInvalid)
         .popIn()
     }
 

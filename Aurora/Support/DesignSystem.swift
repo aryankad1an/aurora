@@ -204,11 +204,15 @@ extension View {
     /// A filled action that sits *on* a glass bar or capsule. Solid rather than
     /// glass: glass on glass is two panes rendering at once, and the inner one
     /// visibly trailed the bar whenever it moved.
-    func filledButton(_ tint: Color = .clay) -> some View {
+    ///
+    /// - Parameter label: the label's colour. White suits clay; on a light fill
+    ///   such as kraft white reads at about 2:1 and fails contrast, so those
+    ///   pass `.paper` instead.
+    func filledButton(_ tint: Color = .clay, label: Color = .white) -> some View {
         buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
             .tint(tint)
-            .foregroundStyle(.white)
+            .foregroundStyle(label)
     }
 }
 
