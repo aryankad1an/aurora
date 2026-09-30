@@ -379,12 +379,9 @@ struct QuickActionsView: View {
         }
     }
 
-    /// Says how many the tap will write, which past a batch is the first
-    /// `SendMailView.batchLimit` — the top of the lane, the most overdue.
+    /// Says whether the tap writes the whole lane or just the ticks.
     private var sendTitle: String {
-        let count = picked.isEmpty ? targets.count : picked.count
-        if count > SendMailView.batchLimit { return "Send First \(SendMailView.batchLimit)" }
-        return picked.isEmpty ? "Send All" : "Send \(count)"
+        picked.isEmpty ? "Send All" : "Send \(picked.count)"
     }
 
     private var isAllPicked: Bool {

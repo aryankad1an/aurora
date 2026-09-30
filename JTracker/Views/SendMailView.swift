@@ -40,16 +40,10 @@ struct SendMailView: View {
     @Environment(MailQueue.self) private var mailQueue
     @Environment(\.dismiss) private var dismiss
 
+    /// Everyone picked who can be mailed — all of them, however many. The
+    /// queue sends them one after another, spaced out, so a big batch needs no
+    /// cap here; the deck only draws the letters near the one on show.
     private let recipients: [(contact: Contact, company: String)]
-    /// Mailable people beyond `batchLimit`, left for another batch.
-    private let leftOver: Int
-
-    /// The most one batch writes. Every letter in the deck is drawn at once,
-    /// and past a few dozen the screen stalls; more to the point, Gmail caps
-    /// what a personal account may send in a day, and hundreds of near-identical
-    /// mails in one go is the pattern its spam filters look for — the damage
-    /// lands on the sender's own reputation.
-    static let batchLimit = 50
 
     /// The mails as they stand — rendered from a template, then tailored.
     @State private var letters: [MailPreview] = []
@@ -74,9 +68,7 @@ struct SendMailView: View {
          onSent: (() -> Void)? = nil) {
         self.title = title
         // The same bar every send in the app holds: a real address, not ruled out.
-        let mailable = recipients.filter(\.contact.isMailable)
-        self.recipients = Array(mailable.prefix(Self.batchLimit))
-        self.leftOver = max(0, mailable.count - Self.batchLimit)
+        self.recipients = recipients.filter(\.contact.isMailable)
         self.onSent = onSent
     }
 
@@ -202,13 +194,6 @@ struct SendMailView: View {
                             .font(.caption)
                             .foregroundStyle(.inkMuted)
                             .lineLimit(1)
-                        if leftOver > 0 {
-                            Label("The first \(Self.batchLimit), in order — \(leftOver) more for another batch",
-                                  systemImage: "tray.full")
-                                .font(.caption)
-                                .foregroundStyle(.kraft)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
                     }
                 }
             }
