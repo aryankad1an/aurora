@@ -1,141 +1,213 @@
 # JTracker
 
-An iOS app for running and tracking cold-mail job outreach. Track the companies
-you're targeting, keep recruiter contacts for each, and send cold emails
-straight from your own Gmail account using reusable templates — with a running
-activity feed of everything you've sent.
+An iOS app for cold-mailing recruiters from your own Gmail account and keeping
+track of who answered. You keep a list of target companies and the people at
+each, write templates with placeholders, and send batches that go out one at a
+time from Gmail. The app then reads the threads back to see who replied.
 
-Built with SwiftUI, backed by [Supabase](https://supabase.com) for data and
-Google (Gmail) OAuth for sending mail.
+SwiftUI app, iOS 27. Data lives in [Supabase](https://supabase.com); mail goes
+through the Gmail API using Google OAuth.
 
-## Features
+## What it does
 
-- **Companies & contacts** — track target companies and the recruiters/contacts
-  at each one.
-- **Mail domains** — a company can have several (`stripe.com`, `stripe.dev`).
-  Adding a contact looks up their address's domain and suggests the company
-  already on file for it, so the same company isn't entered twice; a new work
-  domain is added to its company automatically.
-- **Cold mail via Gmail** — connect your Google account (OAuth + PKCE) and send
-  mail on your own behalf through the Gmail API.
-- **Templates** — reusable subject/body templates with placeholders, rendered
-  per contact before sending.
-- **Profile** — your details are merged into templates so mails are personalized
-  automatically.
-- **Activity** — every mail sent, hung off a time axis and grouped by day, 50 at
-  a time, filterable by All / Replied / Waiting and by search. It stays complete
-  even after a company drops off the Home list.
-- **Templates** — cards that show each template as it reads, with its
-  placeholders highlighted, a ready / needs-attention badge from the editor's own
-  checks, duplicate and delete, and a one-tap example to start from.
-- **Invalid contacts** — mark a contact invalid when the address bounces or the
-  person has left. They drop to their own group at the bottom of the company
-  page, are never suggested, and can no longer be mailed — reversibly, and for
-  every user, since a dead address is dead for everyone.
-- **Reply tracking** — every send records the Gmail thread it started, and the
-  app reads those threads back to see who answered. Replies show up in Activity
-  and drive Quick Actions.
-- **Quick Actions** — Home's headline, and the screen you act from: reply rate
-  and counts across the top, then three lanes you can tick and batch-send from —
-  everyone still waiting (filtered by how many days they've been quiet), everyone
-  who answered (with the first lines of what they said), and everyone who hasn't
-  been contacted yet, led by the companies on Home.
-- **Sending safely** — every send asks first; a batch holds at most 50 mails
-  (Gmail's daily cap and spam heuristics both punish more); a template that
-  names one company in plain text says so, and warns before it goes to anyone
-  else. Sends are recorded every few mails as a run goes, so a run cut short
-  can't lead to anyone being mailed twice, and Stop finishes the mail already
-  on its way instead of abandoning it mid-request.
+- **Companies and contacts.** A company can have several mail domains
+  (`stripe.com`, `stripe.dev`). Adding a contact looks up the domain of their
+  address and suggests the company already on file, so the same company doesn't
+  get entered twice.
+- **Templates.** Subject and body with placeholders (`{Receiver-Name}`,
+  `{Receiver-Company}`, `{Sender-College}`, `{Resume-Link}`, …) filled from the
+  contact and your profile. The editor flags misspelled placeholders (which
+  would be sent as literal text) and ones that would come out blank for you or
+  for some contacts. A template that names one company in plain text is labelled
+  with it, and compose warns before it goes to anyone else.
+- **Compose.** One screen per batch: who it's going to, a row of templates, and
+  a swipeable deck of the actual mails. Any mail can be edited by hand or moved
+  to another template. Batches have no size limit.
+- **Mail queue.** Sends go into a queue that's saved on the phone. It survives
+  the app closing, can be paused and resumed, and can hold batches scheduled for
+  later. See [How sending works](#how-sending-works).
+- **Reply tracking.** Each send records its Gmail thread. The app reads those
+  threads to find replies, skipping auto-replies and bounces. Bounced addresses
+  are offered up to be marked invalid.
+- **Activity.** Every mail sent, grouped by day, filterable by replied/waiting
+  and by search.
+- **Quick Actions.** The reply rate, plus three lists to send from: people still
+  waiting on a reply (by how long it's been), people who replied, and people not
+  contacted yet.
+- **Invalid contacts.** A contact whose address bounces or who has left can be
+  marked invalid. They can't be mailed or suggested again until marked valid.
+  This is shared across users, since a dead address is dead for everyone.
+
+## How sending works
+
+### Compose
+
+A letter on the compose screen is just a contact plus the template it uses (or
+the text you rewrote it with). Its text is only produced when its card is on
+screen, so opening a batch of 150 or switching its template doesn't render 150
+mails. Blank placeholders, missing subjects and wrong-company templates are
+counted without rendering anything, and the send button says what's wrong.
+
+Anyone already waiting in the mail queue is left out of a new batch, with a note
+saying how many.
+
+### The queue
+
+Tapping Send (or Schedule) hands the batch to `MailQueue`, which stores it as:
+
+- a copy of each template's subject and body as they were when you confirmed,
+- one entry per person: address, name, company, the values their placeholders
+  fill with, which template they use (or their hand-written text), and a status.
+
+Each mail is rendered from that copy right before it's sent. Editing a template
+afterwards doesn't change a batch that's already queued; what you reviewed is
+what goes out. The batch is saved to `Documents/mail-queue-<account>.json`
+after every change, at about 600 bytes per person. Finished batches are kept
+for a week.
+
+Mails go out one at a time, 1.2 s apart with some random jitter. Gmail would
+accept them faster, but a burst of near-identical mail from a personal account
+is what spam filters look for, and the damage lands on your own sending
+reputation. Personal Gmail accounts can also only send a few hundred messages a
+day.
+
+Sends are written to the `mail_sends` history every 5 mails. Anything not yet
+written when the app closes is written the next time it opens.
+
+The shelf above the tab bar shows what the queue is doing (sending, paused,
+due, scheduled, or the last result). Tapping it opens the queue, where each
+batch can be paused, resumed, rescheduled, retried or removed, and each mail can
+be opened to read exactly what was or will be sent. The queue is also under
+Activity → ⋯ → Mail Queue.
+
+### Interruptions
+
+A mail is saved as `sending` before the request goes to Gmail and as `sent`
+when Gmail answers. If the app is closed in between, nobody knows whether Gmail
+got it, and guessing wrong either way is bad: a second mail to the same person,
+or a mail that never went.
+
+So on the next launch:
+
+1. Any batch that was mid-send comes back **paused**. It doesn't resume on its
+   own.
+2. Each mail left as `sending` is looked up in Gmail's Sent mail
+   (`in:sent to:<address> after:<time it was handed over>`), after waiting
+   ~20 s so Gmail's search has caught up. If it's there, it's marked sent with
+   its Gmail ids and recorded. If not, it goes back in line.
+3. If the lookup fails because you're offline, the mail stays `sending` and is
+   looked up again before anything else happens to it. If it can't be looked up
+   at all, it's marked failed and not resent.
+
+Losing the network in the middle of a request is treated the same way: the
+batch pauses and that mail is checked on resume instead of being counted as
+failed.
+
+Pause (on the shelf or in the queue) lets the mail already in flight finish.
+It doesn't cancel the request, because a request cancelled on the phone may
+still have been delivered by Gmail.
+
+### Scheduling
+
+The clock button next to Send schedules the batch instead: in an hour,
+tomorrow at 9, Monday at 9, or any date and time.
+
+iOS doesn't let an app run at a set time, so scheduling works the way Reminders
+does: the app hands iOS a local notification for that time. Tapping it opens the
+app on a summary of the batch (how many mails, which companies and templates,
+who it's going to, roughly how long it will take) with a Send button. The same
+summary appears if you open the app, or already have it open, once the time has
+passed. Nothing is sent without that tap. "Not Now" leaves it on the shelf.
+
+If you don't open the app, the batch waits. Sending at an exact time with the
+phone locked would need a server holding your Gmail token, which this app
+doesn't have.
+
+## Reply tracking
+
+Reply state lives per user on `mail_sends`. `ReplySync` makes two passes over
+Gmail:
+
+1. For sends recorded without a thread id, it finds the Sent copy with an exact
+   `in:sent to:… after:… before:…` search. If more than one mail could match,
+   it leaves the send alone rather than attach the wrong thread.
+2. It reads the headers of each unanswered thread and takes the first message
+   that isn't yours. Your own messages (`SENT`/`DRAFT` labels), auto-replies
+   (`Auto-Submitted`, `Precedence`, no-reply senders) and bounces
+   (`mailer-daemon`/`postmaster` senders) are skipped.
+
+Matching by thread instead of by sender address matters: replies often come
+from a colleague or an applicant-tracking system, which keep the thread but not
+the address.
+
+After a recent sync, the next one only reads threads that received new mail
+since then (with a 15-minute overlap). Pulling to refresh in Activity always
+does a full check.
 
 ## Architecture
 
-| Layer | Details |
-|-------|---------|
-| UI | SwiftUI (`JTracker/Views`), tab-based `RootView` |
-| State | Observable stores — `JobStore`, `ProfileStore`, `TemplateStore`, `GmailAuthStore` (`JTracker/Models`) |
-| Backend | Supabase (Postgres + Row Level Security), accessed via `SupabaseAPI` |
-| Auth / mail | Google OAuth for sign-in and Gmail send (`GmailAuth`) |
-| Local storage | Keychain for tokens, JSON files for cached state (`JTracker/Support`) |
+| Layer | Where |
+|-------|-------|
+| UI | SwiftUI, `JTracker/Views`. `RootView` owns the stores and the tab bar. |
+| State | `@Observable` stores in `JTracker/Models`: `JobStore`, `ProfileStore`, `TemplateStore`, `GmailAuthStore`, `ReplySync`, `MailQueue` |
+| Backend | Supabase (Postgres) through `SupabaseAPI` |
+| Mail | Gmail API via `GmailAuthStore`: OAuth with PKCE, send, and read-only mailbox queries |
+| On the phone | Keychain for the Google refresh token; JSON files in Documents for the mail queue and a few cached lists (`JSONFile`) |
 
-Data is stored server-side in Supabase tables (`companies`, `recruiters`,
-`mail_sends`, profiles, templates). The shared recruiter rows are read by all
-users; per-user send state is overlaid from `mail_sends` after decoding.
+`MailQueue` and `ReplySync` don't reference the auth or data stores. `RootView`
+passes them closures for sending, looking up Sent mail, recording sends and
+reading threads. That keeps them independent of Gmail and Supabase, and let the
+queue be exercised with a fake transport.
 
-The valid/invalid flag is the shared `recruiters.is_valid` column, not per-user
-state — ruling a contact out is a fact about the address, so it applies to
-everyone. It's written only by the dedicated `setRecruiterValidity` call, never
-as part of an ordinary field edit, so correcting a bad address can't silently
-put the contact back in circulation.
+Tables: `companies`, `recruiters` (shared by all users), `mail_sends` (per
+user), plus profiles and templates. Sent and reply state is overlaid onto the
+shared contact rows after they're loaded.
 
-Reply state is the opposite: per-user, on `mail_sends`, because whether someone
-wrote back is a fact about one mailbox. `ReplySync` runs two passes over Gmail —
-it recovers the thread id for sends made before the app captured them (an exact
-`in:sent to:… after:… before:…` lookup, not a guess), then reads each unanswered
-thread's headers for a message that isn't ours. Matching inbound mail by sender
-address was the obvious alternative and is worse: replies routinely arrive from a
-colleague or an applicant-tracking system, and both keep the thread id while
-neither keeps the address. Our own messages, out-of-office auto-replies and
-bounces are excluded on three different header signals — see `ReplySync`.
+`recruiters.is_valid` is shared on purpose and only written by
+`SupabaseAPI.setContactValidity`, never by an ordinary contact edit. Correcting
+someone's address can't quietly put them back in circulation.
 
 ## Design
 
-The interface is black and drawn like a chart: a near-black ground ruled as
-faint graph paper (`GraphPaper`, behind every screen), light ink, hairline rules,
-and a single clay accent. The app forces dark appearance so system chrome
-matches. Two files hold all of it — `Support/Palette.swift` (colour and type) and
-`Support/DesignSystem.swift` (surfaces, metrics, chips, the selector, buttons,
-list chrome, selection mode) — so a screen never picks a colour, a corner radius
-or a list style of its own.
+Dark only: a near-black background ruled as faint graph paper, light text, thin
+rules, one accent colour (clay). Colours and type are in
+`Support/Palette.swift`; surfaces, list styles, buttons, chips, metrics and
+selection mode are in `Support/DesignSystem.swift`. Screens use those rather
+than choosing their own colours or corner radii.
 
-The rules the components encode:
+Conventions the code follows:
 
-- **One surface.** Anything raised is the same paper at the same radius behind
-  the same hairline. Depth is a rule, not a shadow.
-- **Colour is information.** A card is coloured only when its colour means
-  something, and then only as a rule down its leading edge: olive for a reply,
-  a heat scale for how long a silence has run, faint for a contact ruled out.
-  Decorative tint was removed — when every card was tinted, the tint that
-  mattered was invisible.
-- **Serif for titles and figures.** Navigation titles, the reply rate, and the
-  day counts are set in the system serif; everything else is the system sans. A
-  serif numeral among sans labels reads as a headline without being large.
-- **Content is paper, controls are glass.** Cards and rows stay paper; what
-  floats over them is Liquid Glass. Tapping a card zooms it into its screen,
-  and the splash is a graph seen through a glass lens whose droplets fuse into
-  it as the app loads.
-- **Nothing is lost to one stray tap.** Every sheet that edits something asks
-  before Cancel throws the edits away and can't be swiped down while it has
-  them (`discardableEdits`); sending, signing out and ruling a contact in or out
-  all confirm in a centred alert (`confirmAlert`).
-- **System components before custom ones.** Lists are `List`s, so taps, holds
-  (context menus), swipes and two-finger multi-select are the system's own.
-  Selection mode swaps the tab bar for the system bottom toolbar, as Photos
-  does (`selectionActions`); the lane selector is the system segmented control;
-  press styles don't buzz on touch-down; and no transition animates a blur.
+- Every card is the same surface, radius and hairline. No shadows.
+- Colour only when it means something, shown as a strip down a card's left
+  edge: olive for a reply, warmer for a longer silence, kraft for a warning.
+- System serif for titles and numbers, system sans for everything else.
+- Content is flat; controls floating over it use Liquid Glass.
+- Sending, signing out and marking contacts valid/invalid always ask first.
+  Editing sheets ask before discarding changes and can't be swiped away while
+  they have any (`discardableEdits`).
+- System components where they exist: `List` for lists (so swipes, context
+  menus and multi-select behave like the rest of iOS), the system segmented
+  control, the system bottom toolbar in selection mode.
+- Long lists and decks are lazy, and state that changes often (like which
+  letter is on screen) is kept where only the views showing it redraw.
 
-## Requirements
+## Setup
 
-- Xcode (iOS 27 SDK)
-- iOS 27.0+ deployment target
-- Swift 5
-- A Supabase project and a Google Cloud OAuth iOS client
+Requirements: Xcode with the iOS 27 SDK, a Supabase project, and a Google Cloud
+OAuth client for iOS.
 
-## Getting started
+1. Open `JTracker.xcodeproj`.
+2. Fill in [`JTracker/AppConfig.swift`](JTracker/AppConfig.swift):
+   - `supabaseURL`, `supabaseAnonKey`
+   - `googleClientID`, `googleRedirectScheme` (the reversed client ID)
+3. Apply the schema below to your Supabase project.
+4. Run on a simulator or device. Scheduled sends ask for notification
+   permission the first time you schedule something.
 
-1. Clone the repo and open `JTracker.xcodeproj` in Xcode.
-2. Configure your backend credentials in
-   [`JTracker/AppConfig.swift`](JTracker/AppConfig.swift):
-   - `supabaseURL` and `supabaseAnonKey` (anon public key — protected by RLS)
-   - `googleClientID` and `googleRedirectScheme` (from your Google Cloud OAuth
-     iOS client; the redirect scheme is the reversed client ID)
-3. Apply any pending schema changes to your Supabase project (see
-   [Database schema](#database-schema)).
-4. Select an iOS Simulator or device and run (`⌘R`).
+### Database schema
 
-## Database schema
-
-Schema changes the app expects, newest first. Run them in the Supabase SQL
-editor; each is safe to re-run.
+Changes the app expects, newest first. Run them in the Supabase SQL editor; each
+is safe to re-run.
 
 ```sql
 -- Company mail domains (e.g. {stripe.com, stripe.dev}). A company can have
@@ -182,39 +254,68 @@ alter table recruiters
   add column if not exists is_valid boolean not null default true;
 ```
 
-Until the `greeting_name` block is applied the app still runs — greetings are
-derived from the name and address, as before, and a greeting typed into the
-contact form is dropped while the rest of the edit saves.
+The app still runs if some of these haven't been applied yet:
 
-Until the reply-tracking block is applied the app still runs — sends are recorded without
-their Gmail ids and Quick Actions shows no replies — and it says so on the Quick
-Actions status strip rather than failing.
+- Without `greeting_name`, greetings are worked out from the name and address,
+  and a greeting typed into the contact form is dropped while the rest of the
+  edit saves.
+- Without the reply-tracking columns, sends are recorded without Gmail ids and
+  no replies are found. The Quick Actions status line says so.
+
+The mail queue needs no schema change; it's stored on the phone.
 
 ### Google OAuth
 
-Reply tracking reads the mailbox, so the app requests `gmail.readonly` alongside
-`gmail.send`. Two consequences:
+The app asks for `gmail.send` and `gmail.readonly`. The read scope is what
+reply tracking and the queue's Sent-mail lookups use.
 
-- **Reconnect once after updating.** An existing token was minted without the
-  read scope; Gmail rejects reads with a 403 until you disconnect and reconnect
-  Gmail from the Profile tab.
-- **`gmail.readonly` is a restricted scope.** While the OAuth consent screen is
-  in *Testing* it works for listed test users as-is. Publishing an app that uses
-  it requires Google's verification and an annual security assessment.
+- If you connected Gmail before reply tracking existed, disconnect and reconnect
+  it in Profile. Older tokens don't have the read scope, and reads fail with a
+  403 until you do.
+- `gmail.readonly` is a restricted scope. It works for listed test users while
+  the consent screen is in Testing. Publishing requires Google's verification
+  and a yearly security assessment.
+- An OAuth app in Testing gets refresh tokens that expire after seven days.
+  When that happens, a running batch pauses and asks you to reconnect.
 
-> **Note:** The Supabase anon key and the Google iOS client ID are not secrets —
-> iOS clients ship them and rely on Row Level Security and PKCE. Do not, however,
-> commit any service-role keys, client secrets, or provisioning profiles (see
-> `.gitignore`).
+The Supabase anon key and the Google iOS client ID ship inside the app and
+aren't secrets. That means the database's Row Level Security policies are what
+actually protect the data. Never commit service-role keys, client secrets or
+provisioning profiles.
+
+## Tests and scripts
+
+`Tests/` holds self-contained Swift scripts: reply detection, sync end to end,
+pagination, company/undo logic, and a mutation check that breaks the reply
+filters on purpose to make sure the tests notice. They include their own copies
+of the logic under test, so they run without Xcode:
+
+```bash
+swift Tests/ReplySyncTests.swift
+swift Tests/EndToEndSyncTests.swift
+swift Tests/PaginationAndLazyLoadTests.swift
+swift Tests/CompanyAndUndoTests.swift
+swift Tests/MutationVerifier.swift
+```
+
+`scripts/company_verification/` is a Python pipeline that checks and repairs the
+shared company/contact catalog (one company per mail domain, typo domains,
+dead domains, names). It backs up before every change. See its
+[README](scripts/company_verification/README.md).
 
 ## Project layout
 
 ```
 JTracker/
-├─ JTrackerApp.swift        App entry point
+├─ JTrackerApp.swift        App entry; installs the notification delegate
 ├─ AppConfig.swift          Supabase + Google OAuth configuration
-├─ Models/                  Data models and observable stores
+├─ Models/                  Stores, Supabase/Gmail access, mail queue, reply sync
 ├─ Views/                   SwiftUI screens
-├─ Support/                 Keychain, JSON persistence, theming
-└─ Assets.xcassets/         App icon and colors
+├─ Support/                 Design system, palette, keychain, JSON files, haptics
+└─ Assets.xcassets/         App icon and colours
+Tests/                      Standalone Swift test scripts
+scripts/company_verification/  Catalog verification pipeline (Python)
 ```
+
+`data_verification/`, `db_backups/` and the CSV exports at the root are
+git-ignored because they contain people's addresses and sent mail.
