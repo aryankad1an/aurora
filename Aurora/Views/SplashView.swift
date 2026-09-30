@@ -42,7 +42,7 @@ struct SplashView: View {
 
             VStack(spacing: 8) {
                 Spacer()
-                Text("JTracker")
+                Text("Aurora")
                     .font(.display(34))
                     .foregroundStyle(.ink)
                     // Condenses out of a blur as it rises, the letters drawing
@@ -60,7 +60,7 @@ struct SplashView: View {
             .padding(.bottom, 96)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("JTracker is loading")
+        .accessibilityLabel("Aurora is loading")
         .accessibilityValue("\(Int((progress * 100).rounded())) percent")
         .onChange(of: progress, initial: true) { _, value in
             withAnimation(.smooth(duration: 0.9)) { shownProgress = value }

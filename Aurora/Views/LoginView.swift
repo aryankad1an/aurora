@@ -20,7 +20,7 @@ struct LoginView: View {
                 .animation(Theme.Motion.bouncy, value: gmail.isConnecting)
 
             VStack(spacing: 8) {
-                Text("JTracker")
+                Text("Aurora")
                     .font(.display(38, weight: .bold))
                     .foregroundStyle(.ink)
                 Text("Track and send mails from your Gmail.")

@@ -1,6 +1,6 @@
 """Mail-domain helpers shared by the verification pipeline.
 
-Mirrors `MailDomain` in JTracker/Models/Job.swift (personal-mailbox list,
+Mirrors `MailDomain` in Aurora/Models/Job.swift (personal-mailbox list,
 cleaning rules) and adds what the app doesn't need: reducing a mail host
 (`ny.email.gs.com`) to the domain a company registers (`gs.com`).
 """

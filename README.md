@@ -1,4 +1,4 @@
-# JTracker
+# Aurora
 
 An iOS app for cold-mailing recruiters from your own Gmail account and keeping
 track of who answered. You keep a list of target companies and the people at
@@ -150,8 +150,8 @@ does a full check.
 
 | Layer | Where |
 |-------|-------|
-| UI | SwiftUI, `JTracker/Views`. `RootView` owns the stores and the tab bar. |
-| State | `@Observable` stores in `JTracker/Models`: `JobStore`, `ProfileStore`, `TemplateStore`, `GmailAuthStore`, `ReplySync`, `MailQueue` |
+| UI | SwiftUI, `Aurora/Views`. `RootView` owns the stores and the tab bar. |
+| State | `@Observable` stores in `Aurora/Models`: `JobStore`, `ProfileStore`, `TemplateStore`, `GmailAuthStore`, `ReplySync`, `MailQueue` |
 | Backend | Supabase (Postgres) through `SupabaseAPI` |
 | Mail | Gmail API via `GmailAuthStore`: OAuth with PKCE, send, and read-only mailbox queries |
 | On the phone | Keychain for the Google refresh token; JSON files in Documents for the mail queue and a few cached lists (`JSONFile`) |
@@ -198,8 +198,8 @@ Conventions the code follows:
 Requirements: Xcode with the iOS 27 SDK, a Supabase project, and a Google Cloud
 OAuth client for iOS.
 
-1. Open `JTracker.xcodeproj`.
-2. Fill in [`JTracker/AppConfig.swift`](JTracker/AppConfig.swift):
+1. Open `Aurora.xcodeproj`.
+2. Fill in [`Aurora/AppConfig.swift`](Aurora/AppConfig.swift):
    - `supabaseURL`, `supabaseAnonKey`
    - `googleClientID`, `googleRedirectScheme` (the reversed client ID)
 3. Apply the schema below to your Supabase project.
@@ -305,11 +305,19 @@ shared company/contact catalog (one company per mail domain, typo domains,
 dead domains, names). It backs up before every change. See its
 [README](scripts/company_verification/README.md).
 
+`scripts/app_icon/make_icon.swift` draws the app icon, one rising curve going
+from rose to amber with a glow behind it, and its tinted variant. The usage is
+at the top of the file.
+
+The app was called JTracker until September 2026. Its bundle ID is still
+`com.realaryan.JTracker`, which keeps it installing over the old app and
+matches the iOS OAuth client registered with Google.
+
 ## Project layout
 
 ```
-JTracker/
-├─ JTrackerApp.swift        App entry; installs the notification delegate
+Aurora/
+├─ AuroraApp.swift          App entry; installs the notification delegate
 ├─ AppConfig.swift          Supabase + Google OAuth configuration
 ├─ Models/                  Stores, Supabase/Gmail access, mail queue, reply sync
 ├─ Views/                   SwiftUI screens
@@ -317,6 +325,7 @@ JTracker/
 └─ Assets.xcassets/         App icon and colours
 Tests/                      Standalone Swift test scripts
 scripts/company_verification/  Catalog verification pipeline (Python)
+scripts/app_icon/           Draws the app icon (Swift, Core Graphics)
 ```
 
 `data_verification/`, `db_backups/` and the CSV exports at the root are

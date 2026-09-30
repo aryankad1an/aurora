@@ -1,4 +1,4 @@
-"""Snapshot every JTracker table to local JSON before anything is changed.
+"""Snapshot every Aurora table to local JSON before anything is changed.
 
     python3 scripts/company_verification/backup.py [out_dir]
 

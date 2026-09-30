@@ -1,4 +1,4 @@
-"""Company data-verification pipeline for JTracker.
+"""Company data-verification pipeline for Aurora.
 
     python3 verify_companies.py                 # dry run against the live DB
     python3 verify_companies.py --snapshot DIR  # dry run against a backup

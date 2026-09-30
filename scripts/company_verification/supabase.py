@@ -1,6 +1,6 @@
-"""Minimal PostgREST client for the JTracker Supabase project.
+"""Minimal PostgREST client for the Aurora Supabase project.
 
-Uses the app's anon key from JTracker/AppConfig.swift (it ships in the app, so
+Uses the app's anon key from Aurora/AppConfig.swift (it ships in the app, so
 it is not a secret). Every write goes through `write`, which logs and raises on
 anything but 2xx so a half-applied plan stops instead of carrying on.
 """
@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-_CONFIG = (Path(__file__).resolve().parents[2] / "JTracker" / "AppConfig.swift").read_text()
+_CONFIG = (Path(__file__).resolve().parents[2] / "Aurora" / "AppConfig.swift").read_text()
 BASE = re.search(r'supabaseURL = "([^"]+)"', _CONFIG).group(1).rstrip("/") + "/rest/v1/"
 KEY = re.search(r'supabaseAnonKey = "([^"]+)"', _CONFIG).group(1)
 PAGE = 1000

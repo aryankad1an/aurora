@@ -465,7 +465,7 @@ class ReplySyncTestSuite {
 
         await runTest("Genuine contact reply recognized") {
             let mock = GmailThreadMock(messages: [
-                .init(id: "m1", labelIds: ["SENT"], snippet: "Hi, interested in JTracker?", internalDate: "1000000",
+                .init(id: "m1", labelIds: ["SENT"], snippet: "Hi, interested in Aurora?", internalDate: "1000000",
                       payload: .init(headers: [.init(name: "From", value: "me@gmail.com")])),
                 .init(id: "m2", labelIds: ["INBOX"], snippet: "Hi! Let&#39;s chat tomorrow.", internalDate: "1500000",
                       payload: .init(headers: [.init(name: "From", value: "Contact <sarah@tech.co>")]))

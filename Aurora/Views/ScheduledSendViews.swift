@@ -45,12 +45,12 @@ struct ScheduleSendSheet: View {
                         .datePickerStyle(.graphical)
                         .tint(.clay)
                 } footer: {
-                    Text("At that time you'll get a notification. Tap it — or open JTracker — to see what's going and send \(count == 1 ? "it" : "all \(count)") with one tap. Nothing goes without your OK.")
+                    Text("At that time you'll get a notification. Tap it — or open Aurora — to see what's going and send \(count == 1 ? "it" : "all \(count)") with one tap. Nothing goes without your OK.")
                 }
 
                 if notificationsDenied {
                     Section {
-                        Label("Notifications are off for JTracker, so there'll be no reminder. The batch waits in the mail queue and asks the next time you open the app.",
+                        Label("Notifications are off for Aurora, so there'll be no reminder. The batch waits in the mail queue and asks the next time you open the app.",
                               systemImage: "bell.slash")
                             .font(.footnote)
                             .foregroundStyle(.kraft)
