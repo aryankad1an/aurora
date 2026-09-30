@@ -181,6 +181,7 @@ struct RootView: View {
         jobStore.userEmail = email
         connectMailQueue()
         mailQueue.load(account: email)
+        replySync.loadBounces(account: email)
 
         let started = ContinuousClock.now
         async let profile: Void = load { await profileStore.load(email: email) }
@@ -297,6 +298,8 @@ struct RootView: View {
 
             ActivityView()
                 .tabItem { Label("Activity", systemImage: "tray.full") }
+                // Bounces are the one thing in Activity waiting on the user.
+                .badge(jobStore.bouncedContacts(from: replySync).count)
                 .tag(Tab.activity)
 
             TemplatesView()

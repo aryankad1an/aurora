@@ -95,7 +95,7 @@ struct QuickActionsView: View {
             .toolbar { sendToolbar }
             .refreshable { await sync() }
             .validityAlert($pendingValidity) { change in
-                Task { await jobStore.setValidity(change.ids, isValid: change.isValid) }
+                Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }
             }
             // A check that actually found something is the one moment this screen
             // changes on its own, so it gets the double-tap "arrived" knock. A
@@ -403,10 +403,7 @@ struct QuickActionsView: View {
     /// Looked up by id, so a bounce at a company on a catalog page that hasn't
     /// been scrolled to yet (but is on Home, or was opened directly) still shows.
     private var bouncedContacts: [Contact] {
-        replySync.bouncedContactIDs
-            .compactMap { jobStore.contact(id: $0) }
-            .filter(\.isValid)
-            .sortedByName()
+        jobStore.bouncedContacts(from: replySync).map(\.contact)
     }
 
     private var bounceBanner: some View {

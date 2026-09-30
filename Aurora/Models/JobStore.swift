@@ -433,9 +433,10 @@ final class JobStore {
     /// Suggested and can no longer be mailed, but they're kept, with their send
     /// history, so the company screen can still show who was ruled out and why.
     /// Fully reversible, which is why it's offered instead of deleting.
-    func setValidity(_ ids: [Contact.ID], isValid: Bool) async {
-        guard !ids.isEmpty else { return }
-        await perform { try await SupabaseAPI.setContactValidity(ids: ids, isValid: isValid) }
+    @discardableResult
+    func setValidity(_ ids: [Contact.ID], isValid: Bool) async -> Bool {
+        guard !ids.isEmpty else { return false }
+        return await perform { try await SupabaseAPI.setContactValidity(ids: ids, isValid: isValid) }
     }
 
     /// Delete a contact. Sent ones are kept as a record and can't be removed.

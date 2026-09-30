@@ -27,10 +27,12 @@ through the Gmail API using Google OAuth.
   the app closing, can be paused and resumed, and can hold batches scheduled for
   later. See [How sending works](#how-sending-works).
 - **Reply tracking.** Each send records its Gmail thread. The app reads those
-  threads to find replies, skipping auto-replies and bounces. Bounced addresses
-  are offered up to be marked invalid.
+  threads to find replies, skipping auto-replies and bounces.
+- **Bounce detection.** Mail that comes back undelivered is found in its thread
+  or in the inbox, matched to the contact it names, and listed with the reason.
 - **Activity.** Every mail sent, grouped by day, filterable by replied/waiting
-  and by search.
+  and by search. A Bounced lane lists the addresses that bounced, with a button
+  to mark each (or all) invalid; the tab shows a badge while any are waiting.
 - **Quick Actions.** The reply rate, plus three lists to send from: people still
   waiting on a reply (by how long it's been), people who replied, and people not
   contacted yet.
@@ -145,6 +147,29 @@ the address.
 After a recent sync, the next one only reads threads that received new mail
 since then (with a 15-minute overlap). Pulling to refresh in Activity always
 does a full check.
+
+### Bounces
+
+A bounce is found two ways during the same sync:
+
+- **In the thread.** A failure notice that Gmail filed with the original mail,
+  from a `mailer-daemon` or `postmaster` sender.
+- **In the inbox.** Many servers send notices that never join the thread, so
+  the sync also searches `from:(mailer-daemon OR postmaster) newer_than:120d`
+  and reads each notice it hasn't seen before. The failed address comes from
+  the `X-Failed-Recipients` header, or from the notice's text when there isn't
+  one. A notice only counts against a contact who was mailed before it arrived.
+
+"Delivery delayed" notices are skipped, because Gmail is still retrying and
+most of those mails arrive in the end. The reason shown (address not found,
+domain doesn't exist, mailbox full, rejected) is read from the notice's text.
+This lives in `BounceParsing`, which has its own tests.
+
+Bounces are saved per account in `Documents/bounces-<account>.json`, so they
+survive a relaunch. A bounce leaves the list when the contact is marked
+invalid, when their address is changed, when they reply after it, or when you
+tap Not a Bounce. A dismissed contact comes back only if a newer notice
+arrives.
 
 ## Architecture
 
@@ -289,10 +314,12 @@ provisioning profiles.
 
 `Tests/` holds self-contained Swift scripts: reply detection, sync end to end,
 pagination, company/undo logic, and a mutation check that breaks the reply
-filters on purpose to make sure the tests notice. They include their own copies
-of the logic under test, so they run without Xcode:
+filters on purpose to make sure the tests notice. Most include their own copies
+of the logic under test, so they run without Xcode. The bounce tests compile
+against the app's own `BounceParsing.swift` instead:
 
 ```bash
+swiftc Aurora/Models/BounceParsing.swift Tests/BounceParsingTests.swift -o /tmp/bt && /tmp/bt
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift
