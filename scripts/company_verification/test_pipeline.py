@@ -360,12 +360,18 @@ class Names(unittest.TestCase):
             {"id": "1", "company_id": "c", "email": "akushwah@x.com", "name": "Anjali Kushwah", "greeting_name": "Anjali"},
             {"id": "2", "company_id": "c", "email": "akushwah2@x.com", "name": "Akushwah", "greeting_name": "Akushwah"},
             {"id": "3", "company_id": "c", "email": "careers@x.com", "name": "Priya Nair", "greeting_name": "Priya"},
+            # Same letters as the mailbox, but split, cased or punctuated by a person.
+            {"id": "4", "company_id": "c", "email": "vijaykumar@x.com", "name": "Vijay Kumar", "greeting_name": "Vijay"},
+            {"id": "5", "company_id": "c", "email": "neha.ca@x.com", "name": "Neha C A", "greeting_name": "Neha"},
+            {"id": "6", "company_id": "c", "email": "neha.dsouza@x.com", "name": "Neha D'souza", "greeting_name": "Neha"},
         ] + [{"id": f"l{i}", "company_id": "c", "email": f"{f}.{l}@x.com", "name": f"{f} {l}".title(),
               "greeting_name": f.title()} for i, (f, l) in enumerate([("anjali", "kushwah"), ("rohit", "kushwah"), ("amit", "kushwah")])]}
         fixes, _, _ = vn.review(tables)
         changed = {f["id"]: f for f in fixes}
         self.assertNotIn("1", changed)     # human name kept
         self.assertNotIn("3", changed)     # a person behind a role mailbox kept
+        for rid in ("4", "5", "6"):
+            self.assertNotIn(rid, changed)  # not the mailbox merely re-spaced
         self.assertEqual(changed["2"]["new_name"], "A Kushwah")
 
 
