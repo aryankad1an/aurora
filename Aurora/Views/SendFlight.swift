@@ -59,8 +59,8 @@ private struct SendFlightView: View {
     @State private var start = Date()
     @State private var capsuleShown = false
 
-    /// One plane per mail, up to a small squadron.
-    private var planes: Int { min(count, 5) }
+    /// One plane per mail, up to three — enough to read as "several".
+    private var planes: Int { min(count, 3) }
 
     var body: some View {
         GeometryReader { proxy in
@@ -160,19 +160,20 @@ private struct SendFlightView: View {
             let shading = GraphicsContext.Shading.linearGradient(
                 Gradient(colors: [accent.opacity(0), accent.opacity(0.85)]), startPoint: back, endPoint: head)
             context.drawLayer { layer in
-                layer.addFilter(.blur(radius: 6))
-                layer.stroke(trail, with: shading, style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
+                layer.addFilter(.blur(radius: 4))
+                layer.opacity = 0.5
+                layer.stroke(trail, with: shading, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
             }
-            context.stroke(trail, with: shading, style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+            context.stroke(trail, with: shading, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
 
             // Sparks shed along the way.
-            for spark in 0..<5 {
+            for spark in 0..<3 {
                 let u = max(0, s - Double(spark) * 0.045)
                 let point = route(u, lane: lane, size: size)
                 let drift = CGFloat(spark) * 4
                 let r = CGFloat(2.2 - 0.35 * Double(spark))
                 context.fill(Path(ellipseIn: CGRect(x: point.x - r + drift, y: point.y - r + drift, width: r * 2, height: r * 2)),
-                             with: .color((spark.isMultiple(of: 2) ? accent : reply).opacity(0.7 - 0.12 * Double(spark))))
+                             with: .color((spark.isMultiple(of: 2) ? accent : reply).opacity(0.45 - 0.1 * Double(spark))))
             }
 
             // The plane, pointed along its path.
@@ -188,8 +189,8 @@ private struct SendFlightView: View {
             glyph.shading = .color(.white)
             var halo = plane
             halo.addFilter(.blur(radius: 8))
-            halo.fill(Path(ellipseIn: CGRect(x: -16, y: -16, width: 32, height: 32)), with: .color(accent.opacity(0.55)))
-            plane.draw(glyph, in: CGRect(x: -13, y: -13, width: 26, height: 26))
+            halo.fill(Path(ellipseIn: CGRect(x: -12, y: -12, width: 24, height: 24)), with: .color(accent.opacity(0.3)))
+            plane.draw(glyph, in: CGRect(x: -10, y: -10, width: 20, height: 20))
         }
     }
 }

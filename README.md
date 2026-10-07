@@ -38,7 +38,7 @@ through the Gmail API using Google OAuth.
   Gilded. Each changes the colours, the chart that moves behind every screen,
   the launch screen and the app icon. A new theme spreads across the screen
   from where you tapped while the colours blend.
-- **Send animation.** Sending launches paper planes, one per mail (up to five).
+- **Send animation.** Sending launches paper planes, one per mail (up to three).
   They climb on glowing trails, loop and fly off the top of the screen.
 - **Invalid contacts.** A contact whose address bounces or who has left can be
   marked invalid. They can't be mailed or suggested again until marked valid.

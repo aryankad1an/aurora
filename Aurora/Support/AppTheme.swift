@@ -176,7 +176,7 @@ final class ThemeStore {
     /// home-screen icon follows.
     func apply(_ theme: AppTheme, from origin: CGPoint) {
         guard theme != current, wash == nil else { return }
-        Haptics.press()
+        Haptics.tap(0.6)
         UserDefaults.standard.set(theme.id.rawValue, forKey: Self.key)
         wash = Wash(theme: theme, origin: origin)
 
@@ -185,10 +185,8 @@ final class ThemeStore {
             // the change reads as spreading from the finger rather than as a cut.
             try? await Task.sleep(for: .milliseconds(240))
             withAnimation(.smooth(duration: 0.85)) { current = theme }
-            Haptics.lift(0.7)
             try? await Task.sleep(for: .milliseconds(900))
             wash = nil
-            Haptics.success()
             setIcon(theme.iconName)
         }
     }

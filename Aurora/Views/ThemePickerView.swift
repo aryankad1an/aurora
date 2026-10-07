@@ -43,7 +43,7 @@ private struct ThemeCard: View {
             // The theme running: its ground and chart, with a mock row and
             // button in its colours over them.
             ZStack(alignment: .topLeading) {
-                ChartGround(theme: theme, intensity: 1.6)
+                ChartGround(theme: theme, intensity: 1.1)
                 HStack(spacing: 10) {
                     Image(theme.iconPreview)
                         .resizable()
@@ -135,13 +135,13 @@ struct ThemeWashOverlay: View {
                 let palette = wash.theme.palette
                 ZStack {
                     Circle()
-                        .fill(RadialGradient(colors: [palette.paper.opacity(0.8), palette.paper.opacity(0.62)],
+                        .fill(RadialGradient(colors: [palette.paper.opacity(0.55), palette.paper.opacity(0.4)],
                                              center: .center, startRadius: 0, endRadius: max(radius, 1)))
                     Circle()
-                        .strokeBorder(palette.accent.opacity(0.9), lineWidth: 3)
-                        .blur(radius: 6)
+                        .strokeBorder(palette.accent.opacity(0.35), lineWidth: 2)
+                        .blur(radius: 4)
                     Circle()
-                        .strokeBorder(palette.accent, lineWidth: 1.5)
+                        .strokeBorder(palette.accent.opacity(0.7), lineWidth: 1)
                 }
                 .frame(width: radius * 2, height: radius * 2)
                 .position(origin)

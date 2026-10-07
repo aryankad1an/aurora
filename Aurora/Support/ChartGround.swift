@@ -15,8 +15,9 @@ import UIKit
 struct ChartGround: View {
     /// A specific theme (a preview card in Settings); nil follows the app's.
     var theme: AppTheme?
-    /// How strongly the chart shows. The splash runs it brighter than a screen.
-    var intensity: Double = 1
+    /// How strongly the chart shows. Quiet by default: it's the room, not
+    /// something to watch.
+    var intensity: Double = 0.55
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -92,7 +93,8 @@ struct ChartMotion: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isAnimated)) { timeline in
             // A fixed moment when paused, so Reduce Motion gets a still chart
             // rather than whatever frame it happened to stop on.
-            let time = isAnimated ? timeline.date.timeIntervalSinceReferenceDate : 120
+            // Slowed to a drift: noticed when you look for it, not before.
+            let time = isAnimated ? timeline.date.timeIntervalSinceReferenceDate * 0.6 : 120
             Canvas { context, size in
                 var painter = ChartPainter(context: context, size: size, time: time,
                                            palette: theme.palette, intensity: intensity)
@@ -148,7 +150,7 @@ private struct ChartPainter {
     private func glow(_ path: Path, _ color: Color, width: CGFloat, radius: CGFloat) {
         context.drawLayer { layer in
             layer.addFilter(.blur(radius: radius))
-            layer.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: width * 2.5, lineCap: .round))
+            layer.stroke(path, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: width * 1.8, lineCap: .round))
         }
         context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
     }

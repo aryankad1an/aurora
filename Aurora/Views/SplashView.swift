@@ -41,7 +41,7 @@ struct SplashView: View {
     var body: some View {
         let theme = ThemeStore.shared.current
         ZStack {
-            ChartGround(intensity: 0.8)
+            ChartGround(intensity: 0.6)
                 .ignoresSafeArea()
 
             GraphGlassScene(progress: shownProgress, mark: theme.mark,
