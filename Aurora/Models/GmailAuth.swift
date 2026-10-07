@@ -335,11 +335,11 @@ enum GmailAuthError: LocalizedError {
         switch self {
         case .cancelled: return "Sign-in was cancelled."
         case .invalidResponse: return "Unexpected response from Google."
-        case .notConnected: return "Gmail isn't signed in on this device. Reconnect Gmail in Profile."
+        case .notConnected: return "Gmail isn't signed in on this device. Reconnect Gmail in Settings."
         case .insufficientScope:
-            return "Reply tracking needs permission to read your mail. Reconnect Gmail in Profile to grant it."
+            return "Reply tracking needs permission to read your mail. Reconnect Gmail in Settings to grant it."
         case .sessionExpired:
-            return "Your Gmail sign-in has expired. Reconnect Gmail in Profile."
+            return "Your Gmail sign-in has expired. Reconnect Gmail in Settings."
         case .server(let message): return message
         }
     }

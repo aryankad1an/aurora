@@ -17,8 +17,7 @@ final class JobStore {
     /// is a lookup rather than a scan.
     private var trackedIDs = Set<String>()
     /// Every company in the shared catalog, with contacts and this user's sent
-    /// state overlaid. Drives the Companies list and the cross-company lanes of
-    /// Quick Actions.
+    /// state overlaid. Drives the Companies list.
     private(set) var allCompanies: [Job] = []
     /// Companies opened directly (a deep link, an Activity row) that sit beyond
     /// the catalog pages loaded so far. Kept apart from `allCompanies` so the
@@ -31,18 +30,14 @@ final class JobStore {
     /// This user's raw send rows, kept so reply syncing can work out which sends
     /// still need a thread id or a reply check.
     private(set) var sends: [MailSend] = []
-    /// Everything Home's card and Quick Actions show, rebuilt at the end of each
-    /// load.
-    private(set) var insights = Insights()
-
     private(set) var isLoading = false
     var errorMessage: String?
 
     // MARK: - Catalog paging
     //
     // Only the catalog is paged. The send history is always fetched whole:
-    // Insights, reply counts and the "already mailed" checks are only right
-    // when they see every send.
+    // reply counts and the "already mailed" checks are only right when they
+    // see every send.
 
     private(set) var hasMoreCompanies = true
     private(set) var isLoadingMoreCompanies = false
@@ -185,58 +180,6 @@ final class JobStore {
         trackedIDs.contains(id)
     }
 
-    /// Contacts across every company that can be mailed (well-formed address,
-    /// not marked invalid) and haven't been mailed in the last month — never-sent
-    /// first, then oldest sent. Powers the "New" lane of Insights.
-    /// Memoized to prevent O(N log N) recalculations on every view body re-render.
-    private(set) var suggestedContacts: [(company: Job, contact: Contact)] = []
-
-    /// `suggestedContacts` grouped by company, preserving the flat list's urgency
-    /// order (a company appears at the position of its most-overdue contact).
-    /// Each group is one tap from a batch send in Insights.
-    /// Memoized to make row selection and interaction instantaneous.
-    private(set) var suggestedGroups: [(company: Job, contacts: [Contact])] = []
-
-    ///
-    /// Companies on Home come first: they're the ones being gone after, and
-    /// they're there whether or not the catalog has paged in that far — the
-    /// lane used to be built from the loaded pages alone, alphabetically, so a
-    /// tracked company late in the alphabet only showed up after a long scroll.
-    private func rebuildSuggested() {
-        let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
-        var seen = Set<String>()
-        var result: [(company: Job, contact: Contact)] = []
-        for company in jobs + allCompanies where seen.insert(company.id).inserted {
-            for contact in company.contacts where contact.isMailable {
-                if !contact.isSent || (contact.sentAt ?? .distantPast) < cutoff {
-                    result.append((company, contact))
-                }
-            }
-        }
-        let sorted = result.sorted { a, b in
-            let aTracked = isTracked(a.company.id), bTracked = isTracked(b.company.id)
-            if aTracked != bTracked { return aTracked }
-            switch (a.contact.sentAt, b.contact.sentAt) {
-            case (nil, nil):
-                return a.company.company.localizedCaseInsensitiveCompare(b.company.company) == .orderedAscending
-            case (nil, _?): return true
-            case (_?, nil): return false
-            case let (l?, r?): return l < r
-            }
-        }
-        suggestedContacts = sorted
-
-        var order: [String] = []
-        var byID: [String: (company: Job, contacts: [Contact])] = [:]
-        for item in sorted {
-            if byID[item.company.id] == nil {
-                byID[item.company.id] = (item.company, [])
-                order.append(item.company.id)
-            }
-            byID[item.company.id]?.contacts.append(item.contact)
-        }
-        suggestedGroups = order.compactMap { byID[$0] }
-    }
 
     // MARK: - Loading
 
@@ -288,7 +231,6 @@ final class JobStore {
             insertSorted(company)
         }
         pushTracked(add: true, companyID: companyID, email: email)
-        rebuildSuggested()
     }
 
     /// Untrack a company from this user's Home. Instant + background push; the
@@ -298,7 +240,6 @@ final class JobStore {
         mutateTracked { $0.removeAll { $0 == companyID } }
         jobs.removeAll { $0.id == companyID }
         pushTracked(add: false, companyID: companyID, email: email)
-        rebuildSuggested()
     }
 
     /// Track several companies at once (Companies multi-select).
@@ -315,7 +256,6 @@ final class JobStore {
         mutateTracked { if !$0.contains(job.id) { $0.append(job.id) } }
         pushTracked(add: true, companyID: job.id, email: email)
         insertSorted(job)
-        rebuildSuggested()
     }
 
     /// Insert a job keeping the alphabetical order Home displays.
@@ -429,8 +369,8 @@ final class JobStore {
     }
 
     /// Mark contacts valid or invalid in the shared catalog (upstream, for every
-    /// user — a bounced address is bounced for everyone). Invalid ones drop out of
-    /// Suggested and can no longer be mailed, but they're kept, with their send
+    /// user — a bounced address is bounced for everyone). Invalid ones can no
+    /// longer be mailed, but they're kept, with their send
     /// history, so the company screen can still show who was ruled out and why.
     /// Fully reversible, which is why it's offered instead of deleting.
     @discardableResult
@@ -488,8 +428,7 @@ final class JobStore {
     private func reloadAll() async throws {
         guard let email = userEmail else {
             jobs = []; allCompanies = []; detachedCompanies = [:]; searchResults = []
-            activity = []; sends = []; insights = Insights()
-            suggestedContacts = []; suggestedGroups = []
+            activity = []; sends = []
             companyOffset = 0; hasMoreCompanies = true
             return
         }
@@ -587,12 +526,6 @@ final class JobStore {
         // removing a company from Home leaves its sent records here untouched, and
         // every send — including repeats to the same contact — is its own row.
         self.activity = activity.sorted { Self.newestFirst($0, $1) }
-        rebuildDerived()
-    }
-
-    private func rebuildDerived() {
-        insights = Insights.make(activity: activity, catalog: allCompanies)
-        rebuildSuggested()
     }
 
     private static func newestFirst(_ a: ActivityEntry, _ b: ActivityEntry) -> Bool {
@@ -627,7 +560,6 @@ final class JobStore {
             let existingIDs = Set(allCompanies.map(\.id))
             allCompanies.append(contentsOf: page.filter { !existingIDs.contains($0.id) })
             for company in page { detachedCompanies[company.id] = nil }
-            rebuildDerived()
         } catch {
             report(error)
         }

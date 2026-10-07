@@ -106,7 +106,7 @@ enum TemplateDiagnostics {
                 severity: .warning,
                 title: "Your profile has no \(label)",
                 detail: "\(placeholder.token) will be blank in every mail from this template. "
-                    + "Add it in Profile, or take the placeholder out.",
+                    + "Add it in Settings › Edit Profile, or take the placeholder out.",
                 token: placeholder.token,
                 suggestion: nil
             )

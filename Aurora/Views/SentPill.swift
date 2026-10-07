@@ -92,7 +92,7 @@ struct SentPill: View {
             StatusChip(text: sentAt.activityLabel,
                        systemImage: "clock.arrow.circlepath", color: .inkMuted)
         } else if let unsentLabel {
-            StatusChip(text: unsentLabel, systemImage: "sparkle", color: .accentColor)
+            StatusChip(text: unsentLabel, systemImage: "sparkle", color: .clay)
         }
     }
 }

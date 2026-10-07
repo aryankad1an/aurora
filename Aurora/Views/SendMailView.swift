@@ -12,7 +12,7 @@ struct SendBatch: Identifiable {
 /// The compose screen: every mail that's about to go out, as it will read.
 ///
 /// Who it goes to is decided before this screen opens — a contact's send button,
-/// a selection, a Quick Actions lane, the Send chooser — so it doesn't ask
+/// a selection, the Send chooser — so it doesn't ask
 /// again. It used to: a template picker over a tickable recipient list, then
 /// Next to a separate review deck, then Send. That was three screens' worth of
 /// deciding for one decision that's left, which is *what to say*.
@@ -163,7 +163,7 @@ struct SendMailView: View {
                         .foregroundStyle(.ink)
                         .lineLimit(1)
                 } else {
-                    Label("Gmail isn't connected — connect it in Profile", systemImage: "exclamationmark.triangle.fill")
+                    Label("Gmail isn't connected — connect it in Settings", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(.kraft)
                         .lineLimit(2)
@@ -412,7 +412,7 @@ struct SendMailView: View {
         if letters.isEmpty {
             return alreadyQueued > 0 ? "Everyone here is already in the mail queue." : "Nobody here can be mailed."
         }
-        if !gmail.isConnected { return "Connect Gmail in Profile to send." }
+        if !gmail.isConnected { return "Connect Gmail in Settings to send." }
         if templates.isEmpty && letters.allSatisfy({ $0.templateID == nil && !$0.isEdited }) {
             return "Write a template first."
         }
@@ -631,6 +631,7 @@ struct SendMailView: View {
         // to sending one, and this is the last moment the user is still holding
         // the phone waiting to find out that it worked.
         Haptics.cascade(letters.count)
+        SendFlight.launch(count: letters.count)
         mailQueue.enqueue(makeBatch(scheduledFor: nil))
         finish()
     }
@@ -638,6 +639,7 @@ struct SendMailView: View {
     private func schedule(for date: Date) {
         guard !letters.isEmpty else { return }
         Haptics.success()
+        SendFlight.launch(count: letters.count, scheduledFor: date)
         mailQueue.enqueue(makeBatch(scheduledFor: date))
         finish()
     }

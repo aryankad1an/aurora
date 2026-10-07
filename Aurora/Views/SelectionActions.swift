@@ -231,8 +231,7 @@ private struct SelectionActions<ID: Hashable>: ViewModifier {
 
 /// A line of status in the middle of the bottom toolbar — "3 Companies",
 /// "Select Contacts" — set as plain text between flexible spaces, with no glass
-/// of its own, the way Photos shows "3 Photos Selected". Shared by the selection
-/// toolbar and Quick Actions' send toolbar.
+/// of its own, the way Photos shows "3 Photos Selected".
 struct BottomBarStatus: ToolbarContent {
     let text: String
 

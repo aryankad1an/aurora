@@ -189,6 +189,7 @@ private struct BatchCard: View {
                       confirmLabel: "Send",
                       isPresented: $confirmingSend) {
             Haptics.cascade(batch.pending)
+            SendFlight.launch(count: batch.pending)
             queue.sendNow(batch.id)
         }
         .sheet(isPresented: $rescheduling) {

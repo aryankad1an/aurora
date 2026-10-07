@@ -34,9 +34,12 @@ through the Gmail API using Google OAuth.
 - **Activity.** Every mail sent, grouped by day, filterable by replied/waiting
   and by search. A Bounced lane lists the addresses that bounced, with a button
   to mark each (or all) invalid; the tab shows a badge while any are waiting.
-- **Quick Actions.** The reply rate, plus three lists to send from: people still
-  waiting on a reply (by how long it's been), people who replied, and people not
-  contacted yet.
+- **Themes.** Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and
+  Gilded. Each changes the colours, the chart that moves behind every screen,
+  the launch screen and the app icon. A new theme spreads across the screen
+  from where you tapped while the colours blend.
+- **Send animation.** Sending launches paper planes, one per mail (up to five).
+  They climb on glowing trails, loop and fly off the top of the screen.
 - **Invalid contacts.** A contact whose address bounces or who has left can be
   marked invalid. They can't be mailed or suggested again until marked valid.
   This is shared across users, since a dead address is dead for everyone.
@@ -47,12 +50,12 @@ Taken from a demo account. The companies, people and replies are made up.
 
 <table>
   <tr>
-    <td align="center" width="50%"><img src="docs/screenshots/home.png" alt="Home" width="280"><br><sub><b>Home.</b> Tracked companies, the reply rate, and a scheduled batch on the shelf.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/home.png" alt="Home" width="280"><br><sub><b>Home.</b> Tracked companies, and a scheduled batch on the shelf.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/company.png" alt="Company" width="280"><br><sub><b>Company.</b> Its mail domains, counts, and contacts, bounced ones first.</sub></td>
   </tr>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/compose.png" alt="Compose" width="280"><br><sub><b>Compose.</b> Recipients, a row of templates, and a deck of the actual mails.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/quick-actions.png" alt="Quick Actions" width="280"><br><sub><b>Quick Actions.</b> Who's waiting, who replied, who's new, ready to send to.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/themes.png" alt="Themes" width="280"><br><sub><b>Themes.</b> Each one live, with its own chart, colours and icon.</sub></td>
   </tr>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/activity.png" alt="Activity" width="280"><br><sub><b>Activity.</b> Every mail sent, by day, with replies marked.</sub></td>
@@ -330,7 +333,7 @@ The app still runs if some of these haven't been applied yet:
   and a greeting typed into the contact form is dropped while the rest of the
   edit saves.
 - Without the reply-tracking columns, sends are recorded without Gmail ids and
-  no replies are found. The Quick Actions status line says so.
+  no replies are found. The status line on Activity says so.
 
 The mail queue needs no schema change; it's stored on the phone.
 
@@ -340,7 +343,7 @@ The app asks for `gmail.send` and `gmail.readonly`. The read scope is what
 reply tracking and the queue's Sent-mail lookups use.
 
 - If you connected Gmail before reply tracking existed, disconnect and reconnect
-  it in Profile. Older tokens don't have the read scope, and reads fail with a
+  it in Settings. Older tokens don't have the read scope, and reads fail with a
   403 until you do.
 - `gmail.readonly` is a restricted scope. It works for listed test users while
   the consent screen is in Testing. Publishing requires Google's verification

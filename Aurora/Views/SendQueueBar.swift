@@ -94,7 +94,7 @@ struct SendQueueBar: View {
                     .stroke(Color.ink.opacity(0.15), lineWidth: 2.5)
                 Circle()
                     .trim(from: 0, to: max(queue.progress, 0.02))
-                    .stroke(Color.accentColor,
+                    .stroke(Color.clay,
                             style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }

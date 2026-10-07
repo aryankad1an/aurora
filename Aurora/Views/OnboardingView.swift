@@ -50,92 +50,43 @@ struct OnboardingView: View {
     }
 }
 
-/// The shared profile fields, reused by onboarding and the Profile tab.
-///
-/// Read-only mode names each value rather than showing a disabled `TextField`,
-/// which renders the value with its label gone — leaving the Profile tab as a
-/// list of bare strings with nothing to say what any of them were.
+/// The shared profile fields, used by onboarding and by Edit Profile in
+/// Settings.
 struct ProfileFields: View {
     @Binding var profile: Profile
-    var isEditing = true
 
     var body: some View {
         Section("About") {
-            if isEditing {
-                TextField("Name", text: $profile.name)
-            } else {
-                LabeledContent("Name", value: profile.name.isEmpty ? "Not set" : profile.name)
-            }
+            TextField("Name", text: $profile.name)
         }
 
         Section("Education") {
-            if isEditing {
-                Toggle("Currently studying?", isOn: $profile.isStudying)
-                if profile.isStudying {
-                    TextField("College", text: $profile.college)
-                }
-            } else if profile.isStudying {
-                LabeledContent("College", value: profile.college.isEmpty ? "Not set" : profile.college)
-            } else {
-                Text("Not currently studying").foregroundStyle(.inkMuted)
+            Toggle("Currently studying?", isOn: $profile.isStudying)
+            if profile.isStudying {
+                TextField("College", text: $profile.college)
             }
         }
 
         Section("Work") {
-            if isEditing {
-                Toggle("Currently working?", isOn: $profile.isWorking)
-                if profile.isWorking {
-                    TextField("Company", text: $profile.company)
-                    TextField("Position", text: $profile.position)
-                }
-            } else if profile.isWorking {
-                LabeledContent("Company", value: profile.company.isEmpty ? "Not set" : profile.company)
-                LabeledContent("Position", value: profile.position.isEmpty ? "Not set" : profile.position)
-            } else {
-                Text("Not currently working").foregroundStyle(.inkMuted)
+            Toggle("Currently working?", isOn: $profile.isWorking)
+            if profile.isWorking {
+                TextField("Company", text: $profile.company)
+                TextField("Position", text: $profile.position)
             }
         }
 
         Section {
-            if isEditing {
-                TextField("Google Drive Link", text: $profile.resumeLink)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-            } else if profile.resumeLink.isEmpty {
-                Text("No resume link").foregroundStyle(.inkMuted)
-            } else if let url = URL(string: profile.resumeLink), url.scheme?.hasPrefix("http") == true {
-                // A link, as it is in Contacts: tap to check it's the right
-                // file, hold to copy it.
-                Link(destination: url) {
-                    LabeledContent {
-                        HStack(spacing: 4) {
-                            Text(url.host() ?? profile.resumeLink)
-                                .lineLimit(1)
-                            Image(systemName: "arrow.up.forward")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(.clay)
-                    } label: {
-                        Text("Link").foregroundStyle(.ink)
-                    }
-                }
-                .contextMenu {
-                    Button("Copy Link", systemImage: "doc.on.doc") {
-                        UIPasteboard.general.string = profile.resumeLink
-                    }
-                }
-            } else {
-                LabeledContent("Link", value: profile.resumeLink)
-                    .textSelection(.enabled)
-            }
+            TextField("Google Drive Link", text: $profile.resumeLink)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
         } header: {
             Text("Resume")
         } footer: {
-            // Templates can reference {Resume-Link}; an unset one renders as a gap
-            // in every mail that does, which is invisible from the mail itself.
-            if !isEditing && profile.resumeLink.isEmpty {
-                Text("Templates using {Resume-Link} will send with a blank space here.")
+            // Templates can reference {Resume-Link}; an unset one renders as a
+            // gap in every mail that does, which is invisible from the mail.
+            if profile.resumeLink.isEmpty {
+                Text("Templates using {Resume-Link} send with a blank space until this is filled in.")
             }
         }
     }

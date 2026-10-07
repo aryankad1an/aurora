@@ -219,13 +219,13 @@ extension View {
 // MARK: - Screens and lists
 
 extension View {
-    /// The ground behind a whole screen, edge to edge: black, ruled as graph
-    /// paper. Every state of a screen sits on it — a spinner while searching, an
-    /// empty state, a list — so none of them can show the bare window instead.
+    /// The ground behind a whole screen, edge to edge: the theme's paper, ruled
+    /// as graph paper, with its chart drifting across it. Every state of a
+    /// screen sits on it — a spinner while searching, an empty state, a list —
+    /// so none of them can show the bare window instead.
     func paperScreen() -> some View {
         background {
-            GraphPaper()
-                .background(Color.paper)
+            ChartGround()
                 .ignoresSafeArea()
         }
     }
@@ -322,43 +322,6 @@ private struct PaperFloor: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
-}
-
-/// Graph paper: faint rules on a square grid, every fourth one a shade
-/// stronger, like the axis grid of a chart. It's the ground of the whole app —
-/// the same grid the splash draws its curve on.
-///
-/// A single 4×4-cell tile, rendered once for the life of the app and repeated by
-/// the GPU. It used to be a full-screen `Canvas`, which is re-drawn whenever the
-/// screen above it is — including under every menu and sheet as it animated.
-struct GraphPaper: View {
-    var body: some View {
-        Image(uiImage: Self.tile)
-            .resizable(resizingMode: .tile)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-
-    private static let spacing: CGFloat = 22
-    /// One repeat of the pattern, for anything that has to line up with it.
-    static let tileSide: CGFloat = spacing * 4
-
-    private static let tile: UIImage = {
-        let side = spacing * 4
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { context in
-            let cg = context.cgContext
-            cg.setLineWidth(0.5)
-            for index in 0..<4 {
-                let offset = CGFloat(index) * spacing + 0.25
-                cg.setStrokeColor(index == 0
-                                  ? UIColor(Color.hairline).withAlphaComponent(0.55).cgColor
-                                  : UIColor(Color.grid).cgColor)
-                cg.move(to: CGPoint(x: offset, y: 0)); cg.addLine(to: CGPoint(x: offset, y: side))
-                cg.move(to: CGPoint(x: 0, y: offset)); cg.addLine(to: CGPoint(x: side, y: offset))
-                cg.strokePath()
-            }
-        }
-    }()
 }
 
 /// A whole screen that's still loading: a spinner, on paper.

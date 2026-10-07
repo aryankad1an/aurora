@@ -196,7 +196,7 @@ struct Job: Identifiable, Decodable {
     var invalidContacts: [Contact] { contacts.filter { !$0.isValid } }
 
     /// Contacts at this company who wrote back, and the ones still silent after
-    /// being mailed. Both drive Quick Actions; neither counts anyone never mailed.
+    /// being mailed. Neither counts anyone never mailed.
     var repliedContacts: [Contact] { contacts.filter(\.hasReplied) }
     var awaitingContacts: [Contact] { contacts.filter { $0.isSent && !$0.hasReplied } }
 

@@ -2,7 +2,7 @@ import Foundation
 
 /// The user's own profile details, stored in Supabase keyed by their Gmail
 /// address so it follows them across devices.
-struct Profile: Codable {
+struct Profile: Codable, Equatable {
     var name = ""
 
     var isStudying = false
