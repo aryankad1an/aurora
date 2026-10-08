@@ -593,6 +593,8 @@ final class JobStore {
     private func rebuildDerived() {
         insights = Insights.make(activity: activity, catalog: allCompanies)
         rebuildSuggested()
+        // Every contact loaded so far teaches greetings the names on its row.
+        RecipientName.learnNames(from: (jobs + allCompanies + detachedCompanies.values).flatMap(\.contacts))
     }
 
     private static func newestFirst(_ a: ActivityEntry, _ b: ActivityEntry) -> Bool {

@@ -196,7 +196,9 @@ def audit(old, new):
             elif letters(val) not in local and not all(letters(w) in local for w in val.split()):
                 problems.append(f"{r['email']}: new {field} {val!r} isn't in the address")
         g, nm = (n.get("greeting_name") or ""), (n.get("name") or "")
-        if g and g != "Team" and nm and letters(g) not in {letters(w) for w in nm.split()} and n != r:
+        # A name that only copies the mailbox ("Arijitdas") has no words to match.
+        if g and g != "Team" and nm and letters(g) not in {letters(w) for w in nm.split()} and n != r \
+                and letters(nm) != local:
             if (r.get("greeting_name"), r.get("name")) != (n.get("greeting_name"), n.get("name")):
                 problems.append(f"{r['email']}: greeting {g!r} isn't a word of name {nm!r}")
     return problems, notes

@@ -62,11 +62,12 @@ struct Contact: Identifiable, Decodable {
 
     /// The word that goes after "Hi " in a mail to this person: the stored
     /// `greetingName` when there is one, and otherwise whatever `RecipientName`
-    /// can recover from the name and address. Every greeting in the app runs
-    /// through here, so overriding one row fixes it everywhere at once.
+    /// can recover from the name, the name they signed a reply with, and the
+    /// address. Every greeting in the app runs through here, so overriding one
+    /// row fixes it everywhere at once.
     var greeting: String {
         let override = greetingName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return override.isEmpty ? RecipientName.greeting(name: name, email: email) : override
+        return override.isEmpty ? RecipientName.greeting(name: name, email: email, replyFrom: replyFrom) : override
     }
 
     /// What to call this contact on screen: their name, or their address when

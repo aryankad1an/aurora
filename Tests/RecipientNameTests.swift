@@ -18,10 +18,12 @@ extension String {
 }
 
 struct Contact {
+    var id = ""
     var name = ""
     var email = ""
     var position = ""
-    var greeting: String { RecipientName.greeting(name: name, email: email) }
+    var replyFrom: String? = nil
+    var greeting: String { RecipientName.greeting(name: name, email: email, replyFrom: replyFrom) }
 }
 
 struct Profile {
@@ -68,7 +70,8 @@ struct RecipientNameTests {
         expect(greet("akushwah@acme.com"), "", "initial and surname: no given name")
         expect(greet("pm.singh@acme.com"), "", "initials and surname")
         expect(greet("sharma@acme.com"), "", "a surname alone")
-        expect(greet("singh.gurpreet@acme.com"), "", "an unlisted name isn't misread as the surname")
+        expect(greet("singh.gurpreet@acme.com"), "Gurpreet", "surname first, Punjabi")
+        expect(greet("singh.zorvexa@acme.com"), "", "an unknown name isn't swapped for the surname")
         expect(greet("suneeta@acme.com"), "Suneeta", "a final vowel isn't an initial")
         expect(greet("careers@acme.com"), "", "a role mailbox")
         expect(greet("design@acme.com"), "", "an English word")
@@ -81,6 +84,33 @@ struct RecipientNameTests {
         expect(greet("ak@acme.com", name: "KUMARI, Anjali"), "Anjali", "surname-first with a comma")
         expect(greet("akushwah@acme.com", name: "Akushwah"), "", "a name that only copies the mailbox")
         expect(greet("rahul@acme.com", name: "Rahul"), "Rahul", "…unless the address names someone")
+
+        print("From their own reply")
+        func signed(_ from: String, _ email: String = "akushwah@acme.com", name: String = "") -> String {
+            RecipientName.greeting(name: name, email: email, replyFrom: from)
+        }
+        expect(signed("Anjali Kushwah <akushwah@acme.com>"), "Anjali", "the name they signed with")
+        expect(signed("\"Kushwah, Anjali\" <AKushwah@acme.com>"), "Anjali", "quoted, surname first, any case")
+        expect(signed("Acme Recruiting <akushwah@acme.com>"), "", "a role display name")
+        expect(signed("akushwah <akushwah@acme.com>"), "", "a display name that repeats the mailbox")
+        expect(signed("Anjali Kushwah <anjali@gmail.com>"), "", "a reply from another address")
+        expect(signed("Priya Nair <akushwah@acme.com>", name: "Anjali Kushwah"), "Anjali", "the name field still comes first")
+        expect(signed("<rahul@acme.com>", "rahul@acme.com"), "Rahul", "no display name: the address decides")
+
+        print("Learned from the catalog")
+        expect(greet("arijit@acme.com"), "", "a name no list has isn't guessed…")
+        RecipientName.learnNames(from: [
+            Contact(id: "1", name: "Arijit Sen", email: "asen@acme.com"),
+            Contact(id: "2", name: "DAS, Arijit", email: "ad@acme.com"),
+            Contact(id: "3", name: "Talent Acquisition", email: "ta@acme.com"),
+            Contact(id: "4", name: "Bizdev Lead", email: "bd@acme.com"),
+            Contact(id: "4", name: "Bizdev Lead", email: "bd@acme.com"),
+        ])
+        expect(greet("arijit@acme.com"), "Arijit", "…until the catalog has it twice")
+        expect(greet("arijit.das@acme.com"), "Arijit", "with a surname too")
+        expect(greet("bizdev@acme.com"), "", "a role row teaches nothing")
+        RecipientName.learnNames(from: [])
+        expect(greet("arijit@acme.com"), "", "learning again replaces what was learned")
 
         print("Into a template")
         let template = MailText("Hi {Receiver-Name},\nI'm {Sender-Name}.")

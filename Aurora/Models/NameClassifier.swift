@@ -14,25 +14,28 @@ import Foundation
 ///
 /// Each reading's posterior is credited to the given name it would greet, and a
 /// name is used only when its share reaches the model's threshold. A given name
-/// has to be in the lists to be greeted: one the model has never seen is never
+/// has to be known to be greeted: one the model has never seen is never
 /// guessed, but it still counts against the readings that would misgreet —
 /// `singh.gurpreet` is not "Hi Singh," just because Gurpreet is unlisted.
+///
+/// Names are known from public lists and, with `learn(people:)`, from the
+/// catalog's own name fields: "Arijit Sen" on one contact lets `arijit@` on
+/// another be greeted.
 ///
 /// The model is `Resources/NameModel.txt`, built by `scripts/names/build_model.py`
 /// from public name and word lists. `scripts/names/name_model.py` is the
 /// reference implementation; its tests check this port against it case by case.
 final class NameClassifier {
     /// The model shipped in the app, or nil if it's missing from the bundle.
-    /// Read on first use, about a tenth of a second.
     static let shared: NameClassifier? = (Bundle.main.url(forResource: "NameModel", withExtension: "txt")
         ?? Bundle.main.url(forResource: "NameModel", withExtension: "txt", subdirectory: "Resources"))
-        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
-        .flatMap { NameClassifier(modelText: $0) }
+        .flatMap { try? Data(contentsOf: $0) }
+        .flatMap { NameClassifier(modelBytes: [UInt8]($0)) }
 
     struct Greeting {
         /// The given name to greet by, capitalized, or nil when no name is sure enough.
         let name: String?
-        /// The share of readings behind the best listed name, 0...1.
+        /// The share of readings behind the best known name, 0...1.
         let confidence: Double
     }
 
@@ -65,63 +68,84 @@ final class NameClassifier {
 
     private enum Trigrams: String { case other = "trigram_other", given = "trigram_given", surname = "trigram_surname" }
 
+    /// What the catalog has taught: counts by name, and their total.
+    private struct Learned {
+        var counts: [String: Int] = [:]
+        var total = 0
+    }
+
+    /// The model file. The name and word sections stay in it, sorted, and are
+    /// searched in place: building dictionaries of 200,000 names on first use
+    /// would cost far more than the few lookups a mailbox needs.
+    private let bytes: [UInt8]
+    /// Where each line of the given-name, surname and word sections starts.
+    private var given: [Int32] = []
+    private var surnames: [Int32] = []
+    private var words: [Int32] = []
     private var patterns: [Pattern] = []
     private var otherPrior = 0.0
-    private var given: [String: Int] = [:]
-    private var surnames: [String: Int] = [:]
-    private var words: Set<String> = []
     /// Per table, -ln P(next | two before), indexed ((a * 27) + b) * 27 + c with
     /// a, b in 0 (start) or 1...26 (a-z) and c in 0...25 (a-z) or 26 (end).
     private var trigrams: [Trigrams: [Double]] = [:]
+    private var constants: [String: Double] = [:]
     private var scale = 4.0
     private(set) var threshold = 0.9
-    private var givenOOV = 0.0, surnameOOV = 0.0, initial1 = 0.0, initial2 = 0.0
+    private var learnedGiven = Learned()
+    private var learnedSurnames = Learned()
     /// Mailboxes already read. A batch reads each recipient's greeting more
     /// than once, and the compose and contact screens on every redraw.
     private var memo: [[String]: Greeting] = [:]
 
+    private static let required = ["scale", "threshold", "given_oov", "surname_oov", "initial1", "initial2",
+                                   "catalog_prior", "catalog_max", "catalog_min_count", "learn_order",
+                                   "learn_unlisted", "compound_suffix"]
+
+    convenience init?(modelText: String) {
+        self.init(modelBytes: Array(modelText.utf8))
+    }
+
     /// Parse a model file. Nil if it's malformed.
-    init?(modelText: String) {
+    init?(modelBytes: [UInt8]) {
+        bytes = modelBytes
         var section = ""
         var priors: [(String, Double)] = []
         var glue: [String: Double] = [:]
-        var constants: [String: Double] = [:]
-        given.reserveCapacity(32_768)
-        surnames.reserveCapacity(32_768)
-        words.reserveCapacity(12_288)
-        for line in modelText.split(separator: "\n") {
-            if line.hasPrefix("#") { continue }
-            if line.hasPrefix("@") {
-                section = String(line.dropFirst())
+        var start = 0
+        while start < bytes.count {
+            var end = start
+            while end < bytes.count, bytes[end] != UInt8(ascii: "\n") { end += 1 }
+            defer { start = end + 1 }
+            guard end > start, bytes[start] != UInt8(ascii: "#") else { continue }
+            if bytes[start] == UInt8(ascii: "@") {
+                section = String(decoding: bytes[(start + 1)..<end], as: UTF8.self)
                 continue
             }
-            if section == "words" {
-                words.insert(String(line))
-                continue
-            }
-            guard let space = line.firstIndex(of: " ") else { return nil }
-            let key = String(line[..<space]), value = line[line.index(after: space)...]
             switch section {
-            case "priors": priors.append((key, Double(value) ?? 0))
-            case "glue": glue[key] = Double(value)
-            case "constants": constants[key] = Double(value)
-            case "given": given[key] = Int(value)
-            case "surname": surnames[key] = Int(value)
+            case "given": given.append(Int32(start))
+            case "surname": surnames.append(Int32(start))
+            case "words": words.append(Int32(start))
+            case "priors", "glue", "constants":
+                let line = String(decoding: bytes[start..<end], as: UTF8.self).split(separator: " ")
+                guard line.count == 2, let value = Double(line[1]) else { return nil }
+                let key = String(line[0])
+                switch section {
+                case "priors": priors.append((key, value))
+                case "glue": glue[key] = value
+                default: constants[key] = value
+                }
             default:
-                guard let table = Trigrams(rawValue: section), key.utf8.count == 2 else { return nil }
+                guard let table = Trigrams(rawValue: section), end - start >= 3 + 27 else { return nil }
                 if trigrams[table] == nil { trigrams[table] = Array(repeating: 0, count: 27 * 27 * 27) }
-                let row = key.utf8.map { $0 == UInt8(ascii: "^") ? 0 : Int($0) - 96 }
-                for (c, byte) in value.utf8.enumerated() where c < 27 {
-                    trigrams[table]![(row[0] * 27 + row[1]) * 27 + c] = Double(Int(byte) - 33) * 0.2
+                let row = [bytes[start], bytes[start + 1]].map { $0 == UInt8(ascii: "^") ? 0 : Int($0) - 96 }
+                for c in 0..<27 {
+                    trigrams[table]![(row[0] * 27 + row[1]) * 27 + c] = Double(Int(bytes[start + 3 + c]) - 33) * 0.2
                 }
             }
         }
-        guard let scale = constants["scale"], let threshold = constants["threshold"],
-              let givenOOV = constants["given_oov"], let surnameOOV = constants["surname_oov"],
-              let initial1 = constants["initial1"], let initial2 = constants["initial2"],
-              trigrams.count == 3, !words.isEmpty else { return nil }
-        (self.scale, self.threshold, self.givenOOV, self.surnameOOV) = (scale, threshold, givenOOV, surnameOOV)
-        (self.initial1, self.initial2) = (initial1, initial2)
+        guard Self.required.allSatisfy({ constants[$0] != nil }), trigrams.count == 3,
+              !given.isEmpty, !surnames.isEmpty, !words.isEmpty else { return nil }
+        scale = constants["scale"]!
+        threshold = constants["threshold"]!
         for (name, prior) in priors {
             if name == "O" {
                 otherPrior = prior
@@ -150,9 +174,63 @@ final class NameClassifier {
         return result
     }
 
+    // MARK: - Learning from the catalog
+
+    /// Learn given names and surnames from the catalog's own name fields,
+    /// replacing anything learned before.
+    ///
+    /// `people` are name fields as lowercase a-z words in the order written,
+    /// with notes, honorifics and rows naming a role already left out. Only the
+    /// first and last word are read. A field teaches only when it's clear which
+    /// way round it is — written given name first unless the listed words say
+    /// otherwise, one reading nine times likelier than the other — and one half
+    /// is listed in its role: "Arijit Sen" teaches Arijit, "Singh Gurpreet"
+    /// teaches Gurpreet. A common English word teaches nothing unless the lists
+    /// know it as a name, and a name only the catalog knows is greeted once it
+    /// has been taught more than once.
+    func learn(people: [[String]]) {
+        var taughtGiven = Learned(), taughtSurnames = Learned()
+        let order = constants["learn_order"]!
+        for words in people {
+            guard words.count >= 2, let a = words.first, let b = words.last, a != b,
+                  min(a.utf8.count, b.utf8.count) >= 3 else { continue }
+            let forward = order * publicP(given, a) * publicP(surnames, b)
+            let backward = (1 - order) * publicP(surnames, a) * publicP(given, b)
+            let (first, last): (String, String)
+            if forward >= 9 * backward {
+                (first, last) = (a, b)
+            } else if backward >= 9 * forward {
+                (first, last) = (b, a)
+            } else {
+                continue
+            }
+            guard cost(given, first) != nil || cost(surnames, last) != nil else { continue }
+            if teaches(first, given) { taughtGiven.counts[first, default: 0] += 1; taughtGiven.total += 1 }
+            if teaches(last, surnames) { taughtSurnames.counts[last, default: 0] += 1; taughtSurnames.total += 1 }
+        }
+        learnedGiven = taughtGiven
+        learnedSurnames = taughtSurnames
+        memo.removeAll()
+    }
+
+    /// A word's listed probability, or a role-neutral floor if it isn't listed.
+    private func publicP(_ section: [Int32], _ word: String) -> Double {
+        cost(section, word).map { exp(-Double($0) / scale) } ?? constants["learn_unlisted"]!
+    }
+
+    private func teaches(_ word: String, _ section: [Int32]) -> Bool {
+        cost(section, word) != nil || cost(words, word) == nil
+    }
+
+    private func knowsGiven(_ word: String) -> Bool {
+        cost(given, word) != nil || Double(learnedGiven.counts[word] ?? 0) >= constants["catalog_min_count"]!
+    }
+
+    // MARK: - Reading
+
     private func read(_ parts: [String]) -> Greeting {
         let readings = self.readings(parts)
-        let candidates = readings.compactMap { $0.name }.filter { given[$0] != nil }
+        let candidates = readings.compactMap { $0.name }.filter(knowsGiven)
         var closest = 0.0
         for name in candidates.sorted(by: { $0.count > $1.count }) {
             let support = readings.reduce(0.0) { total, reading in
@@ -167,8 +245,6 @@ final class NameClassifier {
         return Greeting(name: nil, confidence: closest)
     }
 
-    // MARK: - Readings
-
     /// Every way to read the mailbox, credited to the given name each would
     /// greet (nil for none), as shares of the whole. Most likely first.
     private func readings(_ parts: [String]) -> [(name: String?, share: Double)] {
@@ -181,16 +257,10 @@ final class NameClassifier {
         // Each stretch of letters is looked up once per kind of slot, however
         // many patterns and splits put it there. Stretches are keyed by their
         // bounds: start * (n + 1) + end.
-        var spelled: [String?] = Array(repeating: nil, count: (n + 1) * (n + 1))
         var seen: [[Double]] = Array(repeating: Array(repeating: -1, count: (n + 1) * (n + 1)), count: 6)
-        func word(_ key: Int) -> String {
-            if let w = spelled[key] { return w }
-            let w = String(decoding: text[(key / (n + 1))..<(key % (n + 1))], as: UTF8.self)
-            spelled[key] = w
-            return w
-        }
+        func stretch(_ key: Int) -> ArraySlice<UInt8> { text[(key / (n + 1))..<(key % (n + 1))] }
         func slot(_ kind: Slot, _ key: Int) -> Double {
-            if seen[kind.index][key] < 0 { seen[kind.index][key] = likelihood(of: word(key), as: kind) }
+            if seen[kind.index][key] < 0 { seen[kind.index][key] = likelihood(of: stretch(key), as: kind) }
             return seen[kind.index][key]
         }
 
@@ -229,14 +299,14 @@ final class NameClassifier {
                 for j in (i + 1)..<(k - 1) { bounds[j] = bounds[j - 1] + 1 }
             }
         }
-        let other = parts.reduce(otherPrior) { $0 * trigram(.other, $1) }
+        let other = parts.reduce(otherPrior) { $0 * trigram(.other, Array($1.utf8)[...]) }
         if other > 0 { add(-1, other) }
 
         // The same name can be read off two stretches ("rahul.rahul").
         var shares: [String?: Double] = [:]
         var names: [String?] = []
         for key in order {
-            let name: String? = key < 0 ? nil : word(key)
+            let name: String? = key < 0 ? nil : String(decoding: stretch(key), as: UTF8.self)
             if shares[name] == nil { names.append(name) }
             shares[name, default: 0] += scores[key]!
         }
@@ -246,39 +316,49 @@ final class NameClassifier {
     }
 
     /// Whether someone whose given name reads as `full` goes by `name`: the same
-    /// name, or a listed one that is `name` with a surname fused on (Rakesh +
-    /// kumar, Lakshmi + devi). Two given names fused don't shorten: Nagarjuna
-    /// isn't "Nag".
+    /// name, or a known one that is `name` with a common surname fused on
+    /// (Rakesh + kumar, Lakshmi + devi, Srinivasa + rao). Anything else fused
+    /// doesn't shorten: Nagarjuna isn't "Nag", Lakshmanan isn't "Laksh".
     private func calls(_ full: String, _ name: String) -> Bool {
         if full == name { return true }
-        guard full.hasPrefix(name), given[full] != nil else { return false }
+        guard full.hasPrefix(name), knowsGiven(full) else { return false }
         let rest = String(full.dropFirst(name.count))
-        return rest.utf8.count >= 3 && surnames[rest] != nil
+        guard rest.utf8.count >= 3, let c = cost(surnames, rest) else { return false }
+        return exp(-Double(c) / scale) >= constants["compound_suffix"]!
     }
 
     // MARK: - Slot likelihoods
 
-    private func likelihood(of word: String, as slot: Slot) -> Double {
+    private func likelihood(of word: ArraySlice<UInt8>, as slot: Slot) -> Double {
         switch slot {
-        case .given: listed(word, in: given, oov: givenOOV, spelt: .given)
-        case .surname: listed(word, in: surnames, oov: surnameOOV, spelt: .surname)
-        case .initials: word.utf8.count == 1 ? initial1 : word.utf8.count == 2 ? initial2 : 0
-        case .initial: word.utf8.count == 1 ? initial1 : 0
-        case .gluedInitial: word.utf8.count == 1 && !"aeiou".contains(word) ? initial1 : 0
-        case .word: words.contains(word) ? 1 / Double(words.count) : 0
+        case .given: listed(word, in: given, learned: learnedGiven, oov: constants["given_oov"]!, spelt: .given)
+        case .surname: listed(word, in: surnames, learned: learnedSurnames, oov: constants["surname_oov"]!, spelt: .surname)
+        case .initials: word.count == 1 ? constants["initial1"]! : word.count == 2 ? constants["initial2"]! : 0
+        case .initial: word.count == 1 ? constants["initial1"]! : 0
+        case .gluedInitial: word.count == 1 && !Array("aeiou".utf8).contains(word.first!) ? constants["initial1"]! : 0
+        case .word: cost(words, word) != nil ? 1 / Double(words.count) : 0
         }
     }
 
-    private func listed(_ word: String, in table: [String: Int], oov: Double, spelt: Trigrams) -> Double {
-        guard word.utf8.count >= 2 else { return 0 }
-        let p = table[word].map { exp(-Double($0) / scale) } ?? 0
+    private func listed(_ word: ArraySlice<UInt8>, in section: [Int32], learned: Learned,
+                        oov: Double, spelt: Trigrams) -> Double {
+        guard word.count >= 2 else { return 0 }
+        var p = cost(section, word).map { exp(-Double($0) / scale) } ?? 0
+        // Names the catalog taught, blended in by how much it has taught: the
+        // catalog is the population being greeted, but a small one.
+        if learned.total > 0 {
+            let n = Double(learned.total)
+            let share = min(constants["catalog_max"]!, n / (n + constants["catalog_prior"]!))
+            let count = Double(learned.counts[String(decoding: word, as: UTF8.self)] ?? 0)
+            p = (1 - share) * p + share * count / n
+        }
         return (1 - oov) * p + oov * trigram(spelt, word)
     }
 
-    private func trigram(_ table: Trigrams, _ word: String) -> Double {
+    private func trigram(_ table: Trigrams, _ word: ArraySlice<UInt8>) -> Double {
         guard let costs = trigrams[table] else { return 0 }
         var nats = 0.0, a = 0, b = 0
-        for byte in word.utf8 {
+        for byte in word {
             let c = Int(byte) - 97
             guard (0..<26).contains(c) else { return 0 }
             nats += costs[(a * 27 + b) * 27 + c]
@@ -286,5 +366,46 @@ final class NameClassifier {
         }
         nats += costs[(a * 27 + b) * 27 + 26]
         return exp(-nats)
+    }
+
+    // MARK: - The sorted sections
+
+    private func cost(_ section: [Int32], _ word: String) -> Int? {
+        cost(section, Array(word.utf8)[...])
+    }
+
+    /// The number after `word` on its line in `section` (0 for the word list),
+    /// or nil if the section doesn't have it.
+    private func cost(_ section: [Int32], _ word: ArraySlice<UInt8>) -> Int? {
+        var low = 0, high = section.count
+        while low < high {
+            let mid = (low + high) / 2
+            let order = compare(Int(section[mid]), word)
+            if order == 0 { return number(after: Int(section[mid]) + word.count) }
+            if order < 0 { low = mid + 1 } else { high = mid }
+        }
+        return nil
+    }
+
+    /// The line at `start`'s name against `word`: negative if it sorts first.
+    private func compare(_ start: Int, _ word: ArraySlice<UInt8>) -> Int {
+        var i = start, j = word.startIndex
+        while true {
+            let lineEnded = i >= bytes.count || bytes[i] == UInt8(ascii: " ") || bytes[i] == UInt8(ascii: "\n")
+            let wordEnded = j == word.endIndex
+            if lineEnded || wordEnded { return lineEnded ? (wordEnded ? 0 : -1) : 1 }
+            if bytes[i] != word[j] { return bytes[i] < word[j] ? -1 : 1 }
+            i += 1
+            j += 1
+        }
+    }
+
+    private func number(after index: Int) -> Int {
+        var i = index + 1, value = 0
+        while i < bytes.count, (48...57).contains(bytes[i]) {
+            value = value * 10 + Int(bytes[i]) - 48
+            i += 1
+        }
+        return value
     }
 }

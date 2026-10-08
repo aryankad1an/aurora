@@ -10,7 +10,9 @@ Two test sets:
 - Synthetic: mailboxes built from given names and surnames drawn by how
   common they are, in the patterns work addresses use: once with the model
   knowing every name, once with a fifth of the name types held out of it, so
-  the classifier meets names it has never seen.
+  the classifier meets names it has never seen — and once more after it has
+  learned from a synthetic catalog's name fields (`NameModel.learn`), drawn
+  from the same population with a tenth written surname first.
 
 "Clear cases" leaves out wrong greetings the synthetic case can't rule out:
 a "surname" drawn for a no-name case that is mostly a given name elsewhere
@@ -109,6 +111,7 @@ def main():
     ap.add_argument("--sweep", action="store_true")
     ap.add_argument("-n", type=int, default=4000)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--catalog", type=int, default=1500, help="name fields to learn from")
     args = ap.parse_args()
 
     labelled = [(local, None if want == "-" else want.lower()) for local, want in LABELLED]
@@ -124,6 +127,18 @@ def main():
             if case:
                 cases.append(case)
         sets.append((f"synthetic, {share:.0%} held out", held, cases))
+        if share:
+            # The same people, after the model has read a catalog's name fields:
+            # drawn from the same population, a tenth written surname first.
+            taught = nm.NameModel()
+            held_out(taught, random.Random(args.seed), share)
+            people = []
+            for _ in range(args.catalog):
+                g = rng.choices(given[0], given[1])[0]
+                s = rng.choices(surnames[0], surnames[1])[0]
+                people.append([s, g] if rng.random() < 0.1 else [g, s])
+            taught.learn(people)
+            sets.append((f"  + {args.catalog} name fields learned", taught, cases))
 
     thresholds = [0.5, 0.7, 0.8, 0.85, 0.9, 0.95, 0.98] if args.sweep else [model.threshold]
     for t in thresholds:

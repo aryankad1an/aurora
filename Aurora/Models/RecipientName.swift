@@ -52,17 +52,105 @@ enum RecipientName {
     /// A given name to greet the recipient by, or ``fallback`` when there's no
     /// name it can be sure of.
     ///
-    /// `email` is only consulted when `name` yields nothing usable, or when the
-    /// name is just the mailbox copied over ("Akushwah" for `akushwah@`) and so
-    /// knows no more than the address does.
-    static func greeting(name: String, email: String) -> String {
+    /// In order: the `name` field; the name the person signed their own reply
+    /// with (`replyFrom`, the `From:` of a reply from this same address); and
+    /// the address. Each later one is consulted only when the one before yields
+    /// nothing usable — a name that is just the mailbox copied over
+    /// ("Akushwah" for `akushwah@`) knows no more than the address does.
+    static func greeting(name: String, email: String, replyFrom: String? = nil) -> String {
         let mailbox = email.prefix { $0 != "@" }
         if bareLetters(name) != bareLetters(String(mailbox)),
            let fromName = personalName(in: name) {
             return fromName
         }
+        if let fromReply = replyFrom.flatMap({ signedName(in: $0, for: email) }) { return fromReply }
         if let fromEmail = nameFromEmail(email) { return fromEmail }
         return fallback
+    }
+
+    // MARK: - From their own reply
+
+    /// The given name in a `From:` header ("Anjali Kumari <anjali@acme.com>"),
+    /// when it came from `email` itself and names a person: the name someone
+    /// signs their own mail with is the best name there is for them. A display
+    /// name that names a role ("Acme Recruiting") or only repeats the mailbox
+    /// gives nil, as does a reply sent from some other address.
+    private static func signedName(in header: String, for email: String) -> String? {
+        guard let open = header.lastIndex(of: "<"), let close = header.lastIndex(of: ">"), open < close else {
+            return nil
+        }
+        let address = header[header.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+        guard address.caseInsensitiveCompare(email.trimmingCharacters(in: .whitespaces)) == .orderedSame else {
+            return nil
+        }
+        let display = header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+        let words = display.lowercased().split(whereSeparator: { !$0.isLetter })
+        guard !display.isEmpty, !words.contains(where: { roleWords.contains(String($0)) }),
+              bareLetters(display) != bareLetters(String(email.prefix { $0 != "@" })) else { return nil }
+        return personalName(in: display)
+    }
+
+    // MARK: - Learning from the catalog
+
+    /// The name fields `learnNames` last handed the classifier, so a reload
+    /// that changes no one's name doesn't make it learn the same catalog again.
+    private static var lastLearned: [[String]] = []
+
+    /// Teach the classifier the names in the catalog loaded so far, so a name
+    /// the public lists lack ("Arijit Sen" on one contact) can greet another
+    /// contact whose address is all there is (`arijit@`). Rows whose name is
+    /// their mailbox copied over, holds an address, or names a role teach
+    /// nothing; `NameClassifier.learn` decides what the rest teach.
+    static func learnNames(from contacts: [Contact]) {
+        guard let classifier else { return }
+        var seen = Set<String>()
+        var people: [[String]] = []
+        for contact in contacts where seen.insert(contact.id.isEmpty ? contact.email : contact.id).inserted {
+            if let words = nameWords(in: contact.name, email: contact.email) {
+                people.append(words)
+            } else if let header = contact.replyFrom, signedName(in: header, for: contact.email) != nil,
+                      let open = header.lastIndex(of: "<"),
+                      let words = nameWords(in: header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
+                                            email: contact.email) {
+                // No usable name on the row, but they signed a reply with one.
+                people.append(words)
+            }
+        }
+        guard people != lastLearned else { return }
+        lastLearned = people
+        classifier.learn(people: people)
+    }
+
+    /// A name field as lowercase a-z words, given name first where a comma
+    /// says the surname leads ("KUMARI, Anjali"), or nil if it can't teach.
+    private static func nameWords(in raw: String, email: String) -> [String]? {
+        var text = raw.sanitizedLineSeparators.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.contains("@"),
+              bareLetters(text) != bareLetters(String(email.prefix { $0 != "@" })) else { return nil }
+        if text.contains("(") || text.contains("[") {
+            text = text.replacingOccurrences(of: "\\([^)]*\\)|\\[[^]]*\\]", with: " ",
+                                             options: .regularExpression)
+        }
+        let commaParts = text.split(separator: ",", maxSplits: 1).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        if commaParts.count == 2, !commaParts[1].isEmpty, commaParts[0].split(separator: " ").count == 1 {
+            text = commaParts[1] + " " + commaParts[0]
+        } else {
+            text = commaParts[0]
+        }
+        var words: [String] = []
+        for raw in text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .lowercased().split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "-" || $0 == "." }) {
+            let word = String(raw.filter { $0 != "'" })
+            guard !word.isEmpty else { continue }
+            // A word with anything else in it (digits, another script) is no name to learn.
+            guard word.allSatisfy({ ("a"..."z").contains($0) }) else { return nil }
+            if honorifics.contains(word) { continue }
+            if roleWords.contains(word) { return nil }
+            words.append(word)
+        }
+        return words.count >= 2 ? words : nil
     }
 
     // MARK: - From the name field

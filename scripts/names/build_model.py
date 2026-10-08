@@ -3,7 +3,7 @@
     python3 build_model.py            # download (cached), verify, build
     python3 build_model.py --check    # rebuild and fail if the file would change
 
-Needs `pyarrow` for one source (`pip install pyarrow`). Every source is pinned
+Needs `rdata` to read one source (`pip install rdata`). Every source is pinned
 by URL and SHA-256 and cached in `.cache/names/` at the repo root; a source
 that has changed upstream stops the build instead of silently shifting the
 model. What each source is and its terms are in README.md.
@@ -34,17 +34,26 @@ SOURCES = {
     "in_given": ("https://files.pythonhosted.org/packages/e5/d7/16b2f770a6061d3987d9a10f7278008b30be449569c3d83b03584b444776/"
                  "naampy-0.1.0-py2.py3-none-any.whl",
                  "e6ff410071cfaf678bdb0791c8d597de706f09b1943e7c5035e60b2f232cefcc"),
+    # US Social Security baby names, every name given to 5+ babies a year, 1880-2017
+    # (CC0, via the babynames R package).
+    "us_given": ("https://raw.githubusercontent.com/hadley/babynames/master/data/babynames.rda",
+                 "1d5c601fa3c5177f4d9edb4c8c2f08fddc8d9bf04372b8a40dc6aecf92bfa324"),
     # SECC 2011 surnames by state and birth year (via outkast). Only the surname and
-    # its total are read; the composition columns are never touched.
-    "in_surname": ("https://files.pythonhosted.org/packages/86/e5/e93b2092923234c74caa722288f0ec4821673157287fb31b936be0926358/"
-                   "outkast-2.0.1-py3-none-any.whl",
-                   "5a3e8fd92c563a2aa29cc7003083dce3bbf8618cc5bbaeefdeba3550219fe8d4"),
-    # US Social Security baby names, top 1000 per year and sex (public domain).
-    "us_given": ("https://raw.githubusercontent.com/hadley/data-baby-names/master/baby-names.csv",
-                 "1259523fa76e5c18151a4c7612b854b22605d07127c596126940e2941ba15d3c"),
+    # its female/male counts are read; the composition columns are never touched.
+    "in_surname": ("https://files.pythonhosted.org/packages/3d/a7/9980bbb70a2fb5c343655065394e42f0a77e0f4851432c935184d4fdbb62/"
+                   "outkast-0.1.0-py2.py3-none-any.whl",
+                   "c2aa4e2d51e0b64875cbae0546efd18eb09dcc922a6da4dd015ba1a63d55bbca"),
+    # Indian electoral-roll surnames across the states, by language (via instate).
+    "in_surname_rolls": ("https://files.pythonhosted.org/packages/22/89/689a9b915579d101ab5305de7824e9effea8afa68f91ddba1aed4fa8517c/"
+                         "instate-0.1.7-py2.py3-none-any.whl",
+                         "3f875317682db298fcd7fe44684be296e4d1560e85a9ea93bc2d63e7afc60d2f"),
     # US Census 2000 surnames with 100+ people (public domain).
     "us_surname": ("https://raw.githubusercontent.com/fivethirtyeight/data/master/most-common-name/surnames.csv",
                    "1498e6a40db61e5edcbd93d9dded9e5249e1a2e9db7571ecc8468c6d6e6acdf7"),
+    # Faker's en_IN person names: a curated list of current Indian names (MIT).
+    "faker": ("https://files.pythonhosted.org/packages/07/52/9ae853e8c70d6b77fe81b1563378d8ee49aa316cf19502a2e0bf1e4a873e/"
+              "faker-40.41.0-py3-none-any.whl",
+              "35a7f66282990698c20c3e6dd57180900206b760c2f777112c085cc217e7de92"),
     # SCOWL English word lists by frequency class (permissive; notice in README).
     "words": ("http://archive.ubuntu.com/ubuntu/pool/main/s/scowl/scowl_2020.12.07.orig.tar.gz",
               "5587667caa20c4891390c2d42dbb4d5c4c3f41bee77af1457ece3ba23fb859cc"),
@@ -52,10 +61,23 @@ SOURCES = {
 
 # People of working age: born 1955 or later.
 BORN_FROM = 1955
-# The catalog is mostly Indian recruiters; US lists fill in names the rolls'
-# states miss (they cover Andhra, the North-East, Goa, J&K and Puducherry).
-INDIAN_SHARE = 0.6
-US_SURNAME_MIN = 1000
+# Each list's share of its mixture. The catalog is mostly Indian recruiters.
+# The rolls cover Andhra, the North-East, Goa, J&K and Puducherry; US births
+# fill in much of the rest (Gurpreet, Aarav, Simran) and every other origin.
+GIVEN_MIX = {"in_rolls": 0.5, "us_ssa": 0.45, "faker_in": 0.05}
+SURNAME_MIX = {"in_secc": 0.3, "in_rolls": 0.3, "us_census": 0.35, "faker_in": 0.05}
+# Smaller counts than these are mostly misspellings and one-offs.
+US_GIVEN_MIN = 50
+IN_ROLLS_SURNAME_MIN = 50
+US_SURNAME_MIN = 500
+# Tamil names have no hereditary surname: the "last name" a record holds is
+# the person's own or their father's given name (Murugan, Ramasamy). Counting
+# those as surnames would stop `murugan@` being greeted.
+NO_SURNAME_STATES = {"tamilnadu"}
+NO_SURNAME_LANGUAGES = {"tamil"}
+# Two-letter given names worth greeting by. The rest the US lists carry are
+# mostly initials (KC, AJ, JD) or fragments a mailbox is full of (an, de).
+TWO_LETTER_GIVEN = {"om", "jo", "al", "ed"}
 # Tokens the rolls record as a first name that are titles, not names.
 NOT_GIVEN = {"smt", "late", "shri", "mr", "mrs", "ms", "dr", "md", "kumari", "devi", "bibi", "bai", "bewa"}
 # Costs are -ln(p) in quarter-nats: plenty of resolution for a ratio test.
@@ -89,6 +111,16 @@ CONSTANTS = {
     "surname_oov": 0.3,      # share of surnames not in the lists
     "initial1": 0.7 / 26,    # one-letter initial
     "initial2": 0.3 / 676,   # two-letter initials ("pm")
+    # Names learned from the catalog get weight n / (n + catalog_prior) for n
+    # learned, up to catalog_max: a big catalog counts for a lot, never all.
+    "catalog_prior": 1000,
+    "catalog_max": 0.5,
+    "catalog_min_count": 2,  # times a name only the catalog knows is seen before it's greeted
+    "learn_order": 0.95,     # name fields written given name first
+    "learn_unlisted": 1e-7,  # what an unlisted word weighs either way when orienting a field
+    # A name shortens to the part before a fused surname only when that surname
+    # is this common: Kumar, Devi, Rao, Reddy, Raju, Babu, Prasad pass; Manan doesn't.
+    "compound_suffix": 1e-4,
 }
 ALPHA = "abcdefghijklmnopqrstuvwxyz"
 
@@ -107,6 +139,29 @@ def fetch(key):
     return path
 
 
+def derived(fn):
+    """Cache a source's parsed distribution next to the download, keyed by the
+    pinned digests and the settings it was read with, so a rebuild after
+    changing a prior doesn't re-read hundreds of megabytes."""
+    import functools
+    import json
+
+    @functools.wraps(fn)
+    def wrapper():
+        settings = json.dumps([sorted(d for _, d in SOURCES.values()), BORN_FROM, US_GIVEN_MIN,
+                               IN_ROLLS_SURNAME_MIN, US_SURNAME_MIN, sorted(NO_SURNAME_STATES),
+                               sorted(NO_SURNAME_LANGUAGES), sorted(NOT_GIVEN)])
+        key = hashlib.sha256((fn.__name__ + settings).encode()).hexdigest()[:16]
+        path = CACHE / f"{fn.__name__}-{key}.json"
+        if path.exists():
+            return json.loads(path.read_text())
+        value = fn()
+        CACHE.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+        return value
+    return wrapper
+
+
 def clean(word):
     w = (word or "").strip().lower()
     return w if re.fullmatch(r"[a-z]{2,}", w) else None
@@ -117,6 +172,7 @@ def normalise(counts):
     return {k: v / total for k, v in counts.items()}
 
 
+@derived
 def indian_given():
     with zipfile.ZipFile(fetch("in_given")) as z:
         raw = z.read("naampy/data/in_rolls/in_rolls_state_year_fn_naampy.csv.gz")
@@ -128,29 +184,50 @@ def indian_given():
     return normalise(counts)
 
 
+@derived
 def us_given():
-    shares = collections.Counter()
-    with open(fetch("us_given"), newline="") as f:
-        for row in csv.DictReader(f):
-            name = clean(row["name"])
-            if name and int(row["year"]) >= BORN_FROM:
-                shares[name] += float(row["percent"])
-    return normalise(shares)
-
-
-def indian_surnames():
-    import pyarrow.parquet as pq
-    with zipfile.ZipFile(fetch("in_surname")) as z:
-        raw = z.read("outkast/data/secc/secc_surname_composition.parquet")
-    table = pq.read_table(io.BytesIO(raw), columns=["last_name", "total_support"]).to_pydict()
+    import rdata
+    frame = rdata.conversion.convert(rdata.parser.parse_file(fetch("us_given")))["babynames"]
     counts = collections.Counter()
-    for name, n in zip(table["last_name"], table["total_support"]):
+    for year, name, n in zip(frame["year"], frame["name"], frame["n"]):
         name = clean(name)
-        if name:
+        if name and year >= BORN_FROM:
             counts[name] += int(n)
+    return normalise({k: v for k, v in counts.items() if v >= US_GIVEN_MIN})
+
+
+@derived
+def indian_surnames():
+    with zipfile.ZipFile(fetch("in_surname")) as z:
+        raw = z.read("outkast/data/secc/secc_all_state_year_ln_outkast.csv.gz")
+    counts = collections.Counter()
+    for row in csv.DictReader(io.TextIOWrapper(gzip.GzipFile(fileobj=io.BytesIO(raw)), "utf-8")):
+        name = clean(row["last_name"])
+        if name and row["state"] not in NO_SURNAME_STATES:
+            counts[name] += int(row["n_female"]) + int(row["n_male"])
     return normalise(counts)
 
 
+@derived
+def indian_roll_surnames():
+    with zipfile.ZipFile(fetch("in_surname_rolls")) as z:
+        packed = z.read("instate/data/lastname_langs_india.csv.tar.gz")
+    with tarfile.open(fileobj=io.BytesIO(packed)) as t:
+        member = next(m for m in t.getmembers() if m.name.endswith("lastname_langs_india.csv")
+                      and not m.name.rsplit("/", 1)[-1].startswith("._"))
+        reader = csv.reader(io.TextIOWrapper(t.extractfile(member), "utf-8"))
+        header = next(reader)
+        keep = [i for i, col in enumerate(header) if i > 0 and col not in NO_SURNAME_LANGUAGES]
+        counts = {}
+        for row in reader:
+            name = clean(row[0])
+            weight = sum(float(row[i]) for i in keep)
+            if name and weight >= IN_ROLLS_SURNAME_MIN:
+                counts[name] = counts.get(name, 0) + weight
+    return normalise(counts)
+
+
+@derived
 def us_surnames():
     counts = {}
     with open(fetch("us_surname"), newline="") as f:
@@ -159,6 +236,22 @@ def us_surnames():
             if name and int(row["count"]) >= US_SURNAME_MIN:
                 counts[name] = int(row["count"])
     return normalise(counts)
+
+
+@derived
+def faker_indian():
+    """(given names, surnames) from Faker's en_IN person provider, read as data."""
+    import ast
+    with zipfile.ZipFile(fetch("faker")) as z:
+        tree = ast.parse(z.read("faker/providers/person/en_IN/__init__.py").decode())
+    lists = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) in (
+                "first_names_male", "first_names_female", "last_names"):
+            lists[node.targets[0].id] = ast.literal_eval(node.value)
+    uniform = lambda names: normalise({n: 1 for n in map(clean, names) if n})
+    return (uniform(lists["first_names_male"] + lists["first_names_female"]),
+            uniform(lists["last_names"]))
 
 
 def words():
@@ -171,9 +264,13 @@ def words():
     return lists["10"] | lists["20"], lists["10"] | lists["20"] | lists["35"]
 
 
-def mix(indian, us):
-    keys = indian.keys() | us.keys()
-    return {k: INDIAN_SHARE * indian.get(k, 0) + (1 - INDIAN_SHARE) * us.get(k, 0) for k in keys}
+def mix(parts):
+    """Weighted mixture of distributions: {name: p}."""
+    out = collections.Counter()
+    for dist, weight in parts:
+        for k, p in dist.items():
+            out[k] += weight * p
+    return dict(out)
 
 
 def cost(p):
@@ -219,10 +316,14 @@ def trigram_table(types):
 
 
 def build():
-    given = mix(indian_given(), us_given())
-    surnames = mix(indian_surnames(), us_surnames())
+    faker_given, faker_surnames = faker_indian()
+    given = mix([(indian_given(), GIVEN_MIX["in_rolls"]), (us_given(), GIVEN_MIX["us_ssa"]),
+                 (faker_given, GIVEN_MIX["faker_in"])])
+    surnames = mix([(indian_surnames(), SURNAME_MIX["in_secc"]), (indian_roll_surnames(), SURNAME_MIX["in_rolls"]),
+                    (us_surnames(), SURNAME_MIX["us_census"]), (faker_surnames, SURNAME_MIX["faker_in"])])
     given = {k: p for k, p in given.items()
-             if p / (p + surnames.get(k, 0)) >= SURNAME_FIRST_NOISE}
+             if p / (p + surnames.get(k, 0)) >= SURNAME_FIRST_NOISE
+             and (len(k) >= 3 or k in TWO_LETTER_GIVEN)}
     common, all_words = words()
     lines = ["# NameModel v1 - built by scripts/names/build_model.py; do not edit by hand.",
              "# Sources and their terms: scripts/names/README.md",

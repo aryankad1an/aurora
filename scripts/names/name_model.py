@@ -17,6 +17,7 @@ The posterior of each reading is summed by the given name it would greet, and
 a name is used only when its share reaches `threshold`. A given name has to be
 in the lists to be greeted: a name the model has never seen is never guessed.
 """
+import collections
 import math
 import re
 from pathlib import Path
@@ -51,6 +52,64 @@ class NameModel:
                 self.tri[section][key] = [(ord(c) - 33) * 0.2 for c in value]
         self.scale = self.const["scale"]
         self.threshold = self.const["threshold"]
+        self.learned = {"given": collections.Counter(), "surname": collections.Counter()}
+
+    # -- learning from the catalog ---------------------------------------------
+
+    def learn(self, people):
+        """Learn given names and surnames from the catalog's own name fields,
+        replacing anything learned before.
+
+        `people` are name fields as lowercase letter words, in the order
+        written, with notes, honorifics and rows naming a role already left
+        out. Only the first and last word are read.
+
+        A field teaches only when it's clear which way round it is. Fields are
+        written given name first (`learn_order` of the time) unless the listed
+        words say otherwise; a word the lists don't have leans neither way. One
+        reading has to be nine times likelier than the other, and one half has
+        to be listed in its role: "Arijit Sen" teaches Arijit (Sen is a listed
+        surname), "Singh Gurpreet" teaches Gurpreet, "Subhajit Paul" teaches
+        Subhajit even though Paul is a given name too. A common English word
+        teaches nothing unless the lists know it as a name. A name only the
+        catalog knows is greeted once it has been taught `catalog_min_count`
+        times; one odd record can't put a name in a greeting."""
+        self.learned = {"given": collections.Counter(), "surname": collections.Counter()}
+        learned = {"given": collections.Counter(), "surname": collections.Counter()}
+        for words in people:
+            if len(words) < 2 or words[0] == words[-1] or min(len(words[0]), len(words[-1])) < 3:
+                continue
+            a, b = words[0], words[-1]
+            order = self.const["learn_order"]
+            forward = order * self.p_public(self.given, a) * self.p_public(self.surname, b)
+            backward = (1 - order) * self.p_public(self.surname, a) * self.p_public(self.given, b)
+            if forward >= 9 * backward:
+                given, surname = a, b
+            elif backward >= 9 * forward:
+                given, surname = b, a
+            else:
+                continue
+            if given not in self.given and surname not in self.surname:
+                continue  # nothing anchors it
+            if self.teaches(given, self.given):
+                learned["given"][given] += 1
+            if self.teaches(surname, self.surname):
+                learned["surname"][surname] += 1
+        self.learned = learned
+
+    def p_public(self, table, w):
+        """A word's listed probability, or a role-neutral floor if unlisted."""
+        c = table.get(w)
+        return math.exp(-c / self.scale) if c is not None else self.const["learn_unlisted"]
+
+    def teaches(self, w, table):
+        return w in table or w not in self.words
+
+    def knows_given(self, w):
+        return w in self.given or self.learned["given"][w] >= self.const["catalog_min_count"]
+
+    def knows_surname(self, w):
+        return w in self.surname or self.learned["surname"][w] >= self.const["catalog_min_count"]
 
     # -- slot likelihoods ---------------------------------------------------
 
@@ -68,6 +127,13 @@ class NameModel:
             return 0.0
         c = table.get(w)
         listed = math.exp(-c / self.scale) if c is not None else 0.0
+        # Names the catalog taught, blended in by how much it has taught: the
+        # catalog is the population being greeted, but a small one.
+        counts = self.learned[kind]
+        n = sum(counts.values())
+        if n:
+            share = min(self.const["catalog_max"], n / (n + self.const["catalog_prior"]))
+            listed = (1 - share) * listed + share * counts.get(w, 0) / n
         oov = self.const[kind + "_oov"]
         return (1 - oov) * listed + oov * self.p_trigram("trigram_" + kind, w)
 
@@ -99,13 +165,14 @@ class NameModel:
 
     def calls(self, full, name):
         """Whether someone whose given name reads as `full` goes by `name`: the
-        same name, or a listed one that is `name` with a surname fused on
-        (Rakesh + kumar, Lakshmi + devi). Two given names fused (Nag + arjuna)
-        don't shorten: Nagarjuna isn't "Nag"."""
+        same name, or a known one that is `name` with a common surname fused on
+        (Rakesh + kumar, Lakshmi + devi, Srinivasa + rao). Anything else fused
+        doesn't shorten: Nagarjuna isn't "Nag", Lakshmanan isn't "Laksh"."""
         if full == name:
             return True
         rest = full[len(name):]
-        return full.startswith(name) and full in self.given and len(rest) >= 3 and rest in self.surname
+        return (full.startswith(name) and self.knows_given(full) and len(rest) >= 3
+                and rest in self.surname and math.exp(-self.surname[rest] / self.scale) >= self.const["compound_suffix"])
 
     # -- readings -----------------------------------------------------------
 
@@ -171,7 +238,7 @@ class NameModel:
         the threshold is used."""
         readings = self.readings(parts)
         best, support, closest = None, 0.0, 0.0
-        for name in sorted((g for g, _ in readings if g in self.given), key=len, reverse=True):
+        for name in sorted((g for g, _ in readings if g and self.knows_given(g)), key=len, reverse=True):
             s = sum(p for g, p in readings if g and self.calls(g, name))
             closest = max(closest, s)
             if s >= self.threshold:
@@ -207,3 +274,61 @@ def splits(text, k, cuts):
 def parts_of(local):
     """A mailbox's lowercase letter runs, split at separators and digits."""
     return [p for p in re.split(r"[^a-z]+", local.lower().split("+", 1)[0]) if p]
+
+
+# The app's `RecipientName` lists, for reading rows the way the app does.
+ROLE_WORDS = {
+    "hr", "info", "jobs", "job", "careers", "career", "recruiting", "recruitment", "recruiter",
+    "recruiters", "talent", "hiring", "contact", "hello", "team", "admin", "support", "apply",
+    "applications", "resume", "resumes", "cv", "office", "people", "staffing", "internships",
+    "internship", "campus", "noreply", "no-reply", "ta", "talentacquisition", "corporatehr", "hrd",
+    "hrteam", "placement", "placements", "operations", "dl", "mailer", "enquiry", "enquiries",
+    "sales", "backend", "frontend", "engineering", "tech", "india", "global", "services",
+    "connect", "reachouts", "outreach", "partnerships", "partner", "business", "marketing", "ops",
+}
+FILLER_WORDS = {"here", "official", "work", "mail", "me", "the", "real", "its", "im", "iam", "mr", "ms", "dr"}
+HONORIFICS = {"mr", "mrs", "ms", "miss", "mx", "dr", "prof", "professor", "sir", "madam", "madame",
+              "shri", "smt", "sri", "er", "ca", "capt", "rev", "hon"}
+
+
+def mailbox_parts(email):
+    """What `RecipientName.nameFromEmail` asks the classifier about: the
+    mailbox's a-z runs without role and filler words or the company's own
+    name, or None where it asks nothing (a role mailbox, leetspeak)."""
+    email = (email or "").lower().strip()
+    local, _, domain = email.partition("@")
+    local = local.split("+", 1)[0]
+    if not local or local in ROLE_WORDS or re.search(r"[a-z][0-9]+[a-z]", local):
+        return None
+    labels = set(domain.split("."))
+    words = [w for w in re.split(r"[^a-z]+", local) if w and w not in ROLE_WORDS
+             and w not in FILLER_WORDS and w not in labels]
+    return words or None
+
+
+def name_words(name, email):
+    """What `RecipientName.nameWords` teaches from a row: its name field as
+    lowercase a-z words, given name first where a comma says the surname
+    leads, or None (a mailbox copied over, an address, a role)."""
+    import unicodedata
+    text = (name or "").strip()
+    bare = lambda t: "".join(c for c in t.lower() if c.isalpha())  # as `RecipientName.bareLetters`
+    if not text or "@" in text or bare(text) == bare((email or "").split("@")[0]):
+        return None
+    text = re.sub(r"\([^)]*\)|\[[^]]*\]", " ", text)
+    head, comma, tail = (x.strip() for x in text.partition(","))
+    text = f"{tail} {head}" if comma and tail and len(head.split(" ")) == 1 else head
+    folded = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).lower()
+    words = []
+    for word in re.split(r"[ \t.\-]+", folded):
+        word = word.replace("'", "")
+        if not word:
+            continue
+        if not re.fullmatch(r"[a-z]+", word):
+            return None
+        if word in HONORIFICS:
+            continue
+        if word in ROLE_WORDS:
+            return None
+        words.append(word)
+    return words if len(words) >= 2 else None

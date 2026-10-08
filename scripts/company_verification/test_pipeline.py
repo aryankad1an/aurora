@@ -384,6 +384,23 @@ class Names(unittest.TestCase):
         self.assertNotIn("3", changed)                         # a greeting a person typed is kept
         self.assertNotIn("4", changed)                         # nothing guessed for an unreadable mailbox
 
+    def test_the_classifier_greets_rows_the_catalog_teaches_it_about(self):
+        tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
+            {"id": "1", "company_id": "c", "email": "asen@x.com", "name": "Arijit Sen", "greeting_name": None},
+            {"id": "2", "company_id": "c", "email": "adas@x.com", "name": "Arijit Das", "greeting_name": None},
+            {"id": "3", "company_id": "c", "email": "arijit@x.com", "name": "", "greeting_name": None},
+            {"id": "4", "company_id": "c", "email": "arijitdas@x.com", "name": "Arijitdas", "greeting_name": "Arijitdas"},
+            {"id": "5", "company_id": "c", "email": "zorvexa@x.com", "name": "", "greeting_name": None},
+            {"id": "6", "company_id": "c", "email": "arijit.k@x.com", "name": "Arijit Kumar", "greeting_name": None},
+        ]}
+        fixes, _, _ = vn.review(tables)
+        changed = {f["id"]: f for f in fixes}
+        self.assertEqual(changed["3"]["new_greeting_name"], "Arijit")
+        self.assertEqual(changed["4"]["new_greeting_name"], "Arijit")   # the importer's mailbox copy replaced
+        self.assertNotIn("5", changed)                                   # nothing known, nothing guessed
+        self.assertNotIn("6", changed)                                   # a usable name field is the app's job
+        self.assertNotIn("1", changed)
+
 
 if __name__ == "__main__":
     unittest.main()

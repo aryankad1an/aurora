@@ -24,6 +24,12 @@ conservative:
   A stored greeting that is only the mailbox copied over by an importer
   ("Talk2saravanan") or a one- or two-letter fragment is cleared; one a
   person typed is kept.
+- Where the `first.last` lexicon isn't sure, the app's own greeting classifier
+  (`scripts/names`) gets a say, taught every name field in this catalog first:
+  a row with no usable name and no greeting gets the greeting it is sure of
+  ("Arijit Sen" elsewhere in the catalog lets `arijit@` be greeted Arijit).
+  The app would reach the same greeting itself only if it had loaded those
+  other rows; storing it here makes it hold for every client.
 """
 import argparse
 import collections
@@ -38,6 +44,20 @@ import backup as backup_mod
 import supabase
 from domains import brand
 from verify_companies import DECISIONS, REPO, load_live, load_snapshot
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "names"))
+import name_model  # noqa: E402  the app's greeting classifier, reference implementation
+
+_MODEL = None
+
+
+def classifier(recruiters):
+    """The app's greeting classifier, taught every name field in the catalog."""
+    global _MODEL
+    if _MODEL is None:
+        _MODEL = name_model.NameModel()
+    _MODEL.learn([w for w in (name_model.name_words(r.get("name"), r.get("email")) for r in recruiters) if w])
+    return _MODEL
 
 ROLE = {
     "hr", "info", "jobs", "job", "careers", "career", "recruiting", "recruitment", "recruiter",
@@ -193,6 +213,7 @@ def machine_greeting(greet, local):
 
 def review(tables):
     lex = Lexicon(tables["recruiters"])
+    model = classifier([r for r in tables["recruiters"]])
     test_ids = {c["id"] for c in tables["companies"] if c["name"] in DECISIONS["test_companies"]}
     names = {c["id"]: c["name"] for c in tables["companies"]}
     fixes, flags = [], []
@@ -226,10 +247,19 @@ def review(tables):
             if (bad_greet or "name" in new) and target_greet and target_greet != greet:
                 new["greeting_name"] = target_greet
                 reason.append(f"greeting {greet or '(none)'!r} -> {target_greet!r}")
-        elif greet and machine_greeting(greet, local):
-            # Not sure who this is: greet no one rather than the mailbox.
-            new["greeting_name"] = None
-            reason.append(f"greeting {greet!r} cleared ({conf} confidence: {how})")
+        else:
+            # The lexicon isn't sure; the classifier, with the catalog learned, may be.
+            guess = None
+            parts = name_model.mailbox_parts(r["email"]) if not name or blob else None
+            if parts:
+                guess, sure = model.greeting(parts)
+            if guess and guess != greet and (not greet or machine_greeting(greet, local)):
+                new["greeting_name"] = guess
+                reason.append(f"greeting {greet or '(none)'!r} -> {guess!r} (classifier, {sure:.0%} sure)")
+            elif greet and machine_greeting(greet, local):
+                # Not sure who this is: greet no one rather than the mailbox.
+                new["greeting_name"] = None
+                reason.append(f"greeting {greet!r} cleared ({conf} confidence: {how})")
         # Names that disagree with a clean first.last address: report only.
         ts = tokens(local)
         if name and len(ts) == 2 and all(len(t) >= 3 for t in ts) and not (set(ts) & ROLE) \
