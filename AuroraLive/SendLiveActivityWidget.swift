@@ -5,9 +5,9 @@ import WidgetKit
 /// The mail queue on the Lock Screen and in the Dynamic Island: what's
 /// sending, how far it's got, and — when Gmail has asked the run to slow
 /// down — a countdown to when it carries on. Tapping it opens Activity's
-/// In Progress lane.
+/// Queued lane.
 struct SendLiveActivityWidget: Widget {
-    static let openURL = URL(string: "aurora://activity/in-progress")
+    static let openURL = URL(string: "aurora://activity/queued")
 
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: SendActivityAttributes.self) { context in
@@ -44,11 +44,19 @@ struct SendLiveActivityWidget: Widget {
                     .lineLimit(1)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
+                    // The bar, then who it's to: the count above already says
+                    // how many have gone, and the island has room for two
+                    // lines under the bar, not three.
                     VStack(alignment: .leading, spacing: 8) {
                         Meter(state: state, style: style)
-                        Detail(state: state, style: style)
+                        if state.recipient != nil {
+                            Recipient(state: state, style: style, compact: true)
+                        } else {
+                            Detail(state: state, style: style)
+                        }
                     }
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
                 }
             } compactLeading: {
                 Glyph(phase: state.phase, mark: context.attributes.mark, style: style, size: 14)
@@ -111,35 +119,28 @@ private enum Headline {
         case .done: state.failed == 0 ? "All sent" : "Done"
         }
     }
-
-    static func title(_ state: SendActivityAttributes.ContentState) -> String {
-        switch state.phase {
-        case .sending: "Sending · \(state.title)"
-        case .waiting: "Waiting on Gmail · \(state.title)"
-        case .pausing: "Pausing · \(state.title)"
-        case .paused: "Paused · \(state.title)"
-        case .done: state.failed == 0 ? "All sent · \(state.title)" : "Done · \(state.title)"
-        }
-    }
 }
 
+/// The Lock Screen and Notification Center: everything at once — what's
+/// happening, the batch, how far it's got (sent, failed, to go), and who the
+/// mail on its way is to, with their company and address.
 private struct LockScreenView: View {
     let attributes: SendActivityAttributes
     let state: SendActivityAttributes.ContentState
 
     var body: some View {
         let style = Style(attributes)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 Glyph(phase: state.phase, mark: attributes.mark, style: style, size: 18)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 40, height: 40)
                     .background(style.tint(state.phase).opacity(0.2), in: .rect(cornerRadius: 11, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(Headline.title(state))
+                    Status(state: state, style: style)
+                    Text(state.title)
                         .font(.headline)
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                    Detail(state: state, style: style)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Count(state: state, style: style)
@@ -147,9 +148,121 @@ private struct LockScreenView: View {
                     .lineLimit(1)
                     .fixedSize()
             }
-            Meter(state: state, style: style)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Meter(state: state, style: style)
+                Legend(state: state, style: style)
+            }
+
+            if state.recipient != nil {
+                Recipient(state: state, style: style, compact: false)
+            } else if state.phase != .done || state.note != nil {
+                Detail(state: state, style: style)
+            }
         }
         .padding(16)
+    }
+}
+
+/// What's happening, in the phase's colour: "Sending · mail 3 of 11",
+/// "Waiting on Gmail · retry in 0:20", "Paused · carries on at 7:00 PM".
+private struct Status: View {
+    let state: SendActivityAttributes.ContentState
+    let style: Style
+
+    var body: some View {
+        Group {
+            switch state.phase {
+            case .sending:
+                Text("Sending · mail \(min(state.done + 1, state.total)) of \(state.total)")
+            case .waiting:
+                if let until = state.resumesAt, until > .now {
+                    Text("Waiting on Gmail · retry in \(Text(timerInterval: Date.now...until, countsDown: true))")
+                } else {
+                    Text("Waiting on Gmail · retrying")
+                }
+            case .pausing:
+                Text("Pausing after this mail")
+            case .paused:
+                if let until = state.resumesAt {
+                    Text("Paused · carries on at \(until, style: .time)")
+                } else {
+                    Text("Paused")
+                }
+            case .done:
+                Text(state.failed == 0 ? "All sent" : "Finished · \(state.failed) failed")
+            }
+        }
+        .font(.caption.weight(.semibold))
+        .monospacedDigit()
+        .foregroundStyle(style.tint(state.phase))
+        .lineLimit(1)
+    }
+}
+
+/// Sent, failed and to go, each with its colour in the meter.
+private struct Legend: View {
+    let state: SendActivityAttributes.ContentState
+    let style: Style
+
+    var body: some View {
+        HStack(spacing: 12) {
+            item("\(state.sent) sent", style.reply)
+            if state.failed > 0 { item("\(state.failed) failed", style.attention) }
+            if state.toGo > 0 { item("\(state.toGo) to go", .white.opacity(0.35)) }
+        }
+        .font(.caption)
+        .foregroundStyle(.white.opacity(0.72))
+        .lineLimit(1)
+    }
+
+    private func item(_ text: String, _ color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(text)
+        }
+    }
+}
+
+/// Who the mail on its way is to — or, while the run waits, who's next —
+/// with their company and address.
+private struct Recipient: View {
+    let state: SendActivityAttributes.ContentState
+    let style: Style
+    /// The Dynamic Island's two plain lines, rather than the Lock Screen's card.
+    let compact: Bool
+
+    var body: some View {
+        let label = state.phase == .waiting ? "Next" : "To"
+        let who = [state.recipient, state.company].compactMap { $0 }.joined(separator: " · ")
+        HStack(spacing: 10) {
+            if !compact {
+                Image(systemName: state.phase == .waiting ? "clock.fill" : "envelope.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(style.tint(state.phase))
+                    .frame(width: 28, height: 28)
+                    .background(.white.opacity(0.1), in: Circle())
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(Text(label).foregroundStyle(.white.opacity(0.55))) \(who)")
+                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                if let email = state.recipientEmail {
+                    Text(email)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                        .truncationMode(.middle)
+                }
+            }
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(compact ? 0 : 10)
+        .background {
+            if !compact {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.07))
+            }
+        }
     }
 }
 

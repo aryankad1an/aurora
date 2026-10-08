@@ -56,9 +56,9 @@ struct MailSend: Decodable, Identifiable {
 
     /// When someone other than the sender first wrote back in that thread, and
     /// who. Nil while a send is still unanswered.
-    let repliedAt: Date?
-    let replyFrom: String?
-    let replySnippet: String?
+    var repliedAt: Date?
+    var replyFrom: String?
+    var replySnippet: String?
 
     var hasReplied: Bool { repliedAt != nil }
 

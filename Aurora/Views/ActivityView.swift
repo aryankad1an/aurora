@@ -2,11 +2,11 @@ import SwiftUI
 
 /// The Activity tab: every mail, from the moment it's queued to the answer.
 ///
-/// Five lanes, in the order a mail moves through them:
+/// Four lanes, in the order a mail moves through them:
 ///
-/// - **Queued** — batches waiting for their time or their turn;
-/// - **In Progress** — sending, paused part-way, or just finished, with every
-///   control the queue has (the shelf and the Live Activity open this lane);
+/// - **Queued** — the mail queue: sending, paused, ready, scheduled and just
+///   finished, with every control the queue has (the shelf and the Live
+///   Activity open this lane);
 /// - **Sent** — every mail sent, hung off a time axis and grouped by day;
 /// - **Replied** — the ones answered, in the order the answers came;
 /// - **Bounced** — mail that came back, to fix or rule out.
@@ -20,7 +20,7 @@ struct ActivityView: View {
     /// ask Gmail for one rather than waiting on the launch/foreground sync.
     @Environment(ReplySync.self) private var replySync
 
-    enum Lane: Hashable { case queued, inProgress, sent, replied, bounced }
+    enum Lane: Hashable { case queued, sent, replied, bounced }
 
     @State private var lane: Lane = .sent
     @State private var searchText = ""
@@ -66,7 +66,6 @@ struct ActivityView: View {
                 Divider()
                 Picker(selection: $lane.animation(Theme.Motion.bouncy)) {
                     Label("Queued", systemImage: "tray").tag(Lane.queued)
-                    Label("In Progress", systemImage: "paperplane").tag(Lane.inProgress)
                     Label("Sent", systemImage: "tray.full").tag(Lane.sent)
                     Label("Replied", systemImage: "arrowshape.turn.up.left").tag(Lane.replied)
                     Label("Bounced", systemImage: "exclamationmark.triangle").tag(Lane.bounced)
@@ -92,11 +91,11 @@ struct ActivityView: View {
                 Text(bounceCheck?.message ?? "")
             }
             // The shelf, the Live Activity and notifications open the queue here.
-            .task(id: mailQueue.openRequest) {
-                guard let request = mailQueue.openRequest else { return }
+            .task(id: mailQueue.isOpenRequested) {
+                guard mailQueue.isOpenRequested else { return }
                 openBatch = nil
-                withAnimation(Theme.Motion.bouncy) { lane = request == .queued ? .queued : .inProgress }
-                mailQueue.openRequest = nil
+                withAnimation(Theme.Motion.bouncy) { lane = .queued }
+                mailQueue.isOpenRequested = false
             }
             .validityAlert($pendingValidity) { change in
                 Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }
@@ -129,21 +128,19 @@ struct ActivityView: View {
                 .padding(.horizontal, 4)
                 .cardRow(top: 6, bottom: 6)
 
-            LaneBar(lanes: [
-                .init(value: .queued, title: "Queued", count: queueCount(.queued)),
-                .init(value: .inProgress, title: "In Progress", count: queueCount(.inProgress), countTint: .clay),
-                .init(value: .sent, title: "Sent"),
-                .init(value: .replied, title: "Replied"),
-                .init(value: .bounced, title: "Bounced", count: bouncedCount, countTint: .statusInvalid)
+            // The system's segmented control: a Liquid Glass thumb that
+            // slides between the lanes.
+            SegmentedSelector(segments: [
+                (.queued, queuedCount > 0 ? "Queued \(queuedCount)" : "Queued"),
+                (.sent, "Sent"),
+                (.replied, "Replied"),
+                (.bounced, bouncedCount > 0 ? "Bounced \(bouncedCount)" : "Bounced")
             ], selection: $lane)
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 10, trailing: 0))
+                .cardRow(top: 4, bottom: 10)
 
             switch lane {
-            case .queued, .inProgress:
-                QueueLaneSections(destination: lane == .queued ? .queued : .inProgress,
-                                  query: query,
+            case .queued:
+                QueueLaneSections(query: query,
                                   onOpen: { openBatch = $0 },
                                   onRemove: { batch in mailQueue.remove(batch) { removingBatch = $0 } })
             case .bounced:
@@ -193,13 +190,8 @@ struct ActivityView: View {
     private var bounced: [BouncedContact] { jobStore.bouncedContacts(from: replySync) }
     private var bouncedCount: Int { bounced.count }
 
-    /// Batches in a queue lane that aren't finished, for its count.
-    private func queueCount(_ destination: QueueDestination) -> Int {
-        mailQueue.batches.count { batch in
-            let phase = mailQueue.phase(of: batch)
-            return phase != .finished && phase.group.destination == destination
-        }
-    }
+    /// Batches in the queue with mail still to go, for the lane's count.
+    private var queuedCount: Int { mailQueue.batches.count(where: \.hasWork) }
 
     /// Look for one mail's bounce now, and say what was found.
     private func checkBounce(_ entry: ActivityEntry) async {

@@ -107,6 +107,73 @@ struct BounceParsingTests {
         check(BounceParsing.isBounceSender("Microsoft Outlook <MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e@corp.example>"),
               "Exchange's service account is a bounce sender")
 
+        // "No longer in service": answers from the recipient's side, not the daemon
+        let dead: [(String?, String, String)] = [
+            (nil, "The email address you are trying to reach is no longer in service.", "no longer in service"),
+            ("Automatic reply: Hello", "Thank you for your email. Jane Doe is no longer with Acme. Please contact hr@acme.com.", "no longer with the company"),
+            ("Auto: Re: intro", "This mailbox is no longer monitored. For recruiting queries write to careers@acme.com", "mailbox no longer monitored"),
+            (nil, "Jane has left the company. Your mail has not been forwarded.", "has left the company"),
+            (nil, "I am no longer working at Acme, so I can't help with this, sorry!", "a person saying they've left"),
+            (nil, "This email account has been deactivated.", "account deactivated"),
+            (nil, "Please note this inbox is not monitored.", "inbox not monitored"),
+            (nil, "The email address jane@acme.com is no longer valid.", "address no longer valid"),
+            (nil, "This address is no longer in use. Please update your records.", "no longer in use"),
+            ("Undeliverable", "Jane\u{2019}s mailbox is no longer active", "curly apostrophe, no longer active"),
+            (nil, "Jane is no longer employed by Acme Corp.", "no longer employed"),
+        ]
+        for (subject, text, name) in dead {
+            check(BounceParsing.isDeadAddressNotice(subject: subject, text: text), "dead address: \(name)")
+        }
+        let alive: [(String?, String, String)] = [
+            ("Automatic reply: Out of office", "I'm out of the office until Monday with limited access to email. I will respond when I'm back.", "out of office"),
+            ("Out of Office", "I am on annual leave and my email is not monitored. I will be back on 12 October.", "away, and not monitored until back"),
+            (nil, "Thanks Maya! Unfortunately the new-grad role is no longer available, but I'll keep you posted.", "a role no longer available isn't a dead address"),
+            (nil, "Hi Maya, happy to chat. Are you free on Thursday?", "a real reply"),
+            (nil, "Thanks for reaching out — I've passed your resume to the team.", "another real reply"),
+            (nil, "", "nothing at all"),
+        ]
+        for (subject, text, name) in alive {
+            check(!BounceParsing.isDeadAddressNotice(subject: subject, text: text), "not a dead address: \(name)")
+        }
+        check(BounceParsing.reason(in: "The email address you are trying to reach is no longer in service.") == .noLongerThere,
+              "no longer in service reads as its own reason")
+        check(BounceParsing.reason(in: "550 5.1.1 The email account that you tried to reach does not exist.") == .addressNotFound,
+              "a daemon's 'does not exist' is still address not found")
+        check(BounceParsing.reason(in: "Per company policy, this mailbox is no longer monitored.") == .noLongerThere,
+              "'policy' in a no-longer-monitored answer doesn't make it a rejection")
+        check(BounceParsing.reason(in: "552 5.2.2 The recipient's mailbox is full") == .mailboxFull,
+              "mailbox full is unchanged")
+
+        // Sender addresses
+        check(BounceParsing.senderAddress("Jane Doe <Jane@Acme.com>") == "jane@acme.com", "sender in brackets")
+        check(BounceParsing.senderAddress("jane@acme.com") == "jane@acme.com", "bare sender")
+        check(BounceParsing.senderAddress("Acme Recruiting") == nil, "no address in the sender")
+
+        // Who a "no longer in service" message is about
+        let day: TimeInterval = 24 * 3600
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let mailed = [
+            BounceParsing.Mailed(contactID: "jane", address: "jane@acme.com", sentAt: now - day, threadID: "t1"),
+            BounceParsing.Mailed(contactID: "bob", address: "bob@acme.com", sentAt: now - 10 * day, threadID: "t2"),
+            BounceParsing.Mailed(contactID: "sam", address: "sam@other.example", sentAt: now - day, threadID: "t3"),
+            BounceParsing.Mailed(contactID: "late", address: "late@acme.com", sentAt: now + day, threadID: "t4"),
+        ]
+        check(BounceParsing.matchDeadAddressNotice(sender: "x@elsewhere.example", text: nil, threadID: "t3", at: now, mailed: mailed) == "sam",
+              "matched by its thread")
+        check(BounceParsing.matchDeadAddressNotice(sender: "Bob <bob@acme.com>", text: "no longer in service", threadID: "zz", at: now, mailed: mailed) == "bob",
+              "matched by the dead mailbox answering for itself, outside the thread")
+        check(BounceParsing.matchDeadAddressNotice(sender: "it@acme.com", text: "jane@acme.com is no longer monitored", threadID: nil, at: now, mailed: mailed) == "jane",
+              "matched by the address it names")
+        check(BounceParsing.matchDeadAddressNotice(sender: "noreply@acme.com", text: "This person has left the company.", threadID: nil, at: now, mailed: mailed) == "jane",
+              "matched by domain: one person there mailed in the last three days")
+        check(BounceParsing.matchDeadAddressNotice(sender: "noreply@acme.com", text: "This person has left the company.", threadID: nil, at: now + 20 * day, mailed: mailed) == nil,
+              "by domain, nobody mailed recently: no match")
+        check(BounceParsing.matchDeadAddressNotice(sender: "late@acme.com", text: "no longer in service", threadID: nil, at: now, mailed: mailed) == nil,
+              "someone mailed after it arrived isn't matched")
+        let twoAtAcme = mailed + [BounceParsing.Mailed(contactID: "ann", address: "ann@acme.com", sentAt: now - 2 * day, threadID: "t5")]
+        check(BounceParsing.matchDeadAddressNotice(sender: "noreply@acme.com", text: "has left the company", threadID: nil, at: now, mailed: twoAtAcme) == nil,
+              "by domain, two people mailed recently: can't tell, no match")
+
         print("Bounce parsing: \(passed) passed, \(failures) failed")
         exit(failures == 0 ? 0 : 1)
     }

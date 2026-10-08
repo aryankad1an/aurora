@@ -274,18 +274,18 @@ struct RootView: View {
                 // has been seen once the queue is open.
                 SendQueueBar {
                     mailQueue.acknowledge()
-                    mailQueue.openRequest = .inProgress
+                    mailQueue.isOpenRequested = true
                 }
             }
             .dueBatchSummary()
             // The queue lives in Activity: the shelf, the Live Activity and a
             // notification all open it there.
-            .onChange(of: mailQueue.openRequest) { _, request in
-                if request != nil { selectedTab = .activity }
+            .onChange(of: mailQueue.isOpenRequested) { _, requested in
+                if requested { selectedTab = .activity }
             }
             .onOpenURL { url in
                 guard url.scheme == "aurora", url.host() == "activity" else { return }
-                mailQueue.openRequest = url.lastPathComponent == "queued" ? .queued : .inProgress
+                mailQueue.isOpenRequested = true
             }
             .onChange(of: notifications.openedBatchID) { openTappedBatch() }
             // The shelf appearing pushes the tab bar up — a real object arriving on

@@ -77,9 +77,12 @@ final class SendLiveActivity {
         let cooldown = queue.cooldown?.batchID == batch.id ? queue.cooldown : nil
         let phase: SendActivityAttributes.ContentState.Phase =
             cooldown != nil ? .waiting : queue.isStopping ? .pausing : .sending
-        let inFlight = batch.mails.first { if case .sending = $0.status { true } else { false } }
+        // The mail on its way — or, while waiting, the one that goes next.
+        let current = batch.mails.first { if case .sending = $0.status { true } else { false } }
+            ?? batch.mails.first(where: \.status.isWaiting)
         return .init(phase: phase, title: batch.title, sent: batch.sent, failed: batch.failed,
-                     total: batch.mails.count, recipient: inFlight?.displayName,
+                     total: batch.mails.count, recipient: current?.displayName,
+                     recipientEmail: current?.recipient, company: current?.company,
                      resumesAt: cooldown?.until, note: cooldown?.reason)
     }
 
@@ -88,7 +91,8 @@ final class SendLiveActivity {
         guard let outcome = queue.outcome, let batch = queue.batch(outcome.batchID) else { return nil }
         return .init(phase: outcome.isPaused ? .paused : .done, title: batch.title,
                      sent: batch.sent, failed: batch.failed, total: batch.mails.count,
-                     recipient: nil, resumesAt: batch.resumeAt, note: outcome.stoppedBecause)
+                     recipient: nil, recipientEmail: nil, company: nil,
+                     resumesAt: batch.resumeAt, note: outcome.stoppedBecause)
     }
 
     private static func rgb(_ color: Color) -> SendActivityAttributes.RGB {

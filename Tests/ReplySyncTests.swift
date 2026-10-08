@@ -136,6 +136,32 @@ struct GmailThreadMock: Codable {
             return sender.contains("mailer-daemon") || sender.contains("postmaster")
         }
 
+        /// Copy of `BounceParsing.isDeadAddressNotice`: an answer from their
+        /// side saying the address is no longer in service.
+        var isDeadAddressNotice: Bool {
+            let body = [header("Subject"), snippet].compactMap { $0 }.joined(separator: " ")
+                .replacingOccurrences(of: "\u{2019}", with: "'").lowercased()
+            guard !body.isEmpty else { return false }
+            func has(_ phrases: [String]) -> Bool { phrases.contains { body.contains($0) } }
+            let dead = ["no longer in service", "no longer in use", "no longer active", "no longer monitored",
+                        "no longer being monitored", "no longer checked", "no longer with ", "no longer works",
+                        "no longer working", "no longer employed", "no longer part of", "no longer associated",
+                        "no longer at ", "has left the", "have left the", "left the company", "left the organization",
+                        "left the organisation", "left the firm", "decommissioned", "deactivated"]
+            let inactive = ["not monitored", "not being monitored", "is inactive", "has been disabled", "is disabled",
+                            "has been closed", "is closed"]
+            let away = ["out of office", "out of the office", "on leave", "on vacation", "on holiday", "annual leave",
+                        "parental leave", "maternity leave", "paternity leave", "will return", "will be back",
+                        "i'll be back", "back on", "back in the office", "away until", "away from", "limited access",
+                        "returning on", "currently travelling", "currently traveling"]
+            let addressPhrases = ["no longer valid", "no longer exists", "no longer available", "no longer accessible", "not in use"]
+            let addressWords = ["address", "mailbox", "email", "e-mail", "inbox", "account"]
+            if has(dead) { return true }
+            if has(away) { return false }
+            if has(inactive) { return true }
+            return has(addressPhrases) && has(addressWords)
+        }
+
         private func header(_ name: String) -> String? {
             payload?.headers?.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value
         }
@@ -161,6 +187,8 @@ func parseThread(data: Data, after sentAt: Date?) throws -> ParsedThreadResponse
         guard !message.isOurs else { continue }
         if let sentAt, message.date <= sentAt { continue }
         if message.isBounce { sawBounce = true; continue }
+        // "No longer in service" from their side reads like a reply; it's a bounce.
+        if message.isDeadAddressNotice { sawBounce = true; continue }
         if message.isAutomated { continue }
         guard let from = message.from, !from.isEmpty else { continue }
         return .reply(at: message.date,
@@ -644,6 +672,62 @@ class ReplySyncTestSuite {
             let data = try JSONEncoder().encode(mock)
             let result = try parseThread(data: data, after: sendDate)
             try assertEqual(result, .bounce)
+        }
+
+        await runTest("Send -> 'no longer in service' auto-answer -> Bounce, not a reply") {
+            let mock = GmailThreadMock(messages: [
+                .init(id: "m1", labelIds: ["SENT"], snippet: "Cold email", internalDate: "1000000",
+                      payload: .init(headers: [.init(name: "From", value: "me@gmail.com")])),
+                .init(id: "m2", labelIds: ["INBOX"], snippet: "The email address you are trying to reach is no longer in service.",
+                      internalDate: "1100000",
+                      payload: .init(headers: [.init(name: "From", value: "jane@corp.com")]))
+            ])
+            let result = try parseThread(data: try JSONEncoder().encode(mock), after: sendDate)
+            try assertEqual(result, .bounce)
+        }
+
+        await runTest("Send -> colleague: 'Jane has left the company' -> Bounce") {
+            let mock = GmailThreadMock(messages: [
+                .init(id: "m1", labelIds: ["SENT"], snippet: "Cold email", internalDate: "1000000",
+                      payload: .init(headers: [.init(name: "From", value: "me@gmail.com")])),
+                .init(id: "m2", labelIds: ["INBOX"], snippet: "Hi, Jane has left the company and this inbox is closed.",
+                      internalDate: "1100000",
+                      payload: .init(headers: [.init(name: "From", value: "Front Desk <office@corp.com>")]))
+            ])
+            let result = try parseThread(data: try JSONEncoder().encode(mock), after: sendDate)
+            try assertEqual(result, .bounce)
+        }
+
+        await runTest("Send -> 'no longer monitored' -> real reply from a colleague -> Reply wins") {
+            let mock = GmailThreadMock(messages: [
+                .init(id: "m1", labelIds: ["SENT"], snippet: "Cold email", internalDate: "1000000",
+                      payload: .init(headers: [.init(name: "From", value: "me@gmail.com")])),
+                .init(id: "m2", labelIds: ["INBOX"], snippet: "This mailbox is no longer monitored.", internalDate: "1100000",
+                      payload: .init(headers: [.init(name: "From", value: "jane@corp.com")])),
+                .init(id: "m3", labelIds: ["INBOX"], snippet: "Hi Aryan, I took over Jane's roles — happy to chat!", internalDate: "1200000",
+                      payload: .init(headers: [.init(name: "From", value: "sam@corp.com")]))
+            ])
+            let result = try parseThread(data: try JSONEncoder().encode(mock), after: sendDate)
+            if case .reply(_, let from, _) = result {
+                try assertEqual(from, "sam@corp.com")
+            } else {
+                throw TestFailure(message: "Expected the colleague's reply", file: #file, line: #line)
+            }
+        }
+
+        await runTest("Send -> out-of-office saying mail isn't monitored -> Silent, not a bounce") {
+            let mock = GmailThreadMock(messages: [
+                .init(id: "m1", labelIds: ["SENT"], snippet: "Cold email", internalDate: "1000000",
+                      payload: .init(headers: [.init(name: "From", value: "me@gmail.com")])),
+                .init(id: "m2", labelIds: ["INBOX"], snippet: "I'm on annual leave; email is not monitored. I will be back on Monday.",
+                      internalDate: "1100000",
+                      payload: .init(headers: [
+                        .init(name: "From", value: "jane@corp.com"),
+                        .init(name: "Auto-Submitted", value: "auto-replied")
+                      ]))
+            ])
+            let result = try parseThread(data: try JSONEncoder().encode(mock), after: sendDate)
+            try assertEqual(result, .silent)
         }
 
         await runTest("Send -> Contact Reply -> User Replies Back -> First Reply Remains") {

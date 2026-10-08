@@ -43,14 +43,18 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
         var sent: Int
         var failed: Int
         var total: Int
-        /// Who the mail on its way is to.
+        /// Who the mail on its way is to (or, while waiting, the one that
+        /// goes next): their name, address and company.
         var recipient: String?
+        var recipientEmail: String?
+        var company: String?
         /// When a rate-limit wait ends, or a paused batch carries on by itself.
         var resumesAt: Date?
         /// One line on why it's waiting or stopped.
         var note: String?
 
         var done: Int { sent + failed }
+        var toGo: Int { max(0, total - done) }
         var fraction: Double { total == 0 ? 0 : min(1, Double(done) / Double(total)) }
     }
 }

@@ -28,14 +28,6 @@ import UIKit
 ///
 /// The queue holds no references to the auth or data stores; `sender`,
 /// `verifier` and `onRecord` are supplied by `RootView`, which owns both.
-/// Activity's two lanes for the queue.
-enum QueueDestination: Equatable {
-    /// Waiting for their time or their turn.
-    case queued
-    /// Sending, paused part-way, or just finished.
-    case inProgress
-}
-
 enum MailQueueError: LocalizedError {
     case noTransport
 
@@ -112,10 +104,10 @@ final class MailQueue {
     /// Due batches the user has put off for this session with "Not Now". Still
     /// due, and still in the queue — just not asked about again until reopened.
     private(set) var snoozed: Set<UUID> = []
-    /// Where in Activity the queue was asked to be shown — by the shelf, the
-    /// Live Activity, or a notification. `RootView` switches to Activity and
-    /// Activity opens that lane, then clears it.
-    var openRequest: QueueDestination?
+    /// The queue was asked to be shown — by the shelf, the Live Activity, or
+    /// a link. `RootView` switches to Activity and Activity opens its Queued
+    /// lane, then clears it.
+    var isOpenRequested = false
 
     /// The run is sitting out a Gmail rate limit: which batch, until when, and
     /// what Gmail said. Nil while sending normally.

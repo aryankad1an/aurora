@@ -485,6 +485,15 @@ enum SupabaseAPI {
                         body: body)
     }
 
+    /// Take back a reply that wasn't one — an auto-answer saying the address
+    /// is no longer in service, recorded as a reply before those were known.
+    static func clearReply(sendID: String) async throws {
+        let body: [String: Any] = ["replied_at": NSNull(), "reply_from": NSNull(), "reply_snippet": NSNull()]
+        try await write(method: "PATCH", path: "mail_sends",
+                        query: [URLQueryItem(name: "id", value: "eq.\(sendID)")],
+                        body: body)
+    }
+
     // MARK: - Profile (per Gmail user)
 
     static func fetchProfile(email: String) async throws -> Profile? {

@@ -16,6 +16,8 @@ extension BounceReason {
             "The mailbox exists but is full. It may start accepting mail again, so this one is worth a second try later."
         case .rejected:
             "Their server refused the mail — often a spam filter or a company policy rather than a dead address."
+        case .noLongerThere:
+            "Their side answered that this address is no longer in service — the person has likely left. Find their new address, or mark this one invalid."
         case .other:
             "The mail couldn't be delivered. The server's own message is below."
         }
@@ -25,7 +27,7 @@ extension BounceReason {
     /// mailbox or a refusal it often isn't, and the screen says so.
     var suggestsInvalid: Bool {
         switch self {
-        case .addressNotFound, .domainNotFound, .other: true
+        case .addressNotFound, .domainNotFound, .noLongerThere, .other: true
         case .mailboxFull, .rejected: false
         }
     }

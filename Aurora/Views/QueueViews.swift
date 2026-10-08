@@ -63,18 +63,11 @@ enum BatchPhase: Equatable {
     var needsUser: Bool { self == .due || self == .paused }
 }
 
-/// How Activity groups batches inside its two queue lanes, in the order
-/// they're listed.
+/// How Activity's Queued lane groups batches, in the order they're listed:
+/// what's going now, what's waiting on you, what's next, what's done.
 enum QueueGroup: Int, CaseIterable, Identifiable {
-    case due, waiting, scheduled, sending, paused, finished
+    case sending, due, paused, waiting, scheduled, finished
     var id: Int { rawValue }
-
-    var destination: QueueDestination {
-        switch self {
-        case .due, .waiting, .scheduled: .queued
-        case .sending, .paused, .finished: .inProgress
-        }
-    }
 
     var title: String {
         switch self {
@@ -159,14 +152,14 @@ extension Date {
     }
 }
 
-/// One of Activity's queue lanes, as list rows: Queued (ready, next in line,
-/// scheduled) or In Progress (sending, paused, finished) — every batch as a
-/// card, grouped under the app's section labels, opening to its own screen.
+/// Activity's Queued lane, as list rows: the queue in figures, then every
+/// batch as a card — sending, ready to send, paused, next in line,
+/// scheduled, finished — grouped under the app's section labels, each opening
+/// to its own screen.
 ///
 /// Rows only: Activity owns the list, the navigation, the search and the
 /// confirmations (`queueAlerts`).
 struct QueueLaneSections: View {
-    let destination: QueueDestination
     let query: String
     let onOpen: (UUID) -> Void
     let onRemove: (MailBatch) -> Void
@@ -174,12 +167,10 @@ struct QueueLaneSections: View {
     @Environment(MailQueue.self) private var queue
 
     var body: some View {
-        let batches = Self.ordered(queue.batches).filter { batch in
-            queue.phase(of: batch).group.destination == destination && matches(batch)
-        }
+        let batches = Self.ordered(queue.batches).filter(matches)
         let grouped = Dictionary(grouping: batches) { queue.phase(of: $0).group }
 
-        if destination == .inProgress && !batches.isEmpty {
+        if !batches.isEmpty {
             QueueOverview(batches: batches)
                 .cardRow(top: 0, bottom: 6)
         }
@@ -189,7 +180,7 @@ struct QueueLaneSections: View {
                 .cardRow()
         }
 
-        ForEach(QueueGroup.allCases.filter { $0.destination == destination }) { group in
+        ForEach(QueueGroup.allCases) { group in
             if let items = grouped[group] {
                 Section {
                     ForEach(items) { batch in
@@ -221,12 +212,9 @@ struct QueueLaneSections: View {
         if !query.isEmpty {
             InlineEmptyState(title: "Nothing here", systemImage: "line.3.horizontal.decrease",
                              message: "No batch or person in it matches the search.")
-        } else if destination == .queued {
-            InlineEmptyState(title: "Nothing queued", systemImage: "tray",
-                             message: "Mail you schedule waits here for its time, and mail behind a batch that's sending waits for its turn.")
         } else {
-            InlineEmptyState(title: "Nothing sending", systemImage: "paperplane",
-                             message: "Mail on its way shows here, with how far it's got — and comes back paused if the app closes midway.")
+            InlineEmptyState(title: "Nothing queued", systemImage: "tray",
+                             message: "Mail you send or schedule waits here until it's gone — with how far it's got, and paused if the app closes midway.")
         }
     }
 
@@ -357,8 +345,8 @@ extension MailQueue {
 
 // MARK: - Overview
 
-/// What's in progress in three figures — set the way the scheduled-mail sheet
-/// sets its own — and how far it's got.
+/// The queue in three figures — set the way the scheduled-mail sheet sets
+/// its own — and how far it's got.
 private struct QueueOverview: View {
     let batches: [MailBatch]
 

@@ -27,21 +27,24 @@ through the Gmail API using Google OAuth.
   the app closing, can be paused and resumed, and can hold batches scheduled for
   later. When Gmail rate-limits a send, the queue waits and tries the same mail
   again instead of failing it. See [How sending works](#how-sending-works).
-- **Live Activity.** While mail is sending, the Lock Screen and Dynamic Island
-  show the batch, how many have gone, who's next, and a countdown when Gmail
-  has asked the queue to slow down. Tapping it opens Activity's In Progress
-  lane.
+- **Live Activity.** While mail is sending, the Lock Screen, Notification
+  Center and Dynamic Island show what the queue is doing ("Sending · mail 4 of
+  6", "Waiting on Gmail · retry in 0:26"), a progress bar with sent, failed
+  and to-go counts, and who the mail is going to: their name, company and
+  address. See [Live Activity](#live-activity).
 - **Reply tracking.** Each send records its Gmail thread. The app reads those
   threads to find replies, skipping auto-replies and bounces.
 - **Bounce detection.** Mail that comes back undelivered is found in its thread
   or in the inbox, matched to the exact send by the `Message-ID` the failure
-  notice quotes, and listed with the reason its status code gives. Any sent
+  notice quotes, and listed with the reason its status code gives. Answers
+  from their side saying the address is no longer in service, or the person
+  has left, count too, in the thread or not. Any sent
   mail can also be checked on its own, from its menu in Activity or its page.
-- **Activity.** Every mail from queued to answered, in five lanes: Queued
-  (scheduled, or waiting its turn), In Progress (sending, paused or just
-  finished, with every queue control), Sent (by day), Replied and Bounced. The
-  Bounced lane lists the addresses that bounced, with a button to mark each (or
-  all) invalid; the tab shows a badge while any are waiting.
+- **Activity.** Every mail from queued to answered, in four lanes: Queued (the
+  mail queue: sending, paused, ready, scheduled or just finished, with every
+  queue control), Sent (by day), Replied and Bounced. The Bounced lane lists the
+  addresses that bounced, with a button to mark each (or all) invalid; the tab
+  shows a badge while any are waiting.
 - **Themes.** Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and
   Gilded. Each changes the colours, the chart that moves behind every screen,
   the launch screen and the app icon. A new theme spreads across the screen
@@ -66,20 +69,19 @@ Taken from a demo account. The companies, people and replies are made up.
     <td align="center" width="50%"><img src="docs/screenshots/templates.png" alt="Templates" width="280"><br><sub><b>Templates.</b> Each one's placeholders and whether it's ready.</sub></td>
   </tr>
   <tr>
-    <td align="center" width="50%"><img src="docs/screenshots/queued.png" alt="Queued" width="280"><br><sub><b>Queued.</b> Batches waiting for their time, or for your go-ahead.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/in-progress.png" alt="In Progress" width="280"><br><sub><b>In Progress.</b> A batch waiting out a Gmail rate limit, and one paused until a set time.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/queued.png" alt="Queued" width="280"><br><sub><b>Queued.</b> The mail queue in Activity: a batch waiting out a Gmail rate limit, and one ready to send.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/live-activity.png" alt="Live Activity" width="280"><br><sub><b>Live Activity.</b> Status, progress, and the company and address the mail is going to.</sub></td>
   </tr>
   <tr>
-    <td align="center" width="50%"><img src="docs/screenshots/live-activity.png" alt="Live Activity" width="280"><br><sub><b>Live Activity.</b> The Dynamic Island counting down to the retry.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/activity.png" alt="Sent" width="280"><br><sub><b>Sent.</b> Every mail sent, by day, with replies marked.</sub></td>
-  </tr>
-  <tr>
     <td align="center" width="50%"><img src="docs/screenshots/reply.png" alt="Reply" width="280"><br><sub><b>Reply.</b> What they said, above the mail that was sent.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/bounced.png" alt="Bounced" width="280"><br><sub><b>Bounced.</b> Addresses that came back, each with its reason.</sub></td>
   </tr>
   <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/bounced.png" alt="Bounced" width="280"><br><sub><b>Bounced.</b> Addresses that came back, including one whose company answered that it's no longer in service.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/bounce-detail.png" alt="Bounce detail" width="280"><br><sub><b>Bounce.</b> The server's own message, and ways to fix it.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/themes.png" alt="Themes" width="280"><br><sub><b>Themes.</b> Each one live, with its own chart, colours and icon.</sub></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><img src="docs/screenshots/themes.png" alt="Themes" width="280"><br><sub><b>Themes.</b> Each one live, with its own chart, colours and icon.</sub></td>
   </tr>
 </table>
 
@@ -120,18 +122,43 @@ Sends are written to the `mail_sends` history every 5 mails. Anything not yet
 written when the app closes is written the next time it opens.
 
 The shelf above the tab bar shows what the queue is doing (sending, paused,
-due, scheduled, or the last result). Tapping it opens Activity's In Progress
-lane; scheduled and waiting batches are under Queued. There each batch can be
+due, scheduled, or the last result). Tapping it opens Activity's Queued lane,
+where every batch is listed by what it's doing. There each batch can be
 paused, resumed, rescheduled, retried or removed (Activity → ⋯ → Clear Queue
 empties it). Each batch lists the saved copies of its templates (flagged if the
 template has been edited or deleted in Templates since), each person's row says
 which one their mail is written from, and any mail can be opened to read
 exactly what was or will be sent.
 
-While a run is going, a Live Activity (the `AuroraLive` widget extension, fed
-by `SendLiveActivity`) shows the same progress on the Lock Screen and in the
-Dynamic Island, in the current theme's colours. It ends showing how the run
-finished.
+### Live Activity
+
+<p align="center">
+  <img src="docs/screenshots/live-activity-lock.png" alt="Live Activity on the Lock Screen" width="420"><br>
+  <img src="docs/screenshots/live-activity-expanded.png" alt="Expanded Dynamic Island" width="420"><br>
+  <img src="docs/screenshots/live-activity-compact.png" alt="Compact Dynamic Island" width="420">
+</p>
+
+While the queue is sending, a Live Activity shows the run outside the app. It
+starts with a run, follows it from batch to batch, and ends showing how the run
+finished (a clean run stays on the Lock Screen for 15 minutes).
+
+- **Lock Screen and Notification Center:** the status line in the theme's
+  colour ("Sending · mail 4 of 6", "Waiting on Gmail · retry in 0:26",
+  "Paused · carries on at 7:00 PM", "Finished · 1 failed"), the batch's name,
+  a count ("3/6"), a progress bar with sent, failed and to-go counts, and a card
+  saying who the mail is going to: their name, company and address. While Gmail
+  has the run waiting, the card shows who goes next instead.
+- **Dynamic Island, expanded:** the status, the batch, the bar, and who it's
+  to (or who's next).
+- **Dynamic Island, compact:** the theme's paper plane and the count, or an
+  hourglass and the countdown while waiting.
+
+Tapping it opens Activity's Queued lane. It's drawn by the `AuroraLive` widget
+extension from `SendActivityAttributes` (in `Shared/`, compiled into both
+targets), and `SendLiveActivity` in the app starts, updates and ends it as the
+queue changes. The extension can't read the app's theme, so the theme's colours
+and mark travel with the activity. iOS asks once whether to allow Live
+Activities from Aurora; they can be turned off in Settings › Aurora.
 
 ### Rate limits
 
@@ -251,6 +278,24 @@ Servers that send prose alone fall back to reading the text: the address from
 `X-Failed-Recipients` or the prose, the reason from its wording and any status
 code in it. All of this lives in `BounceParsing`, which has its own tests.
 
+Some dead addresses never produce a failure notice. Instead the recipient's
+side answers: their auto-responder, a colleague or the company's `noreply@`
+says the address is "no longer in service", the mailbox "is no longer
+monitored", or the person "has left the company". These read like replies, and
+often arrive outside the mail's thread. `BounceParsing.isDeadAddressNotice`
+recognises them (an out-of-office that says mail "isn't monitored" until
+someone is back is not one), and they count as bounces with the reason "No
+longer in service":
+
+- in the mail's thread, such a message is a bounce rather than a reply (a real
+  reply after it still wins);
+- outside the thread, each sync searches the mailbox for these phrases and
+  pins each message on one person mailed before it arrived: by its thread, by
+  the address it came from, by an address it names, or by the company's domain
+  when exactly one person there was mailed in the three days before;
+- replies recorded before these were told apart are taken back in
+  `mail_sends` and kept as bounces instead.
+
 Check for Bounce on a single sent mail (its menu in Activity, or its page)
 does the same for that one mail straight away: its thread first, then failure
 notices anywhere in the mailbox that name its address.
@@ -319,7 +364,9 @@ OAuth client for iOS.
    - `googleClientID`, `googleRedirectScheme` (the reversed client ID)
 3. Apply the schema below to your Supabase project.
 4. Run on a simulator or device. Scheduled sends ask for notification
-   permission the first time you schedule something.
+   permission the first time you schedule something. The `AuroraLive` widget
+   extension (`com.realaryan.JTracker.LiveActivity`) is signed with the same
+   team; on a first device build, let automatic signing register its app ID.
 
 ### Database schema
 
