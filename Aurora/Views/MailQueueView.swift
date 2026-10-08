@@ -64,6 +64,9 @@ struct MailQueueView: View {
     @Environment(MailQueue.self) private var queue
     @Environment(\.dismiss) private var dismiss
     @State private var path: [UUID] = []
+    /// A batch swiped away with mail still to go, waiting on a confirm.
+    @State private var removing: MailBatch?
+    @State private var confirmingClearAll = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -84,6 +87,12 @@ struct MailQueueView: View {
                                     path.append(batch.id)
                                 }
                                 .cardRow(top: 6, bottom: 6)
+                                .swipeActions(edge: .trailing) {
+                                    if queue.runningBatchID != batch.id {
+                                        Button("Remove", systemImage: "trash") { remove(batch) }
+                                            .tint(.danger)
+                                    }
+                                }
                         }
                     }
                     .cardList()
@@ -96,19 +105,72 @@ struct MailQueueView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Clear Finished") {
-                        Haptics.tap(0.5)
-                        withAnimation(Theme.Motion.snappy) { queue.clearFinished() }
-                    }
-                    .disabled(!queue.batches.contains(where: \.isFinished))
-                }
+                ToolbarItem(placement: .topBarLeading) { clearMenu }
+            }
+            .uniformDeleteAlert(item: $removing,
+                                title: { _ in "Remove this batch?" },
+                                message: removing.map { batch in
+                                    "The \(batch.pending) mail\(batch.pending == 1 ? "" : "s") still to go won't be sent. Mail already sent stays sent."
+                                } ?? "",
+                                confirmLabel: "Remove") { batch in
+                withAnimation(Theme.Motion.snappy) { queue.remove(batch.id) }
+            }
+            .uniformDeleteAlert(title: "Clear the queue?",
+                                message: clearAllMessage,
+                                confirmLabel: "Clear All",
+                                isPresented: $confirmingClearAll) {
+                withAnimation(Theme.Motion.snappy) { queue.clearAll() }
             }
             .navigationDestination(for: UUID.self) { id in
                 BatchDetailView(batchID: id)
             }
         }
         .dueBatchSummary()
+    }
+
+    /// Every way to empty the queue, smallest first. Nothing here touches the
+    /// batch sending right now, and nothing already sent is unsent — only the
+    /// queue's record of it goes, after it's written to the history.
+    private var clearMenu: some View {
+        let finished = queue.batches.count(where: \.isFinished)
+        let failed = queue.batches.filter { $0.id != queue.runningBatchID }.reduce(0) { $0 + $1.failed }
+        let clearable = queue.batches.count { $0.id != queue.runningBatchID }
+        return Menu("Clear") {
+            Button("Clear Finished", systemImage: "checkmark.circle") {
+                Haptics.tap(0.5)
+                withAnimation(Theme.Motion.snappy) { queue.clearFinished() }
+            }
+            .disabled(finished == 0)
+            Button(failed == 0 ? "Clear Failed Mails" : "Clear \(failed) Failed Mail\(failed == 1 ? "" : "s")",
+                   systemImage: "exclamationmark.triangle") {
+                Haptics.thud()
+                withAnimation(Theme.Motion.snappy) { queue.clearFailed() }
+            }
+            .disabled(failed == 0)
+            Divider()
+            Button("Clear All…", systemImage: "trash", role: .destructive) { confirmingClearAll = true }
+                .disabled(clearable == 0)
+        }
+        .disabled(queue.batches.isEmpty)
+    }
+
+    private var clearAllMessage: String {
+        let waiting = queue.batches.filter { $0.id != queue.runningBatchID }.reduce(0) { $0 + $1.pending }
+        let base = waiting == 0
+            ? "Every batch is taken out of the queue. Mail already sent stays sent."
+            : "\(waiting) mail\(waiting == 1 ? "" : "s") still to go won't be sent. Mail already sent stays sent."
+        return queue.isRunning ? base + " The batch sending now is left to finish." : base
+    }
+
+    /// A swipe removes a batch with nothing left to send at once; one with mail
+    /// still to go asks first.
+    private func remove(_ batch: MailBatch) {
+        if batch.pending > 0 {
+            removing = batch
+        } else {
+            Haptics.thud()
+            withAnimation(Theme.Motion.snappy) { queue.remove(batch.id) }
+        }
     }
 
     /// What needs the user first — sending, then due and paused, then what's
@@ -143,6 +205,7 @@ private struct BatchCard: View {
     var showsChevron = true
 
     @Environment(MailQueue.self) private var queue
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var confirmingSend = false
     @State private var rescheduling = false
 
@@ -176,6 +239,21 @@ private struct BatchCard: View {
                 }
             }
 
+            // Why it stopped and why mail failed, on the card itself — not
+            // only on the shelf, gone once dismissed, or one mail deep.
+            if phase == .paused, let reason = batch.pauseReason {
+                reasonLine(reason, systemImage: "exclamationmark.circle.fill", color: .kraft)
+            }
+            let reasons = batch.failureReasons
+            ForEach(reasons.prefix(2), id: \.reason) { item in
+                reasonLine("\(item.count) failed — \(item.reason)", systemImage: "xmark.octagon.fill", color: .statusInvalid)
+            }
+            if reasons.count > 2 {
+                let rest = reasons.dropFirst(2).reduce(0) { $0 + $1.count }
+                reasonLine("\(rest) more failed for other reasons — open the batch to see each.",
+                           systemImage: "ellipsis.circle", color: .inkMuted)
+            }
+
             ProgressView(value: Double(batch.sent + batch.failed), total: Double(max(batch.mails.count, 1)))
                 .tint(batch.failed > 0 ? .kraft : .statusDone)
                 .animation(Theme.Motion.settle, value: batch.sent)
@@ -207,9 +285,33 @@ private struct BatchCard: View {
         return parts.isEmpty ? "\(batch.mails.count) mails" : parts.joined(separator: " · ")
     }
 
+    private func reasonLine(_ text: String, systemImage: String, color: Color) -> some View {
+        Label {
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: systemImage)
+        }
+        .font(.caption)
+        .foregroundStyle(color)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transition(.opacity)
+    }
+
+    /// One row of capsules — a column at large text sizes, where three don't
+    /// fit a row. (`ViewThatFits` kept the row and truncated the labels.)
     @ViewBuilder
     private func actions(for phase: BatchPhase) -> some View {
-        HStack(spacing: 8) {
+        if dynamicTypeSize >= .xxLarge {
+            VStack(alignment: .leading, spacing: 8) { buttons(for: phase) }
+        } else {
+            HStack(spacing: 8) { buttons(for: phase) }
+        }
+    }
+
+    @ViewBuilder
+    private func buttons(for phase: BatchPhase) -> some View {
+        Group {
             switch phase {
             case .sending:
                 action("Pause", "pause.fill") { Haptics.thud(); queue.pause(batch.id) }
@@ -217,6 +319,10 @@ private struct BatchCard: View {
                 action("Pause", "pause.fill") {}.disabled(true)
             case .paused:
                 action("Resume", "play.fill", prominent: true) { Haptics.press(); queue.resume(batch.id) }
+                if batch.failed > 0 {
+                    // "Retry": the card lists what failed right above it.
+                    action("Retry", "arrow.clockwise") { Haptics.press(); queue.retryFailed(batch.id) }
+                }
                 action("Later", "clock") { rescheduling = true }
             case .due:
                 action("Send Now", "paperplane.fill", prominent: true) { Haptics.press(); confirmingSend = true }
@@ -230,6 +336,11 @@ private struct BatchCard: View {
                 if batch.failed > 0 {
                     action("Retry Failed", "arrow.clockwise", prominent: true) { Haptics.press(); queue.retryFailed(batch.id) }
                 }
+                // Nothing left to send, so nothing to lose: no confirm.
+                action("Remove", "trash") {
+                    Haptics.thud()
+                    withAnimation(Theme.Motion.snappy) { queue.remove(batch.id) }
+                }
             }
         }
     }
@@ -238,13 +349,15 @@ private struct BatchCard: View {
     @ViewBuilder
     private func action(_ title: String, _ systemImage: String, prominent: Bool = false,
                         perform: @escaping () -> Void) -> some View {
+        // Never squeezed into two lines: when a row of them doesn't fit, the
+        // row becomes a column instead (`actions`).
         if prominent {
-            Button(title, systemImage: systemImage, action: perform)
+            Button(action: perform) { Label(title, systemImage: systemImage).lineLimit(1) }
                 .font(.caption.weight(.semibold))
                 .filledButton()
                 .controlSize(.small)
         } else {
-            Button(title, systemImage: systemImage, action: perform)
+            Button(action: perform) { Label(title, systemImage: systemImage).lineLimit(1) }
                 .font(.caption.weight(.semibold))
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
@@ -313,14 +426,52 @@ private struct BatchDetailView: View {
                         previewing = mail
                     }
                     .cardRow(top: 3, bottom: 3)
+                    // Taking one person out: they won't be mailed. Not for
+                    // mail that's gone, or may have (cut off mid-send).
+                    .swipeActions(edge: .trailing) {
+                        if mail.status.isRemovable && !isRunning(phase) {
+                            Button("Remove", systemImage: "trash") {
+                                Haptics.thud()
+                                withAnimation(Theme.Motion.snappy) { queue.removeMails([mail.id], from: batchID) }
+                            }
+                            .tint(.danger)
+                        }
+                    }
+            }
+
+            if mails.isEmpty {
+                InlineEmptyState(title: filter == .failed ? "Nothing failed" : "Nothing here",
+                                 systemImage: filter == .failed ? "checkmark.circle" : "tray")
+                    .cardRow()
             }
         }
         .cardList()
+        .animation(Theme.Motion.snappy, value: batch.mails.map(\.id))
         .navigationTitle(batch.title)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Remove", systemImage: "trash", role: .destructive) { confirmingRemove = true }
-                    .disabled(phase == .sending || phase == .stopping)
+                Menu {
+                    if batch.failed > 0 {
+                        Button("Retry Failed", systemImage: "arrow.clockwise") {
+                            Haptics.press()
+                            queue.retryFailed(batchID)
+                        }
+                        .disabled(isRunning(phase))
+                        Button(batch.failed == 1 ? "Remove Failed Mail" : "Remove \(batch.failed) Failed Mails",
+                               systemImage: "exclamationmark.triangle") {
+                            Haptics.thud()
+                            let failed = Set(batch.mails.filter(\.status.isFailed).map(\.id))
+                            withAnimation(Theme.Motion.snappy) { queue.removeMails(failed, from: batchID) }
+                        }
+                        .disabled(isRunning(phase))
+                        Divider()
+                    }
+                    Button("Remove Batch", systemImage: "trash", role: .destructive) { confirmingRemove = true }
+                        .disabled(isRunning(phase))
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("More actions")
             }
         }
         .uniformDeleteAlert(title: batch.pending > 0 ? "Remove this batch?" : "Remove from the queue?",
@@ -338,6 +489,10 @@ private struct BatchDetailView: View {
         .navigationDestination(item: $viewingTemplate) { id in
             SavedTemplateView(batch: batch, templateID: id)
         }
+    }
+
+    private func isRunning(_ phase: BatchPhase) -> Bool {
+        phase == .sending || phase == .stopping
     }
 
     /// The one mail being handed to Gmail right now.
@@ -373,6 +528,13 @@ private struct QueuedMailRow: View {
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(template == nil ? Color.slate : Color.inkFaint)
                 .lineLimit(1)
+                if case .failed(let reason) = mail.status {
+                    Text(QueuedMail.explain(reason))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.statusInvalid)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 1)
+                }
             }
             Spacer(minLength: 6)
             status
@@ -470,7 +632,11 @@ private struct QueuedMailPreview: View {
         case .sending: "Was being sent when the app closed — it's checked in Sent mail before anything else"
         case .sent(let at, _, _, let recorded):
             "Sent " + at.formatted(date: .abbreviated, time: .shortened) + (recorded ? "" : " · saving to history")
-        case .failed(let reason): "Couldn't send: \(reason)"
+        case .failed(let reason):
+            QueuedMail.explain(reason) == reason
+                ? "Couldn't send: \(reason)"
+                : "Couldn't send. \(QueuedMail.explain(reason))"
+                    + (reason.trimmingCharacters(in: .whitespaces).hasPrefix("{") ? "" : "\nGmail said: \(reason)")
         }
     }
 }

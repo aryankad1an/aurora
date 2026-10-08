@@ -168,7 +168,10 @@ final class MailQueue {
         loaded.removeAll { $0.isFinished && $0.createdAt < Date.now.addingTimeInterval(-Self.keepFinished) }
         for index in loaded.indices where loaded[index].hasWork && !loaded[index].isPaused {
             let waitingForItsTime = loaded[index].scheduledFor != nil && loaded[index].startedAt == nil
-            if !waitingForItsTime { loaded[index].isPaused = true }
+            if !waitingForItsTime {
+                loaded[index].isPaused = true
+                loaded[index].pauseReason = "The app closed while this was sending. Resume to carry on — anything cut off is checked in Sent mail first."
+            }
         }
         batches = loaded
         outcome = nil
@@ -222,7 +225,10 @@ final class MailQueue {
     /// Gmail request that may already have been accepted, and a mail aborted
     /// client-side but delivered would be counted as unsent.
     func pause(_ id: UUID) {
-        update(id) { $0.isPaused = true }
+        update(id) { batch in
+            batch.isPaused = true
+            batch.pauseReason = nil
+        }
         ScheduledMailNotifier.cancel(id)
         if runningBatchID == id { isStopping = true }
     }
@@ -232,6 +238,7 @@ final class MailQueue {
     func resume(_ id: UUID) {
         update(id) { batch in
             batch.isPaused = false
+            batch.pauseReason = nil
             if !batch.isScheduled() { batch.startedAt = batch.startedAt ?? .now }
         }
         if let updated = self.batch(id), updated.isScheduled() {
@@ -245,6 +252,7 @@ final class MailQueue {
     func sendNow(_ id: UUID) {
         update(id) { batch in
             batch.isPaused = false
+            batch.pauseReason = nil
             batch.startedAt = batch.startedAt ?? .now
         }
         ScheduledMailNotifier.cancel(id)
@@ -260,6 +268,7 @@ final class MailQueue {
             batch.scheduledFor = date
             batch.startedAt = nil
             batch.isPaused = false
+            batch.pauseReason = nil
         }
         snoozed.remove(id)
         if let batch = batch(id) { ScheduledMailNotifier.schedule(batch) }
@@ -290,6 +299,54 @@ final class MailQueue {
     func clearFinished() {
         recordBeforeForgetting(batches.filter(\.isFinished))
         batches.removeAll(where: \.isFinished)
+        if let outcome, batch(outcome.batchID) == nil { self.outcome = nil }
+        save()
+    }
+
+    /// Mails that can be taken out of the queue without losing anything: not
+    /// sent, and not possibly sent (a mail cut off mid-send is checked first).
+    func removableCount(in id: UUID) -> Int {
+        guard runningBatchID != id else { return 0 }
+        return batch(id)?.mails.count { $0.status.isRemovable } ?? 0
+    }
+
+    /// Take mails out of a batch — they won't be sent. Sent mail stays as the
+    /// record it is; a batch left with nothing in it goes too.
+    func removeMails(_ mailIDs: Set<Contact.ID>, from id: UUID) {
+        guard runningBatchID != id else { return }
+        update(id) { batch in
+            batch.mails.removeAll { mailIDs.contains($0.id) && $0.status.isRemovable }
+        }
+        dropEmptyBatches()
+    }
+
+    /// Every failed mail, out of every batch not sending right now.
+    func clearFailed() {
+        for batch in batches where batch.failed > 0 && runningBatchID != batch.id {
+            update(batch.id) { $0.mails.removeAll(where: \.status.isFailed) }
+        }
+        dropEmptyBatches()
+    }
+
+    /// Everything but the batch sending right now. What was sent is written to
+    /// the history first; nothing still waiting goes out.
+    func clearAll() {
+        let leaving = batches.filter { $0.id != runningBatchID }
+        recordBeforeForgetting(leaving)
+        for batch in leaving { ScheduledMailNotifier.cancel(batch.id) }
+        batches.removeAll { $0.id != runningBatchID }
+        snoozed = []
+        if let outcome, outcome.batchID != runningBatchID { self.outcome = nil }
+        save()
+        tick()
+    }
+
+    private func dropEmptyBatches() {
+        let empty = batches.filter { $0.mails.isEmpty }.map(\.id)
+        guard !empty.isEmpty else { return }
+        for id in empty { ScheduledMailNotifier.cancel(id) }
+        batches.removeAll { empty.contains($0.id) }
+        if let outcome, empty.contains(outcome.batchID) { self.outcome = nil }
         save()
     }
 
@@ -421,6 +478,10 @@ final class MailQueue {
                 try? await Task.sleep(for: Self.spacing + .milliseconds(Int.random(in: -Self.jitter...Self.jitter)))
             }
         }
+
+        // The batch says why it stopped for as long as it's paused, not only
+        // on the shelf until that's dismissed.
+        if let stoppedBecause { update(id) { $0.pauseReason = stoppedBecause } }
 
         // Record even a stopped run's successes — those mails really were sent,
         // and losing them would offer to re-send people who've already been mailed.

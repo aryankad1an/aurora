@@ -163,11 +163,16 @@ struct SendQueueBar: View {
             guard !outcome.failed.isEmpty else {
                 return (queue.batch(outcome.batchID)?.title).map { "\($0) · tap to open the queue" } ?? "Tap to open the queue"
             }
-            return "Couldn't reach \(outcome.failed.prefix(2).joined(separator: ", "))"
+            // Why they failed, which is what decides what to do next — a list
+            // of names ("Couldn't reach Priya, Rahul") read as a network fault
+            // whatever the cause was.
+            if let why = queue.batch(outcome.batchID)?.failureSummary { return why }
+            return "Couldn't send to \(outcome.failed.prefix(2).joined(separator: ", "))"
                 + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
         case .due(let batch):
             return "\(batch.title) · tap Review to see it and send"
         case .paused(let batches):
+            if batches.count == 1, let reason = batches[0].pauseReason { return reason }
             return batches.count == 1 ? "\(batches[0].title) · tap to open the queue" : "\(batches.count) batches · tap to open the queue"
         case .scheduled(let batch):
             let day = batch.scheduledFor.map { Calendar.current.isDateInToday($0) ? "today" : $0.formatted(.dateTime.weekday(.wide)) } ?? ""
