@@ -412,7 +412,9 @@ struct ContactFields: View {
         } header: {
             Text(header)
         } footer: {
-            Text("Mail opens “Hi \(greetingPreview),”")
+            Text(greetingPreview.isEmpty
+                 ? "Mail opens “Hi,” — no name here it can trust. Add a Greeting Name to use one."
+                 : "Mail opens “Hi \(greetingPreview),”")
         }
     }
 }

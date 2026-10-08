@@ -19,6 +19,11 @@ conservative:
   reported for review instead.
 - Greetings follow the app's `RecipientName` rules (initials fall through to
   the surname), and role mailboxes get "Team", as the account owner asked.
+- Where the address can't be read with confidence, the greeting is left
+  empty rather than guessed, and the app opens the mail with a bare "Hi,".
+  A stored greeting that is only the mailbox copied over by an importer
+  ("Talk2saravanan") or a one- or two-letter fragment is cleared; one a
+  person typed is kept.
 """
 import argparse
 import collections
@@ -180,6 +185,12 @@ def letters(s):
     return re.sub(r"[^a-z]", "", (s or "").lower())
 
 
+def machine_greeting(greet, local):
+    """A stored greeting no person chose: the mailbox itself, or a fragment."""
+    g = letters(greet)
+    return g == letters(local) or (len(g) <= 2 and g not in SHORT_NAMES)
+
+
 def review(tables):
     lex = Lexicon(tables["recruiters"])
     test_ids = {c["id"] for c in tables["companies"] if c["name"] in DECISIONS["test_companies"]}
@@ -215,6 +226,10 @@ def review(tables):
             if (bad_greet or "name" in new) and target_greet and target_greet != greet:
                 new["greeting_name"] = target_greet
                 reason.append(f"greeting {greet or '(none)'!r} -> {target_greet!r}")
+        elif greet and machine_greeting(greet, local):
+            # Not sure who this is: greet no one rather than the mailbox.
+            new["greeting_name"] = None
+            reason.append(f"greeting {greet!r} cleared ({conf} confidence: {how})")
         # Names that disagree with a clean first.last address: report only.
         ts = tokens(local)
         if name and len(ts) == 2 and all(len(t) >= 3 for t in ts) and not (set(ts) & ROLE) \

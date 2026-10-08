@@ -965,7 +965,8 @@ struct MailPreview: Identifiable {
     /// the greeting alone takes some reading of their name — and reused by
     /// every template the letter is written from.
     let context: MailContext
-    /// Placeholders with nothing to fill them for this person.
+    /// Placeholders with nothing to fill them for this person. Never the name:
+    /// an empty one means no name could be trusted, and "Hi," is the right mail.
     let blanks: Set<MailPlaceholder>
     let name: String
     let email: String
@@ -981,7 +982,7 @@ struct MailPreview: Identifiable {
         self.company = company
         self.context = context
         self.blanks = Set(MailPlaceholder.allCases.filter {
-            (context.values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            $0 != .receiverName && (context.values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
         })
         self.name = contact.displayName
         self.email = contact.email

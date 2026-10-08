@@ -368,6 +368,22 @@ class Names(unittest.TestCase):
         self.assertNotIn("3", changed)     # a person behind a role mailbox kept
         self.assertEqual(changed["2"]["new_name"], "A Kushwah")
 
+    def test_low_confidence_greetings_are_left_empty(self):
+        tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
+            {"id": "1", "company_id": "c", "email": "talk2saravanan@x.com", "name": "Talk2saravanan",
+             "greeting_name": "Talk2saravanan"},
+            {"id": "2", "company_id": "c", "email": "vk_mms@x.com", "name": "", "greeting_name": "Vk"},
+            {"id": "3", "company_id": "c", "email": "vijaym_b4u@x.com", "name": "Vijay M", "greeting_name": "Vijay"},
+            {"id": "4", "company_id": "c", "email": "qwzx@x.com", "name": "", "greeting_name": None},
+        ]}
+        fixes, _, _ = vn.review(tables)
+        changed = {f["id"]: f for f in fixes}
+        self.assertIsNone(changed["1"]["new_greeting_name"])   # mailbox copy cleared
+        self.assertNotIn("new_name", changed["1"])             # the name itself is never touched
+        self.assertIsNone(changed["2"]["new_greeting_name"])   # fragment cleared
+        self.assertNotIn("3", changed)                         # a greeting a person typed is kept
+        self.assertNotIn("4", changed)                         # nothing guessed for an unreadable mailbox
+
 
 if __name__ == "__main__":
     unittest.main()

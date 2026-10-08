@@ -453,12 +453,21 @@ struct TemplateEditorView: View {
         var cursor = 0
 
         for match in TemplateDiagnostics.bracedRun.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            out += AttributedString(ns.substring(with: NSRange(location: cursor,
-                                                              length: match.range.location - cursor)))
+            let before = ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
             let literal = ns.substring(with: match.range)
+            let placeholder = MailPlaceholder(rawValue: literal)
+            let value = placeholder.flatMap { context.values[$0] } ?? ""
 
-            if let placeholder = MailPlaceholder(rawValue: literal) {
-                let value = context.values[placeholder] ?? ""
+            // No name it can trust isn't a gap: the mail goes out as "Hi,", so
+            // show exactly that.
+            if placeholder == .receiverName, value.isEmpty {
+                out += AttributedString(String(before.reversed().drop { $0 == " " || $0 == "\t" }.reversed()))
+                cursor = match.range.location + match.range.length
+                continue
+            }
+            out += AttributedString(before)
+
+            if let placeholder {
                 if value.trimmingCharacters(in: .whitespaces).isEmpty {
                     out += marker("⟨\(placeholder.blankLabel) missing⟩")
                 } else {

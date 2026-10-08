@@ -188,6 +188,9 @@ def audit(old, new):
             val = n.get(field) or ""
             if val == "Team":
                 continue
+            old_val = letters(r.get(field))
+            if not val and field == "greeting_name" and (old_val == local or len(old_val) <= 2):
+                continue  # an importer's copy of the mailbox, or a fragment
             if not val:
                 problems.append(f"{r['email']}: {field} was cleared")
             elif letters(val) not in local and not all(letters(w) in local for w in val.split()):
