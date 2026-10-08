@@ -28,6 +28,10 @@ struct MailBatch: Codable, Identifiable {
     /// the connection dropped, the app closed mid-send) — shown on the batch
     /// until it's resumed. Nil when the user paused it, or it never stopped.
     var pauseReason: String?
+    /// When the queue carries on by itself: set when Gmail's sending limit
+    /// stopped the batch with a known (or a sensible) time to try again.
+    /// Cleared by anything the user does to the batch.
+    var resumeAt: Date?
     var fromName: String
     var templates: [MailTemplate.ID: TemplateSnapshot]
     var mails: [QueuedMail]

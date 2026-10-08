@@ -28,6 +28,14 @@ import UIKit
 ///
 /// The queue holds no references to the auth or data stores; `sender`,
 /// `verifier` and `onRecord` are supplied by `RootView`, which owns both.
+/// Activity's two lanes for the queue.
+enum QueueDestination: Equatable {
+    /// Waiting for their time or their turn.
+    case queued
+    /// Sending, paused part-way, or just finished.
+    case inProgress
+}
+
 enum MailQueueError: LocalizedError {
     case noTransport
 
@@ -74,6 +82,17 @@ final class MailQueue {
     /// accepted. A mail cut off more recently than this is given the time before
     /// its Sent mail is searched, so "not there" means not sent.
     private static let searchSettle: TimeInterval = 20
+    /// How long to wait after Gmail's first, second… rate limit in a row before
+    /// trying the same mail again, when Gmail didn't say how long. Each step
+    /// doubles; a success resets it.
+    static let rateLimitBackoff: [Duration] = [.seconds(30), .seconds(60), .seconds(120), .seconds(240), .seconds(480)]
+    /// The longest wait sat out with the run still going. Longer than this —
+    /// a daily sending limit, typically — and the batch pauses instead, and
+    /// carries on by itself at that time (`resumeAt`).
+    static let longestWait: TimeInterval = 15 * 60
+    /// When Gmail's limit stops a batch without saying until when, it's tried
+    /// again after this long.
+    static let limitRetry: TimeInterval = 60 * 60
     /// Finished batches are kept this long, for the queue to show what went.
     private static let keepFinished: TimeInterval = 7 * 24 * 60 * 60
 
@@ -93,10 +112,22 @@ final class MailQueue {
     /// Due batches the user has put off for this session with "Not Now". Still
     /// due, and still in the queue — just not asked about again until reopened.
     private(set) var snoozed: Set<UUID> = []
-    /// Whether the queue screen is up. One sheet shows it, from the root, however
-    /// it was opened (the shelf, Activity) — and while it's up, it's the one to
-    /// show a batch that comes due, since only one sheet can be up at a time.
-    var isShowingQueue = false
+    /// Where in Activity the queue was asked to be shown — by the shelf, the
+    /// Live Activity, or a notification. `RootView` switches to Activity and
+    /// Activity opens that lane, then clears it.
+    var openRequest: QueueDestination?
+
+    /// The run is sitting out a Gmail rate limit: which batch, until when, and
+    /// what Gmail said. Nil while sending normally.
+    private(set) var cooldown: Cooldown?
+
+    struct Cooldown: Equatable {
+        let batchID: UUID
+        let until: Date
+        let reason: String
+        /// How many limits in a row this is.
+        let attempt: Int
+    }
 
     // MARK: - Transport
 
@@ -162,6 +193,7 @@ final class MailQueue {
     /// scheduled batch that hasn't started keeps waiting for its time.
     func load(account: String) {
         guard !isRunning else { return }
+        SendLiveActivity.shared.reset()
         let file = JSONFile<[MailBatch]>(name: "mail-queue-\(account).json")
         self.file = file
         var loaded = file.load() ?? []
@@ -228,17 +260,22 @@ final class MailQueue {
         update(id) { batch in
             batch.isPaused = true
             batch.pauseReason = nil
+            batch.resumeAt = nil
         }
+        ScheduledMailNotifier.cancelResume(id)
         ScheduledMailNotifier.cancel(id)
         if runningBatchID == id { isStopping = true }
+        SendLiveActivity.shared.sync(with: self)
     }
 
     /// Carry on with a paused batch — or, for a scheduled one, go back to waiting
     /// for its time.
     func resume(_ id: UUID) {
+        ScheduledMailNotifier.cancelResume(id)
         update(id) { batch in
             batch.isPaused = false
             batch.pauseReason = nil
+            batch.resumeAt = nil
             if !batch.isScheduled() { batch.startedAt = batch.startedAt ?? .now }
         }
         if let updated = self.batch(id), updated.isScheduled() {
@@ -250,9 +287,11 @@ final class MailQueue {
 
     /// Send a scheduled or paused batch now.
     func sendNow(_ id: UUID) {
+        ScheduledMailNotifier.cancelResume(id)
         update(id) { batch in
             batch.isPaused = false
             batch.pauseReason = nil
+            batch.resumeAt = nil
             batch.startedAt = batch.startedAt ?? .now
         }
         ScheduledMailNotifier.cancel(id)
@@ -269,7 +308,9 @@ final class MailQueue {
             batch.startedAt = nil
             batch.isPaused = false
             batch.pauseReason = nil
+            batch.resumeAt = nil
         }
+        ScheduledMailNotifier.cancelResume(id)
         snoozed.remove(id)
         if let batch = batch(id) { ScheduledMailNotifier.schedule(batch) }
         tick()
@@ -375,7 +416,12 @@ final class MailQueue {
     func tick() {
         clock = .now
         wakeTask?.cancel()
-        guard let next = nextScheduled?.scheduledFor else { return }
+        // A batch Gmail's limit stopped carries on by itself once it's time.
+        for batch in batches where batch.isPaused && batch.hasWork {
+            if let at = batch.resumeAt, at <= clock { resume(batch.id) }
+        }
+        let resumes = batches.compactMap { $0.isPaused ? $0.resumeAt : nil }
+        guard let next = ([nextScheduled?.scheduledFor].compactMap { $0 } + resumes).min() else { return }
         wakeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(1, next.timeIntervalSinceNow)))
             guard !Task.isCancelled else { return }
@@ -407,6 +453,9 @@ final class MailQueue {
         var sent = 0
         var failed: [String] = []
         var stoppedBecause: String?
+        /// Gmail rate limits in a row, for the backoff.
+        var limited = 0
+        SendLiveActivity.shared.sync(with: self)
 
         while let batch = batch(id), !batch.isPaused,
               let mail = batch.mails.first(where: \.status.isWaiting) {
@@ -454,6 +503,38 @@ final class MailQueue {
                 setStatus(mail.id, in: id, .sent(at: .now, messageID: delivery?.messageID,
                                                  threadID: delivery?.threadID, recorded: false))
                 sent += 1
+                limited = 0
+            } catch GmailAuthError.rateLimited(let message, let retryAt) {
+                // Gmail took nothing: this mail goes back first in line, and
+                // the run waits — the time Gmail gave, else a doubling step.
+                setStatus(mail.id, in: id, .pending)
+                limited += 1
+                let step = Self.rateLimitBackoff[min(limited, Self.rateLimitBackoff.count) - 1]
+                let until = retryAt ?? .now.addingTimeInterval(TimeInterval(step.components.seconds))
+                let wait = until.timeIntervalSinceNow
+                if wait > Self.longestWait || limited > Self.rateLimitBackoff.count {
+                    // Too long to sit out with the run open: pause, and carry
+                    // on by itself then — with a notification, as the app may
+                    // well be closed by that time.
+                    let resumeAt = retryAt ?? .now.addingTimeInterval(Self.limitRetry)
+                    update(id) {
+                        $0.isPaused = true
+                        $0.resumeAt = resumeAt
+                    }
+                    if let batch = self.batch(id) { ScheduledMailNotifier.scheduleResume(batch, at: resumeAt) }
+                    stoppedBecause = "Gmail's sending limit was reached (\(message)). Sending carries on by itself at "
+                        + resumeAt.formatted(date: Calendar.current.isDateInToday(resumeAt) ? .omitted : .abbreviated,
+                                             time: .shortened) + "."
+                    tick()
+                    break
+                }
+                cooldown = Cooldown(batchID: id, until: until, reason: message, attempt: limited)
+                SendLiveActivity.shared.sync(with: self)
+                let waited = await waitOut(until, batch: id)
+                cooldown = nil
+                SendLiveActivity.shared.sync(with: self)
+                if !waited { break }
+                continue
             } catch let error as GmailAuthError where error.endsRun {
                 // Every mail after this one would fail the same way. Stop, and
                 // leave the rest — this one included — waiting to be resumed.
@@ -490,9 +571,21 @@ final class MailQueue {
         let paused = batch(id).map { $0.isPaused && $0.hasWork } ?? false
         runningBatchID = nil
         isStopping = false
+        cooldown = nil
         outcome = Outcome(batchID: id, sent: sent, failed: failed,
                           stoppedBecause: stoppedBecause, isPaused: paused)
         startNext()
+        SendLiveActivity.shared.sync(with: self)
+    }
+
+    /// Sit out a rate limit until `until`, a second at a time so Pause still
+    /// stops it. False when the batch was paused (or removed) meanwhile.
+    private func waitOut(_ until: Date, batch id: UUID) async -> Bool {
+        while until.timeIntervalSinceNow > 0 {
+            guard let batch = batch(id), !batch.isPaused else { return false }
+            try? await Task.sleep(for: .seconds(min(1, until.timeIntervalSinceNow)))
+        }
+        return batch(id).map { !$0.isPaused } ?? false
     }
 
     /// A send failure as one short line: Gmail's refusals arrive as whole JSON
@@ -570,6 +663,7 @@ final class MailQueue {
             guard let index = batch.mails.firstIndex(where: { $0.id == mailID }) else { return }
             batch.mails[index].status = status
         }
+        SendLiveActivity.shared.sync(with: self)
     }
 
     /// Change one batch and save. Looked up by id each time: the list can change

@@ -239,6 +239,83 @@ final class ReplySync {
         return outcome
     }
 
+    // MARK: - One mail
+
+    /// What looking for one mail's bounce found.
+    enum BounceCheck: Equatable {
+        /// It bounced; the reason, in words. Now in the Bounced lane.
+        case bounced(reason: String)
+        /// Someone answered it, so it was delivered.
+        case replied
+        /// No failure notice for it anywhere in the mailbox.
+        case clear
+        case failed(String)
+    }
+
+    /// Look for one mail's bounce now, rather than waiting for the next sync:
+    /// its own thread first, then failure notices anywhere in the mailbox
+    /// (Spam and Trash included) that name its address. A bounce found is kept
+    /// like any other — and one dismissed before comes back, since this was
+    /// asked about by name.
+    func checkBounce(of send: MailSend, address: String) async -> BounceCheck {
+        guard let reader else { return .failed(GmailAuthError.notConnected.localizedDescription) }
+        let address = address.lowercased()
+        do {
+            if let threadID = send.gmailThreadID {
+                switch try await Self.firstResponse(inThread: threadID, after: send.sentAt, reader: reader) {
+                case .reply:
+                    return .replied
+                case .bounce(let at, let messageID, let snippet):
+                    let read = Self.isSafePathComponent(messageID)
+                        ? try? await Self.readNotice(id: messageID, lookingUpOriginal: false, reader: reader)
+                        : nil
+                    if read != nil { seenBounceMessages.insert(messageID) }
+                    let failures = read.map { $0.notice.failures(snippet: $0.snippet ?? snippet) } ?? []
+                    // A notice that reads as a delay, or a success, isn't one.
+                    if read == nil || !failures.isEmpty || read?.notice.isNotice == false {
+                        let failure = failures.first { $0.address == address } ?? failures.first
+                        return keep(Bounce(contactID: send.contactID, address: address, at: at,
+                                           snippet: read?.snippet ?? snippet,
+                                           status: failure?.status, diagnostic: failure?.diagnostic))
+                    }
+                case .silent:
+                    break
+                }
+            }
+
+            // Notices that never joined the thread, found by the address in them.
+            guard Self.isSearchable(address) else { return .clear }
+            let ids = try await Self.listBounceNotices(matching: "\"\(address)\"", limit: 20, reader: reader)
+            for id in ids where Self.isSafePathComponent(id) {
+                guard let notice = try? await Self.readNotice(id: id, lookingUpOriginal: true, reader: reader) else { continue }
+                seenBounceMessages.insert(id)
+                let failures = notice.notice.failures(snippet: notice.snippet)
+                let isThisMail = notice.originalGmailID != nil && notice.originalGmailID == send.gmailMessageID
+                guard let failure = failures.first(where: { $0.address == address }) ?? (isThisMail ? failures.first : nil) else {
+                    continue
+                }
+                // A notice from before this mail went says nothing about it.
+                if !isThisMail, let sentAt = send.sentAt, notice.at < sentAt.addingTimeInterval(-5 * 60) { continue }
+                return keep(Bounce(contactID: send.contactID, address: address, at: notice.at, snippet: notice.snippet,
+                                   status: failure.status, diagnostic: failure.diagnostic))
+            }
+            saveBounces()
+            return .clear
+        } catch let error as GmailAuthError where error.needsReconnect {
+            needsReconnect = true
+            return .failed(error.localizedDescription)
+        } catch {
+            return .failed(error.isCancellation ? "The check was cancelled." : error.localizedDescription)
+        }
+    }
+
+    private func keep(_ bounce: Bounce) -> BounceCheck {
+        dismissedBounces[bounce.contactID] = nil
+        _ = record(bounce)
+        saveBounces()
+        return .bounced(reason: bounce.reason.label)
+    }
+
     // MARK: - Pass 1: recover thread ids for older sends
 
     private struct Recovered {
@@ -681,7 +758,8 @@ final class ReplySync {
     /// The ids of recent failure notices, newest first — Spam and Trash
     /// included, where a notice filtered or deleted by hand would otherwise
     /// never be seen.
-    nonisolated private static func listBounceNotices(reader: (String, [URLQueryItem]) async throws -> Data) async throws -> [String] {
+    nonisolated private static func listBounceNotices(matching terms: String? = nil, limit: Int = bounceListLimit,
+                                                      reader: (String, [URLQueryItem]) async throws -> Data) async throws -> [String] {
         struct Listing: Decodable {
             struct Item: Decodable { let id: String }
             let messages: [Item]?
@@ -690,15 +768,16 @@ final class ReplySync {
         var ids: [String] = []
         var pageToken: String?
         repeat {
-            var query = [URLQueryItem(name: "q", value: BounceParsing.noticeQuery),
+            let search = [BounceParsing.noticeQuery, terms].compactMap { $0 }.joined(separator: " ")
+            var query = [URLQueryItem(name: "q", value: search),
                          URLQueryItem(name: "includeSpamTrash", value: "true"),
                          URLQueryItem(name: "maxResults", value: "100")]
             if let pageToken { query.append(URLQueryItem(name: "pageToken", value: pageToken)) }
             let listing = try JSONDecoder().decode(Listing.self, from: try await reader("messages", query))
             ids += listing.messages?.map(\.id) ?? []
             pageToken = listing.nextPageToken
-        } while pageToken != nil && ids.count < bounceListLimit
-        return ids
+        } while pageToken != nil && ids.count < limit
+        return Array(ids.prefix(limit))
     }
 
     /// One notice, whole: `format=raw` is the only form that keeps the report

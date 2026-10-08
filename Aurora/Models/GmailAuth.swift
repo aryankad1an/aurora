@@ -101,8 +101,12 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
         request.httpBody = try JSONSerialization.data(withJSONObject: ["raw": raw])
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else { throw Self.sendError(status: status, data: data) }
+        let http = response as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
+        guard status == 200 else {
+            throw Self.sendError(status: status, data: data,
+                                 retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
+        }
         return try? JSONDecoder().decode(SentMessage.self, from: data)
     }
 
@@ -115,11 +119,19 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
     /// would be refused the same way. Those end the run, so the rest wait
     /// instead of being marked failed one after another.
     ///
+    /// A rate limit is neither: Gmail is asking for the sends to slow down, so
+    /// it comes back as `rateLimited`, with when to try again if Gmail said, and
+    /// the queue waits rather than giving up (`MailQueue.drain`). So does Gmail
+    /// being briefly unavailable (5xx), which clears the same way.
+    ///
     /// Whatever the case, the reason is Google's own sentence, pulled out of the
     /// JSON it arrives in. Kept raw, a failure used to read as just "{".
-    static func sendError(status: Int, data: Data) -> GmailAuthError {
+    static func sendError(status: Int, data: Data, retryAfter: String? = nil) -> GmailAuthError {
         let google = GoogleError(data: data)
         let message = google?.message ?? "HTTP \(status)"
+        if status == 429 || google?.isRateLimit == true {
+            return .rateLimited(message, retryAt: retryDate(header: retryAfter, message: message))
+        }
         switch status {
         case 400:
             return .server(message)
@@ -127,11 +139,35 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
             return .sessionExpired
         case 403 where google?.isScopeProblem == true:
             return .insufficientScope
-        case 403, 429:
+        case 403:
             return .refused("Gmail stopped sending from your account: \(message)")
+        case 500...599:
+            return .rateLimited("Gmail is briefly unavailable (\(message)).",
+                                retryAt: retryDate(header: retryAfter, message: message))
         default:
             return .refused("Gmail couldn't take the mail (\(message)). Resume to try again.")
         }
+    }
+
+    /// When Gmail said to try again: the `Retry-After` header (seconds, or an
+    /// HTTP date), else the "Retry after <time>" its rate-limit message ends
+    /// with. Nil when it said neither.
+    nonisolated static func retryDate(header: String?, message: String, now: Date = .now) -> Date? {
+        if let header = header?.trimmingCharacters(in: .whitespaces), !header.isEmpty {
+            if let seconds = Double(header) { return now.addingTimeInterval(seconds) }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(identifier: "GMT")
+            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+            if let date = formatter.date(from: header) { return date }
+        }
+        guard let match = message.firstMatch(of: /(?i)retry after\s+(\S+)/) else { return nil }
+        let text = String(match.1).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: text) { return date }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: text)
     }
 
     /// Run an authorized GET against the Gmail API and hand back the raw body.
@@ -369,6 +405,16 @@ nonisolated struct GoogleError {
         }
     }
 
+    /// Gmail asking for fewer requests: a per-user or per-second rate, or the
+    /// account's daily sending allowance.
+    var isRateLimit: Bool {
+        let limits: Set = ["rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded",
+                           "quotaExceeded", "RESOURCE_EXHAUSTED"]
+        return reasons.contains(where: limits.contains)
+            || message.localizedCaseInsensitiveContains("limit exceeded")
+            || message.localizedCaseInsensitiveContains("rate limit")
+    }
+
     /// The token lacks a scope the request needs — fixed only by signing in again.
     var isScopeProblem: Bool {
         reasons.contains { $0 == "insufficientPermissions" || $0 == "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }
@@ -389,6 +435,10 @@ enum GmailAuthError: LocalizedError {
     /// disabled, the account blocked from sending, or Gmail down. Every later
     /// send would be refused too.
     case refused(String)
+    /// Gmail asked for the sends to slow down (or was briefly unavailable).
+    /// Nothing is wrong with the mail or the account: waiting fixes it.
+    /// `retryAt` is when Gmail said to try again, when it said.
+    case rateLimited(String, retryAt: Date?)
     case server(String)
 
     var errorDescription: String? {
@@ -401,6 +451,7 @@ enum GmailAuthError: LocalizedError {
         case .sessionExpired:
             return "Your Gmail sign-in has expired. Reconnect Gmail in Settings."
         case .refused(let message): return message
+        case .rateLimited(let message, _): return "Gmail asked to slow down: \(message)"
         case .server(let message): return message
         }
     }
@@ -420,7 +471,7 @@ enum GmailAuthError: LocalizedError {
     /// (a send batch, a reply sync) should stop rather than fail one by one.
     var endsRun: Bool {
         switch self {
-        case .notConnected, .insufficientScope, .sessionExpired, .refused: true
+        case .notConnected, .insufficientScope, .sessionExpired, .refused, .rateLimited: true
         default: false
         }
     }

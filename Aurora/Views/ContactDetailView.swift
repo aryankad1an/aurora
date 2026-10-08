@@ -201,7 +201,7 @@ struct ContactDetailView: View {
             }
             .undoBanner()
             .sheet(item: $selectedSend) { send in
-                MailSummaryView(contact: contact(for: send), company: company)
+                MailSummaryView(contact: contact(for: send), company: company, sendID: send.id)
             }
         }
     }

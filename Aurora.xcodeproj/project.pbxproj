@@ -6,8 +6,35 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B1000000000000000000AA02 /* AuroraLive.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B1000000000000000000AA01 /* AuroraLive.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B1000000000000000000AA03 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B1000000000000000000AA10;
+			remoteInfo = AuroraLive;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B1000000000000000000AA04 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "";
+			dstSubfolder = PlugIns;
+			files = (
+				B1000000000000000000AA02 /* AuroraLive.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		A2963441302E2F6F000BDD39 /* Aurora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Aurora.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1000000000000000000AA01 /* AuroraLive.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AuroraLive.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -17,6 +44,13 @@
 				Info.plist,
 			);
 			target = A2963440302E2F6F000BDD39 /* Aurora */;
+		};
+		B1000000000000000000AA05 /* Exceptions for "AuroraLive" folder in "AuroraLive" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B1000000000000000000AA10 /* AuroraLive */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -29,10 +63,28 @@
 			path = Aurora;
 			sourceTree = "<group>";
 		};
+		B1000000000000000000AA06 /* AuroraLive */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B1000000000000000000AA05 /* Exceptions for "AuroraLive" folder in "AuroraLive" target */,
+			);
+			path = AuroraLive;
+			sourceTree = "<group>";
+		};
+		B1000000000000000000AA07 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A296343E302E2F6F000BDD39 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		B1000000000000000000AA09 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 			);
@@ -44,6 +96,8 @@
 			isa = PBXGroup;
 			children = (
 				A2963442302E2F6F000BDD39 /* Aurora */,
+				B1000000000000000000AA06 /* AuroraLive */,
+				B1000000000000000000AA07 /* Shared */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -52,6 +106,7 @@
 			isa = PBXGroup;
 			children = (
 				A2963441302E2F6F000BDD39 /* Aurora.app */,
+				B1000000000000000000AA01 /* AuroraLive.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -66,16 +121,40 @@
 				A296343D302E2F6F000BDD39 /* Sources */,
 				A296343E302E2F6F000BDD39 /* Frameworks */,
 				A296343F302E2F6F000BDD39 /* Resources */,
+				B1000000000000000000AA04 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
+			dependencies = (
+				B1000000000000000000AA13 /* PBXTargetDependency */,
+			);
 			fileSystemSynchronizedGroups = (
 				A2963442302E2F6F000BDD39 /* Aurora */,
+				B1000000000000000000AA07 /* Shared */,
 			);
 			name = Aurora;
 			productName = Aurora;
 			productReference = A2963441302E2F6F000BDD39 /* Aurora.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B1000000000000000000AA10 /* AuroraLive */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B1000000000000000000AA12 /* Build configuration list for PBXNativeTarget "AuroraLive" */;
+			buildPhases = (
+				B1000000000000000000AA08 /* Sources */,
+				B1000000000000000000AA09 /* Frameworks */,
+				B1000000000000000000AA11 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				B1000000000000000000AA06 /* AuroraLive */,
+				B1000000000000000000AA07 /* Shared */,
+			);
+			name = AuroraLive;
+			productName = AuroraLive;
+			productReference = B1000000000000000000AA01 /* AuroraLive.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -88,6 +167,9 @@
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					A2963440302E2F6F000BDD39 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					B1000000000000000000AA10 = {
 						CreatedOnToolsVersion = 27.0;
 					};
 				};
@@ -107,12 +189,18 @@
 			projectRoot = "";
 			targets = (
 				A2963440302E2F6F000BDD39 /* Aurora */,
+				B1000000000000000000AA10 /* AuroraLive */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A296343F302E2F6F000BDD39 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		B1000000000000000000AA11 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -125,7 +213,20 @@
 			files = (
 			);
 		};
+		B1000000000000000000AA08 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B1000000000000000000AA13 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B1000000000000000000AA10 /* AuroraLive */;
+			targetProxy = B1000000000000000000AA03 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "Aurora" */ = {
@@ -263,8 +364,8 @@
 		A296344A302E2F70000BDD39 /* Debug configuration for PBXNativeTarget "Aurora" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-Tide AppIcon-Phosphor AppIcon-Neon AppIcon-Bloom AppIcon-Gilded";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -273,6 +374,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Aurora/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Aurora;
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -299,8 +401,8 @@
 		A296344B302E2F70000BDD39 /* Release configuration for PBXNativeTarget "Aurora" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-Tide AppIcon-Phosphor AppIcon-Neon AppIcon-Bloom AppIcon-Gilded";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -309,6 +411,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Aurora/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Aurora;
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -322,6 +425,67 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.realaryan.JTracker;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		B1000000000000000000AA14 /* Debug configuration for PBXNativeTarget "AuroraLive" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2P3YJ695GG;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AuroraLive/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Aurora;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.realaryan.JTracker.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B1000000000000000000AA15 /* Release configuration for PBXNativeTarget "AuroraLive" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2P3YJ695GG;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AuroraLive/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Aurora;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.realaryan.JTracker.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -349,6 +513,14 @@
 			buildConfigurations = (
 				A296344A302E2F70000BDD39 /* Debug configuration for PBXNativeTarget "Aurora" */,
 				A296344B302E2F70000BDD39 /* Release configuration for PBXNativeTarget "Aurora" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		B1000000000000000000AA12 /* Build configuration list for PBXNativeTarget "AuroraLive" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1000000000000000000AA14 /* Debug configuration for PBXNativeTarget "AuroraLive" */,
+				B1000000000000000000AA15 /* Release configuration for PBXNativeTarget "AuroraLive" */,
 			);
 			defaultConfigurationName = Release;
 		};

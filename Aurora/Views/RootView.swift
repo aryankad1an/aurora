@@ -274,14 +274,19 @@ struct RootView: View {
                 // has been seen once the queue is open.
                 SendQueueBar {
                     mailQueue.acknowledge()
-                    mailQueue.isShowingQueue = true
+                    mailQueue.openRequest = .inProgress
                 }
             }
-            .sheet(isPresented: $mailQueue.isShowingQueue) {
-                MailQueueView()
+            .dueBatchSummary()
+            // The queue lives in Activity: the shelf, the Live Activity and a
+            // notification all open it there.
+            .onChange(of: mailQueue.openRequest) { _, request in
+                if request != nil { selectedTab = .activity }
             }
-            // While the queue is up, it shows the summary itself.
-            .dueBatchSummary(isEnabled: !mailQueue.isShowingQueue)
+            .onOpenURL { url in
+                guard url.scheme == "aurora", url.host() == "activity" else { return }
+                mailQueue.openRequest = url.lastPathComponent == "queued" ? .queued : .inProgress
+            }
             .onChange(of: notifications.openedBatchID) { openTappedBatch() }
             // The shelf appearing pushes the tab bar up — a real object arriving on
             // screen, and the one event here the user didn't just tap for.

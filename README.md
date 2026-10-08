@@ -25,15 +25,23 @@ through the Gmail API using Google OAuth.
   to another template. Batches have no size limit.
 - **Mail queue.** Sends go into a queue that's saved on the phone. It survives
   the app closing, can be paused and resumed, and can hold batches scheduled for
-  later. See [How sending works](#how-sending-works).
+  later. When Gmail rate-limits a send, the queue waits and tries the same mail
+  again instead of failing it. See [How sending works](#how-sending-works).
+- **Live Activity.** While mail is sending, the Lock Screen and Dynamic Island
+  show the batch, how many have gone, who's next, and a countdown when Gmail
+  has asked the queue to slow down. Tapping it opens Activity's In Progress
+  lane.
 - **Reply tracking.** Each send records its Gmail thread. The app reads those
   threads to find replies, skipping auto-replies and bounces.
 - **Bounce detection.** Mail that comes back undelivered is found in its thread
   or in the inbox, matched to the exact send by the `Message-ID` the failure
-  notice quotes, and listed with the reason its status code gives.
-- **Activity.** Every mail sent, grouped by day, filterable by replied/waiting
-  and by search. A Bounced lane lists the addresses that bounced, with a button
-  to mark each (or all) invalid; the tab shows a badge while any are waiting.
+  notice quotes, and listed with the reason its status code gives. Any sent
+  mail can also be checked on its own, from its menu in Activity or its page.
+- **Activity.** Every mail from queued to answered, in five lanes: Queued
+  (scheduled, or waiting its turn), In Progress (sending, paused or just
+  finished, with every queue control), Sent (by day), Replied and Bounced. The
+  Bounced lane lists the addresses that bounced, with a button to mark each (or
+  all) invalid; the tab shows a badge while any are waiting.
 - **Themes.** Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and
   Gilded. Each changes the colours, the chart that moves behind every screen,
   the launch screen and the app icon. A new theme spreads across the screen
@@ -55,15 +63,23 @@ Taken from a demo account. The companies, people and replies are made up.
   </tr>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/compose.png" alt="Compose" width="280"><br><sub><b>Compose.</b> Recipients, a row of templates, and a deck of the actual mails.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/themes.png" alt="Themes" width="280"><br><sub><b>Themes.</b> Each one live, with its own chart, colours and icon.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/templates.png" alt="Templates" width="280"><br><sub><b>Templates.</b> Each one's placeholders and whether it's ready.</sub></td>
   </tr>
   <tr>
-    <td align="center" width="50%"><img src="docs/screenshots/activity.png" alt="Activity" width="280"><br><sub><b>Activity.</b> Every mail sent, by day, with replies marked.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/queued.png" alt="Queued" width="280"><br><sub><b>Queued.</b> Batches waiting for their time, or for your go-ahead.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/in-progress.png" alt="In Progress" width="280"><br><sub><b>In Progress.</b> A batch waiting out a Gmail rate limit, and one paused until a set time.</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/live-activity.png" alt="Live Activity" width="280"><br><sub><b>Live Activity.</b> The Dynamic Island counting down to the retry.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/activity.png" alt="Sent" width="280"><br><sub><b>Sent.</b> Every mail sent, by day, with replies marked.</sub></td>
+  </tr>
+  <tr>
     <td align="center" width="50%"><img src="docs/screenshots/reply.png" alt="Reply" width="280"><br><sub><b>Reply.</b> What they said, above the mail that was sent.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/bounced.png" alt="Bounced" width="280"><br><sub><b>Bounced.</b> Addresses that came back, each with its reason.</sub></td>
   </tr>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/bounce-detail.png" alt="Bounce detail" width="280"><br><sub><b>Bounce.</b> The server's own message, and ways to fix it.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/templates.png" alt="Templates" width="280"><br><sub><b>Templates.</b> Each one's placeholders and whether it's ready.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/themes.png" alt="Themes" width="280"><br><sub><b>Themes.</b> Each one live, with its own chart, colours and icon.</sub></td>
   </tr>
 </table>
 
@@ -104,12 +120,36 @@ Sends are written to the `mail_sends` history every 5 mails. Anything not yet
 written when the app closes is written the next time it opens.
 
 The shelf above the tab bar shows what the queue is doing (sending, paused,
-due, scheduled, or the last result). Tapping it opens the queue, where each
-batch can be paused, resumed, rescheduled, retried or removed. Each batch lists
-the saved copies of its templates (flagged if the template has been edited or
-deleted in Templates since), each person's row says which one their mail is
-written from, and any mail can be opened to read exactly what was or will be
-sent. The queue is also under Activity → ⋯ → Mail Queue.
+due, scheduled, or the last result). Tapping it opens Activity's In Progress
+lane; scheduled and waiting batches are under Queued. There each batch can be
+paused, resumed, rescheduled, retried or removed (Activity → ⋯ → Clear Queue
+empties it). Each batch lists the saved copies of its templates (flagged if the
+template has been edited or deleted in Templates since), each person's row says
+which one their mail is written from, and any mail can be opened to read
+exactly what was or will be sent.
+
+While a run is going, a Live Activity (the `AuroraLive` widget extension, fed
+by `SendLiveActivity`) shows the same progress on the Lock Screen and in the
+Dynamic Island, in the current theme's colours. It ends showing how the run
+finished.
+
+### Rate limits
+
+When Gmail answers a send with a rate limit (HTTP 429, or a 403 whose reason is
+`rateLimitExceeded`, `userRateLimitExceeded`, `dailyLimitExceeded` or similar),
+or is briefly unavailable (5xx), nothing was sent. The mail goes back first in
+line and the run waits:
+
+- for the time Gmail gave (a `Retry-After` header, or the "Retry after
+  <time>" its message ends with), or
+- if it gave none, for 30 s, then 1, 2, 4 and 8 minutes on each limit in a row.
+  A send that goes through resets the steps.
+
+The wait counts down on the batch, the shelf and the Live Activity, and Pause
+still stops it. A wait longer than 15 minutes (a daily sending limit,
+typically) isn't sat out: the batch pauses and carries on by itself at that
+time (an hour later if Gmail didn't say), with a notification in case the app
+is closed by then.
 
 ### Interruptions
 
@@ -210,6 +250,10 @@ send. What the app does with that:
 Servers that send prose alone fall back to reading the text: the address from
 `X-Failed-Recipients` or the prose, the reason from its wording and any status
 code in it. All of this lives in `BounceParsing`, which has its own tests.
+
+Check for Bounce on a single sent mail (its menu in Activity, or its page)
+does the same for that one mail straight away: its thread first, then failure
+notices anywhere in the mailbox that name its address.
 
 Bounces are saved per account in `Documents/bounces-<account>.json`, so they
 survive a relaunch. A bounce leaves the list when the contact is marked
@@ -396,6 +440,8 @@ Aurora/
 ├─ Views/                   SwiftUI screens
 ├─ Support/                 Design system, palette, keychain, JSON files, haptics
 └─ Assets.xcassets/         App icon and colours
+AuroraLive/                 Widget extension: the mail queue's Live Activity
+Shared/                     Code compiled into both the app and the extension
 Tests/                      Standalone Swift test scripts
 scripts/company_verification/  Catalog verification pipeline (Python)
 scripts/app_icon/           Draws the app icon (Swift, Core Graphics)

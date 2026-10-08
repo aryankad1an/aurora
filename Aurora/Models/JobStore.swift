@@ -218,6 +218,15 @@ final class JobStore {
         }
     }
 
+    /// Look for one sent mail's bounce now (`ReplySync.checkBounce`).
+    func checkBounce(sendID: String, using sync: ReplySync) async -> ReplySync.BounceCheck {
+        guard let send = sends.first(where: { $0.id == sendID }),
+              let address = emailByContact[send.contactID] else {
+            return .failed("This mail isn't in your send history, so there's nothing to check it against.")
+        }
+        return await sync.checkBounce(of: send, address: address)
+    }
+
     // MARK: - Tracking (home selection, syncs per account)
 
     /// Track a company on this user's Home. Optimistic: it appears in the tracked

@@ -47,37 +47,53 @@ enum BatchPhase: Equatable {
 
     var isRunning: Bool { self == .sending || self == .stopping }
 
-    /// The group the queue screen lists it under.
-    var lane: QueueLane {
+    /// The group Activity lists it under.
+    var group: QueueGroup {
         switch self {
-        case .due, .paused: .needsYou
+        case .due: .due
+        case .waiting: .waiting
+        case .scheduled: .scheduled
         case .sending, .stopping: .sending
-        case .waiting, .scheduled: .upNext
+        case .paused: .paused
         case .finished: .finished
         }
     }
+
+    /// Waiting on the user: the card carries a rule down its edge.
+    var needsUser: Bool { self == .due || self == .paused }
 }
 
-/// The queue screen's groups, in the order they're listed: what's waiting on
-/// the user first, what's gone last.
-enum QueueLane: Int, CaseIterable, Identifiable {
-    case needsYou, sending, upNext, finished
+/// How Activity groups batches inside its two queue lanes, in the order
+/// they're listed.
+enum QueueGroup: Int, CaseIterable, Identifiable {
+    case due, waiting, scheduled, sending, paused, finished
     var id: Int { rawValue }
+
+    var destination: QueueDestination {
+        switch self {
+        case .due, .waiting, .scheduled: .queued
+        case .sending, .paused, .finished: .inProgress
+        }
+    }
 
     var title: String {
         switch self {
-        case .needsYou: "Needs you"
+        case .due: "Ready to send"
+        case .waiting: "Next in line"
+        case .scheduled: "Scheduled"
         case .sending: "Sending"
-        case .upNext: "Up next"
+        case .paused: "Paused"
         case .finished: "Finished"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .needsYou: "exclamationmark.circle.fill"
+        case .due: "bell.badge.fill"
+        case .waiting: "hourglass"
+        case .scheduled: "clock.fill"
         case .sending: "paperplane.fill"
-        case .upNext: "clock.fill"
+        case .paused: "pause.circle.fill"
         case .finished: "checkmark.circle.fill"
         }
     }
@@ -102,7 +118,9 @@ extension MailBatch {
         case .sending: return "Sending · \(sent + failed) of \(self.mails.count) done"
         case .stopping: return "Pausing after the mail on its way"
         case .waiting: return "Next in line · \(mails)"
-        case .paused: return "Paused · \(pending) to go"
+        case .paused:
+            if let resumeAt { return "Paused · carries on \(resumeAt.queuePhrase)" }
+            return "Paused · \(pending) to go"
         case .due: return "Ready to send · \(mails)"
         case .scheduled(let date): return "\(date.queueStamp) · \(mails)"
         case .finished:
@@ -141,108 +159,83 @@ extension Date {
     }
 }
 
-/// Every batch in the mail queue, grouped by what it needs: what's waiting on
-/// you, what's sending, what's up next, and what's gone. Opened from the shelf
-/// above the tab bar, or from Activity.
-struct MailQueueView: View {
+/// One of Activity's queue lanes, as list rows: Queued (ready, next in line,
+/// scheduled) or In Progress (sending, paused, finished) — every batch as a
+/// card, grouped under the app's section labels, opening to its own screen.
+///
+/// Rows only: Activity owns the list, the navigation, the search and the
+/// confirmations (`queueAlerts`).
+struct QueueLaneSections: View {
+    let destination: QueueDestination
+    let query: String
+    let onOpen: (UUID) -> Void
+    let onRemove: (MailBatch) -> Void
+
     @Environment(MailQueue.self) private var queue
-    @Environment(\.dismiss) private var dismiss
-    @State private var path: [UUID] = []
-    /// A batch with mail still to go, waiting on a confirm to be removed.
-    @State private var removing: MailBatch?
-    @State private var confirmingClearAll = false
 
     var body: some View {
-        NavigationStack(path: $path) {
-            Group {
-                if queue.batches.isEmpty {
-                    ContentUnavailableView {
-                        Label("Nothing in the queue", systemImage: "tray")
-                    } description: {
-                        Text("Mail you send or schedule waits here until it's gone — and comes back paused if the app closes midway.")
+        let batches = Self.ordered(queue.batches).filter { batch in
+            queue.phase(of: batch).group.destination == destination && matches(batch)
+        }
+        let grouped = Dictionary(grouping: batches) { queue.phase(of: $0).group }
+
+        if destination == .inProgress && !batches.isEmpty {
+            QueueOverview(batches: batches)
+                .cardRow(top: 0, bottom: 6)
+        }
+
+        if batches.isEmpty {
+            empty
+                .cardRow()
+        }
+
+        ForEach(QueueGroup.allCases.filter { $0.destination == destination }) { group in
+            if let items = grouped[group] {
+                Section {
+                    ForEach(items) { batch in
+                        BatchCard(batch: batch, onRemove: { onRemove(batch) })
+                            .contentShape(.rect)
+                            .onTapGesture {
+                                Haptics.tap(0.5)
+                                onOpen(batch.id)
+                            }
+                            .cardRow(top: 4, bottom: 4)
+                            .swipeActions(edge: .trailing) {
+                                if queue.runningBatchID != batch.id {
+                                    Button("Remove", systemImage: "trash") { onRemove(batch) }
+                                        .tint(.danger)
+                                }
+                            }
                     }
-                } else {
-                    list
+                } header: {
+                    header(group, count: items.count)
                 }
-            }
-            .paperScreen()
-            .navigationTitle("Mail Queue")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { clearMenu }
-                ToolbarSpacer(.fixed, placement: .topBarTrailing)
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Haptics.tap(0.5)
-                        dismiss()
-                    } label: {
-                        Text("Done").fontWeight(.semibold)
-                    }
-                }
-            }
-            .uniformDeleteAlert(item: $removing,
-                                title: { _ in "Remove this batch?" },
-                                message: removing.map { batch in
-                                    "The \(batch.pending) mail\(batch.pending == 1 ? "" : "s") still to go won't be sent. Mail already sent stays sent."
-                                } ?? "",
-                                confirmLabel: "Remove") { batch in
-                withAnimation(Theme.Motion.snappy) { queue.remove(batch.id) }
-            }
-            .uniformDeleteAlert(title: "Clear the queue?",
-                                message: clearAllMessage,
-                                confirmLabel: "Clear All",
-                                isPresented: $confirmingClearAll) {
-                withAnimation(Theme.Motion.snappy) { queue.clearAll() }
-            }
-            .navigationDestination(for: UUID.self) { id in
-                BatchDetailView(batchID: id)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
         }
-        .dueBatchSummary()
     }
 
-    private var list: some View {
-        let grouped = Dictionary(grouping: ordered) { queue.phase(of: $0).lane }
-        return List {
-            QueueOverview()
-                .cardRow(top: 4, bottom: 6)
-
-            ForEach(QueueLane.allCases) { lane in
-                if let batches = grouped[lane] {
-                    Section {
-                        ForEach(batches) { batch in
-                            BatchCard(batch: batch, onRemove: { remove(batch) })
-                                .contentShape(.rect)
-                                .onTapGesture {
-                                    Haptics.tap(0.5)
-                                    path.append(batch.id)
-                                }
-                                .cardRow(top: 4, bottom: 4)
-                                .swipeActions(edge: .trailing) {
-                                    if queue.runningBatchID != batch.id {
-                                        Button("Remove", systemImage: "trash") { remove(batch) }
-                                            .tint(.danger)
-                                    }
-                                }
-                        }
-                    } header: {
-                        header(lane, count: batches.count)
-                    }
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
-            }
+    @ViewBuilder
+    private var empty: some View {
+        if !query.isEmpty {
+            InlineEmptyState(title: "Nothing here", systemImage: "line.3.horizontal.decrease",
+                             message: "No batch or person in it matches the search.")
+        } else if destination == .queued {
+            InlineEmptyState(title: "Nothing queued", systemImage: "tray",
+                             message: "Mail you schedule waits here for its time, and mail behind a batch that's sending waits for its turn.")
+        } else {
+            InlineEmptyState(title: "Nothing sending", systemImage: "paperplane",
+                             message: "Mail on its way shows here, with how far it's got — and comes back paused if the app closes midway.")
         }
-        .cardList()
-        .animation(Theme.Motion.snappy, value: queue.batches.map(\.id))
     }
 
-    /// A lane's label, as every list in the app labels its groups. Finished
+    /// A group's label, as every list in the app labels its groups. Finished
     /// carries its own Clear, where the things it clears are.
-    private func header(_ lane: QueueLane, count: Int) -> some View {
+    private func header(_ group: QueueGroup, count: Int) -> some View {
         HStack(spacing: 8) {
-            SectionLabel(title: lane.title, systemImage: lane.systemImage, count: count)
-            if lane == .finished {
+            SectionLabel(title: group.title, systemImage: group.systemImage, count: count)
+            if group == .finished {
                 Button("Clear") {
                     Haptics.tap(0.5)
                     withAnimation(Theme.Motion.snappy) { queue.clearFinished() }
@@ -258,14 +251,37 @@ struct MailQueueView: View {
         .listRowInsets(EdgeInsets())
     }
 
-    /// Every way to empty the queue, smallest first. Nothing here touches the
-    /// batch sending right now, and nothing already sent is unsent — only the
-    /// queue's record of it goes, after it's written to the history.
-    private var clearMenu: some View {
+    private func matches(_ batch: MailBatch) -> Bool {
+        guard !query.isEmpty else { return true }
+        return batch.title.localizedCaseInsensitiveContains(query)
+            || batch.mails.contains { $0.displayName.localizedCaseInsensitiveContains(query)
+                || $0.company.localizedCaseInsensitiveContains(query)
+                || $0.recipient.localizedCaseInsensitiveContains(query) }
+    }
+
+    /// Within each group: what's soonest first, and what's done newest first.
+    static func ordered(_ batches: [MailBatch]) -> [MailBatch] {
+        batches.sorted { lhs, rhs in
+            if lhs.isFinished && rhs.isFinished { return lhs.createdAt > rhs.createdAt }
+            return (lhs.scheduledFor ?? lhs.createdAt) < (rhs.scheduledFor ?? rhs.createdAt)
+        }
+    }
+}
+
+/// The queue's ways to empty itself, for Activity's ⋯ menu: smallest first.
+/// Nothing here touches the batch sending right now, and nothing already sent
+/// is unsent — only the queue's record of it goes, after it's written to the
+/// history.
+struct QueueClearItems: View {
+    let onClearAll: () -> Void
+
+    @Environment(MailQueue.self) private var queue
+
+    var body: some View {
         let finished = queue.batches.count(where: \.isFinished)
         let failed = queue.batches.filter { $0.id != queue.runningBatchID }.reduce(0) { $0 + $1.failed }
         let clearable = queue.batches.count { $0.id != queue.runningBatchID }
-        return Menu {
+        Menu("Clear Queue", systemImage: "tray.and.arrow.up") {
             Button("Clear Finished", systemImage: "checkmark.circle") {
                 Haptics.tap(0.5)
                 withAnimation(Theme.Motion.snappy) { queue.clearFinished() }
@@ -278,13 +294,43 @@ struct MailQueueView: View {
             }
             .disabled(failed == 0)
             Divider()
-            Button("Clear All…", systemImage: "trash", role: .destructive) { confirmingClearAll = true }
+            Button("Clear All…", systemImage: "trash", role: .destructive, action: onClearAll)
                 .disabled(clearable == 0)
-        } label: {
-            Image(systemName: "ellipsis")
         }
-        .accessibilityLabel("More actions")
         .disabled(queue.batches.isEmpty)
+    }
+}
+
+extension View {
+    /// The confirmations removing from the queue asks for: a batch with mail
+    /// still to go, and Clear All.
+    func queueAlerts(removing: Binding<MailBatch?>, clearingAll: Binding<Bool>) -> some View {
+        modifier(QueueAlerts(removing: removing, clearingAll: clearingAll))
+    }
+}
+
+private struct QueueAlerts: ViewModifier {
+    @Binding var removing: MailBatch?
+    @Binding var clearingAll: Bool
+
+    @Environment(MailQueue.self) private var queue
+
+    func body(content: Content) -> some View {
+        content
+            .uniformDeleteAlert(item: $removing,
+                                title: { _ in "Remove this batch?" },
+                                message: removing.map { batch in
+                                    "The \(batch.pending) mail\(batch.pending == 1 ? "" : "s") still to go won't be sent. Mail already sent stays sent."
+                                } ?? "",
+                                confirmLabel: "Remove") { batch in
+                withAnimation(Theme.Motion.snappy) { queue.remove(batch.id) }
+            }
+            .uniformDeleteAlert(title: "Clear the queue?",
+                                message: clearAllMessage,
+                                confirmLabel: "Clear All",
+                                isPresented: $clearingAll) {
+                withAnimation(Theme.Motion.snappy) { queue.clearAll() }
+            }
     }
 
     private var clearAllMessage: String {
@@ -294,36 +340,29 @@ struct MailQueueView: View {
             : "\(waiting) mail\(waiting == 1 ? "" : "s") still to go won't be sent. Mail already sent stays sent."
         return queue.isRunning ? base + " The batch sending now is left to finish." : base
     }
+}
 
-    /// A batch with nothing left to send goes at once; one with mail still to
-    /// go asks first.
-    private func remove(_ batch: MailBatch) {
+extension MailQueue {
+    /// Removing a batch: at once when nothing's left to send, else after a
+    /// confirm (`ask`).
+    func remove(_ batch: MailBatch, ask: (MailBatch) -> Void) {
         if batch.pending > 0 {
-            removing = batch
+            ask(batch)
         } else {
             Haptics.thud()
-            withAnimation(Theme.Motion.snappy) { queue.remove(batch.id) }
-        }
-    }
-
-    /// Within each lane: what's soonest first, and what's done newest first.
-    private var ordered: [MailBatch] {
-        queue.batches.sorted { lhs, rhs in
-            if lhs.isFinished && rhs.isFinished { return lhs.createdAt > rhs.createdAt }
-            return (lhs.scheduledFor ?? lhs.createdAt) < (rhs.scheduledFor ?? rhs.createdAt)
+            withAnimation(Theme.Motion.snappy) { remove(batch.id) }
         }
     }
 }
 
 // MARK: - Overview
 
-/// The whole queue in three figures — set the way the scheduled-mail sheet
-/// sets its own — and, while a batch runs, how far it's got.
+/// What's in progress in three figures — set the way the scheduled-mail sheet
+/// sets its own — and how far it's got.
 private struct QueueOverview: View {
-    @Environment(MailQueue.self) private var queue
+    let batches: [MailBatch]
 
     var body: some View {
-        let batches = queue.batches
         let toGo = batches.reduce(0) { $0 + $1.pending }
         let sent = batches.reduce(0) { $0 + $1.sent }
         let failed = batches.reduce(0) { $0 + $1.failed }
@@ -404,14 +443,24 @@ private struct PhaseTile: View {
 
 /// Something the user should read: why a batch stopped, or why mail failed.
 private struct QueueNote: View {
-    let text: String
+    let text: Text
     var systemImage = "exclamationmark.circle.fill"
+
+    init(text: String, systemImage: String = "exclamationmark.circle.fill") {
+        self.text = Text(text)
+        self.systemImage = systemImage
+    }
+
+    init(_ text: Text, systemImage: String) {
+        self.text = text
+        self.systemImage = systemImage
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: systemImage)
                 .foregroundStyle(.statusInvalid)
-            Text(text)
+            text
                 .foregroundStyle(Color.ink.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -420,6 +469,17 @@ private struct QueueNote: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.paperSunken, in: .rect(cornerRadius: Theme.Radius.inner, style: .continuous))
+    }
+}
+
+/// Gmail asked the run to slow down: what it said, and a countdown to the
+/// retry. The same mail is tried again then; nothing has been lost.
+private struct CooldownNote: View {
+    let cooldown: MailQueue.Cooldown
+
+    var body: some View {
+        QueueNote(Text("Gmail asked to slow down, so nothing was sent. Trying again in \(Text(cooldown.until, style: .timer).monospacedDigit())\(cooldown.attempt > 1 ? " (wait \(cooldown.attempt) of \(MailQueue.rateLimitBackoff.count))" : "").\n\(cooldown.reason)"),
+                  systemImage: "hourglass")
     }
 }
 
@@ -571,15 +631,21 @@ private struct BatchCard: View {
         let controls = queue.controls(for: batch, phase: phase,
                                       askSend: { Haptics.press(); confirmingSend = true },
                                       askLater: { rescheduling = true })
+        let cooldown = queue.cooldown?.batchID == batch.id ? queue.cooldown : nil
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                PhaseTile(phase: phase, tint: batch.tint(in: phase))
+                if cooldown != nil {
+                    IconTile(systemImage: "hourglass", tint: .kraft)
+                } else {
+                    PhaseTile(phase: phase, tint: batch.tint(in: phase))
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(batch.title)
                         .font(.headline)
                         .foregroundStyle(.ink)
                         .lineLimit(1)
-                    Text(batch.status(in: phase))
+                    Text(cooldown == nil ? batch.status(in: phase)
+                         : "Waiting on Gmail · \(batch.sent + batch.failed) of \(batch.mails.count) done")
                         .font(.caption)
                         .foregroundStyle(.inkMuted)
                         .lineLimit(2)
@@ -593,25 +659,27 @@ private struct BatchCard: View {
 
             // How far it got, while that's still moving. A finished batch's
             // status line already says it.
-            if phase.lane != .finished && (batch.hasProgress || phase.isRunning) {
+            if phase != .finished && (batch.hasProgress || phase.isRunning) {
                 VStack(alignment: .leading, spacing: 8) {
                     QueueMeter(sent: batch.sent, failed: batch.failed, total: batch.mails.count)
                     QueueLegend(batch: batch)
                 }
             }
 
-            if let note = batch.note {
+            if let cooldown {
+                CooldownNote(cooldown: cooldown)
+            } else if let note = batch.note {
                 QueueNote(text: note)
             }
 
             // What's up next goes by itself; its controls are a hold or a
             // tap away, rather than two buttons on every waiting card.
-            if phase.lane != .upNext && !controls.isEmpty {
+            if phase != .waiting && phase.group != .scheduled && !controls.isEmpty {
                 BatchButtons(controls: Array(controls.prefix(2)))
             }
         }
         .padding(12)
-        .panelAccented(phase.lane == .needsYou ? phase.tint : nil)
+        .panelAccented(phase.needsUser ? phase.tint : nil)
         .animation(Theme.Motion.snappy, value: phase)
         .contextMenu {
             ForEach(controls) { control in
@@ -630,7 +698,7 @@ private struct BatchCard: View {
 
 /// One batch, person by person. Each mail is written only when it's opened:
 /// the list shows who and where it's got to, never the text.
-private struct BatchDetailView: View {
+struct BatchDetailView: View {
     let batchID: UUID
 
     @Environment(MailQueue.self) private var queue

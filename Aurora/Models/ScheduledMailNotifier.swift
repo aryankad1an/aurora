@@ -47,6 +47,29 @@ enum ScheduledMailNotifier {
         center.removeDeliveredNotifications(withIdentifiers: [id.uuidString])
     }
 
+    /// Leave a notice for when a batch stopped by Gmail's sending limit
+    /// carries on — by itself if the app is open, on the next open if not.
+    static func scheduleResume(_ batch: MailBatch, at date: Date) {
+        guard date > .now else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Gmail's sending limit has passed"
+        content.body = "\(batch.pending == 1 ? "1 mail" : "\(batch.pending) mails") still to go · \(batch.title). Open Aurora to carry on sending."
+        content.sound = .default
+        content.userInfo = [batchKey: batch.id.uuidString]
+        let request = UNNotificationRequest(identifier: resumeID(batch.id), content: content,
+                                            trigger: UNTimeIntervalNotificationTrigger(timeInterval: date.timeIntervalSinceNow,
+                                                                                      repeats: false))
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    static func cancelResume(_ id: UUID) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [resumeID(id)])
+        center.removeDeliveredNotifications(withIdentifiers: [resumeID(id)])
+    }
+
+    private static func resumeID(_ id: UUID) -> String { id.uuidString + "-resume" }
+
     nonisolated fileprivate static let batchKey = "batchID"
 }
 
