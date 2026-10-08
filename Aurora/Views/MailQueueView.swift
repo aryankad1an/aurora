@@ -16,11 +16,11 @@ enum BatchPhase: Equatable {
     var label: String {
         switch self {
         case .sending: "Sending"
-        case .stopping: "Stopping…"
+        case .stopping: "Pausing"
         case .waiting: "Next in line"
         case .paused: "Paused"
         case .due: "Ready to send"
-        case .scheduled(let date): "Scheduled · " + date.formatted(date: .abbreviated, time: .shortened)
+        case .scheduled: "Scheduled"
         case .finished: "Done"
         }
     }
@@ -29,10 +29,10 @@ enum BatchPhase: Equatable {
         switch self {
         case .sending, .stopping: "paperplane.fill"
         case .waiting: "hourglass"
-        case .paused: "pause.circle.fill"
+        case .paused: "pause.fill"
         case .due: "bell.badge.fill"
         case .scheduled: "clock.fill"
-        case .finished: "checkmark.circle.fill"
+        case .finished: "checkmark"
         }
     }
 
@@ -42,6 +42,43 @@ enum BatchPhase: Equatable {
         case .waiting, .scheduled: .statusWaiting
         case .paused: .kraft
         case .finished: .statusDone
+        }
+    }
+
+    var isRunning: Bool { self == .sending || self == .stopping }
+
+    /// The group the queue screen lists it under.
+    var lane: QueueLane {
+        switch self {
+        case .due, .paused: .needsYou
+        case .sending, .stopping: .sending
+        case .waiting, .scheduled: .upNext
+        case .finished: .finished
+        }
+    }
+}
+
+/// The queue screen's groups, in the order they're listed: what's waiting on
+/// the user first, what's gone last.
+enum QueueLane: Int, CaseIterable, Identifiable {
+    case needsYou, sending, upNext, finished
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .needsYou: "Needs you"
+        case .sending: "Sending"
+        case .upNext: "Up next"
+        case .finished: "Finished"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .needsYou: "exclamationmark.circle.fill"
+        case .sending: "paperplane.fill"
+        case .upNext: "clock.fill"
+        case .finished: "checkmark.circle.fill"
         }
     }
 }
@@ -57,14 +94,61 @@ extension MailQueue {
     }
 }
 
-/// Every batch in the mail queue: what's sending, what's paused or waiting for
-/// its time, and what's gone. Opened from the shelf above the tab bar, or from
-/// Activity.
+extension MailBatch {
+    /// One line under the batch's name: where it's got to, in a few words.
+    func status(in phase: BatchPhase) -> String {
+        let mails = pending == 1 ? "1 mail" : "\(pending) mails"
+        switch phase {
+        case .sending: return "Sending · \(sent + failed) of \(self.mails.count) done"
+        case .stopping: return "Pausing after the mail on its way"
+        case .waiting: return "Next in line · \(mails)"
+        case .paused: return "Paused · \(pending) to go"
+        case .due: return "Ready to send · \(mails)"
+        case .scheduled(let date): return "\(date.queueStamp) · \(mails)"
+        case .finished:
+            if failed == 0 { return sent == 1 ? "Sent" : "All \(sent) sent" }
+            return "\(sent) sent · \(failed) failed"
+        }
+    }
+
+    /// What the user should know before anything else: why it stopped, else
+    /// why mail failed. One note, so the card says one thing.
+    var note: String? {
+        if isPaused, let pauseReason { return pauseReason }
+        guard let summary = failureSummary else { return nil }
+        return failed == 1 ? summary : "\(failed) failed: \(summary)"
+    }
+
+    /// Started: something has been sent or has failed.
+    var hasProgress: Bool { sent + failed > 0 }
+}
+
+extension Date {
+    /// "Today, 2:20 PM", "Tomorrow, 9:00 AM", "Thu 9 Oct, 2:20 PM".
+    var queueStamp: String {
+        let time = formatted(date: .omitted, time: .shortened)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(self) { return "Today, \(time)" }
+        if calendar.isDateInTomorrow(self) { return "Tomorrow, \(time)" }
+        return formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)) + ", " + time
+    }
+
+    /// `queueStamp` for the middle of a sentence: "queued today, 2:20 PM".
+    var queuePhrase: String {
+        let calendar = Calendar.current
+        return calendar.isDateInToday(self) || calendar.isDateInTomorrow(self)
+            ? queueStamp.prefix(1).lowercased() + queueStamp.dropFirst() : queueStamp
+    }
+}
+
+/// Every batch in the mail queue, grouped by what it needs: what's waiting on
+/// you, what's sending, what's up next, and what's gone. Opened from the shelf
+/// above the tab bar, or from Activity.
 struct MailQueueView: View {
     @Environment(MailQueue.self) private var queue
     @Environment(\.dismiss) private var dismiss
     @State private var path: [UUID] = []
-    /// A batch swiped away with mail still to go, waiting on a confirm.
+    /// A batch with mail still to go, waiting on a confirm to be removed.
     @State private var removing: MailBatch?
     @State private var confirmingClearAll = false
 
@@ -78,34 +162,23 @@ struct MailQueueView: View {
                         Text("Mail you send or schedule waits here until it's gone — and comes back paused if the app closes midway.")
                     }
                 } else {
-                    List {
-                        ForEach(ordered) { batch in
-                            BatchCard(batch: batch)
-                                .contentShape(.rect)
-                                .onTapGesture {
-                                    Haptics.tap(0.5)
-                                    path.append(batch.id)
-                                }
-                                .cardRow(top: 6, bottom: 6)
-                                .swipeActions(edge: .trailing) {
-                                    if queue.runningBatchID != batch.id {
-                                        Button("Remove", systemImage: "trash") { remove(batch) }
-                                            .tint(.danger)
-                                    }
-                                }
-                        }
-                    }
-                    .cardList()
+                    list
                 }
             }
             .paperScreen()
             .navigationTitle("Mail Queue")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(placement: .topBarTrailing) { clearMenu }
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Haptics.tap(0.5)
+                        dismiss()
+                    } label: {
+                        Text("Done").fontWeight(.semibold)
+                    }
                 }
-                ToolbarItem(placement: .topBarLeading) { clearMenu }
             }
             .uniformDeleteAlert(item: $removing,
                                 title: { _ in "Remove this batch?" },
@@ -128,6 +201,63 @@ struct MailQueueView: View {
         .dueBatchSummary()
     }
 
+    private var list: some View {
+        let grouped = Dictionary(grouping: ordered) { queue.phase(of: $0).lane }
+        return List {
+            QueueOverview()
+                .cardRow(top: 4, bottom: 6)
+
+            ForEach(QueueLane.allCases) { lane in
+                if let batches = grouped[lane] {
+                    Section {
+                        ForEach(batches) { batch in
+                            BatchCard(batch: batch, onRemove: { remove(batch) })
+                                .contentShape(.rect)
+                                .onTapGesture {
+                                    Haptics.tap(0.5)
+                                    path.append(batch.id)
+                                }
+                                .cardRow(top: 4, bottom: 4)
+                                .swipeActions(edge: .trailing) {
+                                    if queue.runningBatchID != batch.id {
+                                        Button("Remove", systemImage: "trash") { remove(batch) }
+                                            .tint(.danger)
+                                    }
+                                }
+                        }
+                    } header: {
+                        header(lane, count: batches.count)
+                    }
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                }
+            }
+        }
+        .cardList()
+        .animation(Theme.Motion.snappy, value: queue.batches.map(\.id))
+    }
+
+    /// A lane's label, as every list in the app labels its groups. Finished
+    /// carries its own Clear, where the things it clears are.
+    private func header(_ lane: QueueLane, count: Int) -> some View {
+        HStack(spacing: 8) {
+            SectionLabel(title: lane.title, systemImage: lane.systemImage, count: count)
+            if lane == .finished {
+                Button("Clear") {
+                    Haptics.tap(0.5)
+                    withAnimation(Theme.Motion.snappy) { queue.clearFinished() }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.clay)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, Theme.Space.gutter)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+        .listRowInsets(EdgeInsets())
+    }
+
     /// Every way to empty the queue, smallest first. Nothing here touches the
     /// batch sending right now, and nothing already sent is unsent — only the
     /// queue's record of it goes, after it's written to the history.
@@ -135,7 +265,7 @@ struct MailQueueView: View {
         let finished = queue.batches.count(where: \.isFinished)
         let failed = queue.batches.filter { $0.id != queue.runningBatchID }.reduce(0) { $0 + $1.failed }
         let clearable = queue.batches.count { $0.id != queue.runningBatchID }
-        return Menu("Clear") {
+        return Menu {
             Button("Clear Finished", systemImage: "checkmark.circle") {
                 Haptics.tap(0.5)
                 withAnimation(Theme.Motion.snappy) { queue.clearFinished() }
@@ -150,7 +280,10 @@ struct MailQueueView: View {
             Divider()
             Button("Clear All…", systemImage: "trash", role: .destructive) { confirmingClearAll = true }
                 .disabled(clearable == 0)
+        } label: {
+            Image(systemName: "ellipsis")
         }
+        .accessibilityLabel("More actions")
         .disabled(queue.batches.isEmpty)
     }
 
@@ -162,8 +295,8 @@ struct MailQueueView: View {
         return queue.isRunning ? base + " The batch sending now is left to finish." : base
     }
 
-    /// A swipe removes a batch with nothing left to send at once; one with mail
-    /// still to go asks first.
+    /// A batch with nothing left to send goes at once; one with mail still to
+    /// go asks first.
     private func remove(_ batch: MailBatch) {
         if batch.pending > 0 {
             removing = batch
@@ -173,197 +306,323 @@ struct MailQueueView: View {
         }
     }
 
-    /// What needs the user first — sending, then due and paused, then what's
-    /// waiting and scheduled — and what's done last, newest first.
+    /// Within each lane: what's soonest first, and what's done newest first.
     private var ordered: [MailBatch] {
-        func rank(_ batch: MailBatch) -> Int {
-            switch queue.phase(of: batch) {
-            case .sending, .stopping: 0
-            case .due: 1
-            case .paused: 2
-            case .waiting: 3
-            case .scheduled: 4
-            case .finished: 5
-            }
-        }
-        return queue.batches.sorted { lhs, rhs in
-            let (left, right) = (rank(lhs), rank(rhs))
-            if left != right { return left < right }
-            if left == 5 { return lhs.createdAt > rhs.createdAt }
+        queue.batches.sorted { lhs, rhs in
+            if lhs.isFinished && rhs.isFinished { return lhs.createdAt > rhs.createdAt }
             return (lhs.scheduledFor ?? lhs.createdAt) < (rhs.scheduledFor ?? rhs.createdAt)
         }
     }
 }
 
-// MARK: - Batch card
+// MARK: - Overview
 
-/// One batch: its name and state, how far it's got, and the one or two things
-/// that can be done with it right now.
-private struct BatchCard: View {
+/// The whole queue in three figures — set the way the scheduled-mail sheet
+/// sets its own — and, while a batch runs, how far it's got.
+private struct QueueOverview: View {
+    @Environment(MailQueue.self) private var queue
+
+    var body: some View {
+        let batches = queue.batches
+        let toGo = batches.reduce(0) { $0 + $1.pending }
+        let sent = batches.reduce(0) { $0 + $1.sent }
+        let failed = batches.reduce(0) { $0 + $1.failed }
+        VStack(spacing: 12) {
+            HStack(spacing: 0) {
+                Metric(value: toGo, caption: "to go", size: 24)
+                MetricDivider()
+                Metric(value: sent, caption: "sent", tint: .statusDone, size: 24)
+                MetricDivider()
+                Metric(value: failed, caption: "failed", tint: failed > 0 ? .statusInvalid : .inkFaint, size: 24)
+            }
+            QueueMeter(sent: sent, failed: failed, total: toGo + sent + failed)
+        }
+        .padding(14)
+        .panel()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// How far mail has got, as one bar: sent, then failed, then what's to go.
+struct QueueMeter: View {
+    let sent: Int
+    let failed: Int
+    let total: Int
+    var height: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { proxy in
+            let unit = total > 0 ? proxy.size.width / CGFloat(total) : 0
+            HStack(spacing: 0) {
+                Rectangle().fill(Color.statusDone).frame(width: unit * CGFloat(sent))
+                Rectangle().fill(Color.statusInvalid).frame(width: unit * CGFloat(failed))
+                Spacer(minLength: 0)
+            }
+            .background(Color.paperSunken)
+            .clipShape(.capsule)
+        }
+        .frame(height: height)
+        .animation(Theme.Motion.settle, value: sent)
+        .animation(Theme.Motion.settle, value: failed)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Sent, failed and to go, each with its colour in the meter.
+private struct QueueLegend: View {
     let batch: MailBatch
-    /// Set in the list, where the card opens the batch.
-    var showsChevron = true
+
+    var body: some View {
+        WrappingHStack(spacing: 14, lineSpacing: 4) {
+            if batch.sent > 0 { item("\(batch.sent) sent", .statusDone) }
+            if batch.failed > 0 { item("\(batch.failed) failed", .statusInvalid) }
+            if batch.pending > 0 { item("\(batch.pending) to go", .inkFaint) }
+        }
+        .font(.caption)
+        .foregroundStyle(.inkMuted)
+        .contentTransition(.numericText())
+    }
+
+    private func item(_ text: String, _ color: Color) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(text).lineLimit(1)
+        }
+    }
+}
+
+/// A batch's state as the tile beside its name, in the phase's colour.
+private struct PhaseTile: View {
+    let phase: BatchPhase
+    let tint: Color
+
+    var body: some View {
+        IconTile(systemImage: phase.systemImage, tint: tint)
+            .symbolEffect(.pulse, isActive: phase == .sending)
+    }
+}
+
+/// Something the user should read: why a batch stopped, or why mail failed.
+private struct QueueNote: View {
+    let text: String
+    var systemImage = "exclamationmark.circle.fill"
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.statusInvalid)
+            Text(text)
+                .foregroundStyle(Color.ink.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.paperSunken, in: .rect(cornerRadius: Theme.Radius.inner, style: .continuous))
+    }
+}
+
+extension MailBatch {
+    /// The tile's colour: a finished batch with failures isn't a clean tick.
+    func tint(in phase: BatchPhase) -> Color {
+        phase == .finished && failed > 0 ? .statusInvalid : phase.tint
+    }
+}
+
+// MARK: - Controls
+
+/// One thing that can be done with a batch right now. The card shows the
+/// first two as buttons, the batch's own screen all of them, and holding a
+/// card lists them in its menu — one list, so the three never disagree.
+private struct BatchControl: Identifiable {
+    let title: String
+    let systemImage: String
+    var isProminent = false
+    let action: () -> Void
+    var id: String { title }
+}
+
+extension MailQueue {
+    /// What can be done with `batch` now, most likely first.
+    fileprivate func controls(for batch: MailBatch, phase: BatchPhase,
+                              askSend: @escaping () -> Void,
+                              askLater: @escaping () -> Void) -> [BatchControl] {
+        let id = batch.id
+        let retryFailed = {
+            Haptics.press()
+            self.retryFailed(id)
+        }
+        let retry = BatchControl(title: "Retry Failed", systemImage: "arrow.clockwise", action: retryFailed)
+        let pause = BatchControl(title: "Pause", systemImage: "pause.fill") {
+            Haptics.thud()
+            self.pause(id)
+        }
+        switch phase {
+        case .sending, .waiting:
+            return [pause]
+        case .stopping:
+            return []
+        case .paused:
+            return [BatchControl(title: "Resume", systemImage: "play.fill", isProminent: true) {
+                Haptics.press()
+                self.resume(id)
+            }]
+            // "Retry": beside Resume and Later, and under the failures it means.
+            + (batch.failed > 0 ? [BatchControl(title: "Retry", systemImage: "arrow.clockwise", action: retryFailed)] : [])
+            + [BatchControl(title: "Later", systemImage: "clock", action: askLater)]
+        case .due:
+            return [BatchControl(title: "Send Now", systemImage: "paperplane.fill", isProminent: true, action: askSend),
+                    BatchControl(title: "Later", systemImage: "clock", action: askLater)]
+        case .scheduled:
+            return [BatchControl(title: "Send Now", systemImage: "paperplane.fill", action: askSend),
+                    BatchControl(title: "Reschedule", systemImage: "clock", action: askLater)]
+        case .finished:
+            guard batch.failed > 0 else { return [] }
+            return [retry]
+        }
+    }
+}
+
+/// A batch's buttons: equal widths in a row while every label fits whole,
+/// a column when one wouldn't — never a squeezed or truncated label.
+private struct BatchButtons: View {
+    let controls: [BatchControl]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                ForEach(controls) { button($0) }
+            }
+            VStack(spacing: 8) {
+                ForEach(controls) { button($0) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func button(_ control: BatchControl) -> some View {
+        let label = HStack(spacing: 6) {
+            Image(systemName: control.systemImage)
+                .imageScale(.small)
+            Text(control.title)
+        }
+        .font(.subheadline.weight(.semibold))
+        .lineLimit(1)
+        .fixedSize()
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+
+        if control.isProminent {
+            Button(action: control.action) { label }
+                .filledButton()
+                .controlSize(.small)
+        } else {
+            Button(action: control.action) { label }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(.ink)
+                .controlSize(.small)
+        }
+    }
+}
+
+/// The confirm before a batch is sent early, and the sheet that moves it.
+private struct BatchPrompts: ViewModifier {
+    let batch: MailBatch
+    @Binding var confirmingSend: Bool
+    @Binding var rescheduling: Bool
 
     @Environment(MailQueue.self) private var queue
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        content
+            .confirmAlert(batch.pending == 1 ? "Send this mail now?" : "Send \(batch.pending) mails now?",
+                          message: "They go out from your Gmail one after another, and can't be unsent.",
+                          confirmLabel: "Send",
+                          isPresented: $confirmingSend) {
+                Haptics.cascade(batch.pending)
+                SendFlight.launch(count: batch.pending)
+                queue.sendNow(batch.id)
+            }
+            .sheet(isPresented: $rescheduling) {
+                ScheduleSendSheet(count: batch.pending, initial: batch.scheduledFor, confirmLabel: "Reschedule") { date in
+                    queue.reschedule(batch.id, to: date)
+                }
+            }
+    }
+}
+
+// MARK: - Batch card
+
+/// One batch in the queue, laid out like every other card in the app: a tile,
+/// its name, one line of state — then, only when there's something to show,
+/// how far it's got, why it stopped, and the two things most worth doing.
+private struct BatchCard: View {
+    let batch: MailBatch
+    let onRemove: () -> Void
+
+    @Environment(MailQueue.self) private var queue
     @State private var confirmingSend = false
     @State private var rescheduling = false
 
     var body: some View {
         let phase = queue.phase(of: batch)
+        let controls = queue.controls(for: batch, phase: phase,
+                                      askSend: { Haptics.press(); confirmingSend = true },
+                                      askLater: { rescheduling = true })
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: phase.systemImage)
-                    .font(.title3)
-                    .foregroundStyle(phase.tint)
-                    .symbolEffect(.pulse, isActive: phase == .sending)
-                    .frame(width: 26)
-                VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 12) {
+                PhaseTile(phase: phase, tint: batch.tint(in: phase))
+                VStack(alignment: .leading, spacing: 4) {
                     Text(batch.title)
-                        .font(.display(17))
+                        .font(.headline)
                         .foregroundStyle(.ink)
                         .lineLimit(1)
-                    Text(phase.label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(phase.tint)
-                    Text(counts)
+                    Text(batch.status(in: phase))
                         .font(.caption)
                         .foregroundStyle(.inkMuted)
+                        .lineLimit(2)
                         .contentTransition(.numericText())
                 }
-                Spacer(minLength: 0)
-                if showsChevron {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.inkFaint)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.inkFaint)
+            }
+
+            // How far it got, while that's still moving. A finished batch's
+            // status line already says it.
+            if phase.lane != .finished && (batch.hasProgress || phase.isRunning) {
+                VStack(alignment: .leading, spacing: 8) {
+                    QueueMeter(sent: batch.sent, failed: batch.failed, total: batch.mails.count)
+                    QueueLegend(batch: batch)
                 }
             }
 
-            // Why it stopped and why mail failed, on the card itself — not
-            // only on the shelf, gone once dismissed, or one mail deep.
-            if phase == .paused, let reason = batch.pauseReason {
-                reasonLine(reason, systemImage: "exclamationmark.circle.fill", color: .kraft)
-            }
-            let reasons = batch.failureReasons
-            ForEach(reasons.prefix(2), id: \.reason) { item in
-                reasonLine("\(item.count) failed — \(item.reason)", systemImage: "xmark.octagon.fill", color: .statusInvalid)
-            }
-            if reasons.count > 2 {
-                let rest = reasons.dropFirst(2).reduce(0) { $0 + $1.count }
-                reasonLine("\(rest) more failed for other reasons — open the batch to see each.",
-                           systemImage: "ellipsis.circle", color: .inkMuted)
+            if let note = batch.note {
+                QueueNote(text: note)
             }
 
-            ProgressView(value: Double(batch.sent + batch.failed), total: Double(max(batch.mails.count, 1)))
-                .tint(batch.failed > 0 ? .kraft : .statusDone)
-                .animation(Theme.Motion.settle, value: batch.sent)
-
-            actions(for: phase)
-        }
-        .padding(14)
-        .panelAccented(phase == .due || phase == .paused ? phase.tint : nil)
-        .confirmAlert(batch.pending == 1 ? "Send this mail now?" : "Send \(batch.pending) mails now?",
-                      message: "They go out from your Gmail one after another, and can't be unsent.",
-                      confirmLabel: "Send",
-                      isPresented: $confirmingSend) {
-            Haptics.cascade(batch.pending)
-            SendFlight.launch(count: batch.pending)
-            queue.sendNow(batch.id)
-        }
-        .sheet(isPresented: $rescheduling) {
-            ScheduleSendSheet(count: batch.pending, initial: batch.scheduledFor, confirmLabel: "Reschedule") { date in
-                queue.reschedule(batch.id, to: date)
+            // What's up next goes by itself; its controls are a hold or a
+            // tap away, rather than two buttons on every waiting card.
+            if phase.lane != .upNext && !controls.isEmpty {
+                BatchButtons(controls: Array(controls.prefix(2)))
             }
         }
-    }
-
-    private var counts: String {
-        var parts: [String] = []
-        if batch.sent > 0 { parts.append("\(batch.sent) sent") }
-        if batch.failed > 0 { parts.append("\(batch.failed) failed") }
-        if batch.pending > 0 { parts.append("\(batch.pending) to go") }
-        return parts.isEmpty ? "\(batch.mails.count) mails" : parts.joined(separator: " · ")
-    }
-
-    private func reasonLine(_ text: String, systemImage: String, color: Color) -> some View {
-        Label {
-            Text(text)
-                .fixedSize(horizontal: false, vertical: true)
-        } icon: {
-            Image(systemName: systemImage)
-        }
-        .font(.caption)
-        .foregroundStyle(color)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity)
-    }
-
-    /// One row of capsules — a column at large text sizes, where three don't
-    /// fit a row. (`ViewThatFits` kept the row and truncated the labels.)
-    @ViewBuilder
-    private func actions(for phase: BatchPhase) -> some View {
-        if dynamicTypeSize >= .xxLarge {
-            VStack(alignment: .leading, spacing: 8) { buttons(for: phase) }
-        } else {
-            HStack(spacing: 8) { buttons(for: phase) }
-        }
-    }
-
-    @ViewBuilder
-    private func buttons(for phase: BatchPhase) -> some View {
-        Group {
-            switch phase {
-            case .sending:
-                action("Pause", "pause.fill") { Haptics.thud(); queue.pause(batch.id) }
-            case .stopping:
-                action("Pause", "pause.fill") {}.disabled(true)
-            case .paused:
-                action("Resume", "play.fill", prominent: true) { Haptics.press(); queue.resume(batch.id) }
-                if batch.failed > 0 {
-                    // "Retry": the card lists what failed right above it.
-                    action("Retry", "arrow.clockwise") { Haptics.press(); queue.retryFailed(batch.id) }
-                }
-                action("Later", "clock") { rescheduling = true }
-            case .due:
-                action("Send Now", "paperplane.fill", prominent: true) { Haptics.press(); confirmingSend = true }
-                action("Later", "clock") { rescheduling = true }
-            case .scheduled:
-                action("Send Now", "paperplane.fill") { Haptics.press(); confirmingSend = true }
-                action("Reschedule", "clock") { rescheduling = true }
-            case .waiting:
-                action("Pause", "pause.fill") { Haptics.thud(); queue.pause(batch.id) }
-            case .finished:
-                if batch.failed > 0 {
-                    action("Retry Failed", "arrow.clockwise", prominent: true) { Haptics.press(); queue.retryFailed(batch.id) }
-                }
-                // Nothing left to send, so nothing to lose: no confirm.
-                action("Remove", "trash") {
-                    Haptics.thud()
-                    withAnimation(Theme.Motion.snappy) { queue.remove(batch.id) }
-                }
+        .padding(12)
+        .panelAccented(phase.lane == .needsYou ? phase.tint : nil)
+        .animation(Theme.Motion.snappy, value: phase)
+        .contextMenu {
+            ForEach(controls) { control in
+                Button(control.title, systemImage: control.systemImage, action: control.action)
+            }
+            if !phase.isRunning {
+                if !controls.isEmpty { Divider() }
+                Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
             }
         }
-    }
-
-    /// A small capsule button that takes its own taps inside a tappable card.
-    @ViewBuilder
-    private func action(_ title: String, _ systemImage: String, prominent: Bool = false,
-                        perform: @escaping () -> Void) -> some View {
-        // Never squeezed into two lines: when a row of them doesn't fit, the
-        // row becomes a column instead (`actions`).
-        if prominent {
-            Button(action: perform) { Label(title, systemImage: systemImage).lineLimit(1) }
-                .font(.caption.weight(.semibold))
-                .filledButton()
-                .controlSize(.small)
-        } else {
-            Button(action: perform) { Label(title, systemImage: systemImage).lineLimit(1) }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
-                .tint(.inkMuted)
-        }
+        .modifier(BatchPrompts(batch: batch, confirmingSend: $confirmingSend, rescheduling: $rescheduling))
     }
 }
 
@@ -405,45 +664,56 @@ private struct BatchDetailView: View {
             case .failed: mail.status.isFailed
             }
         }
+        let showsCompany = batch.companies.count > 1
         return List {
-            BatchCard(batch: batch, showsChevron: false)
-                .cardRow(top: 6, bottom: 6)
+            BatchHeader(batch: batch)
+                .cardRow(top: 4, bottom: 6)
 
-            SavedTemplatesCard(batch: batch) { viewingTemplate = $0 }
-                .cardRow(top: 6, bottom: 6)
+            SavedTemplatesSection(batch: batch) { viewingTemplate = $0 }
 
-            SegmentedSelector(segments: [
-                (.all, "All"), (.waiting, "To Go"), (.sent, "Sent"), (.failed, "Failed")
-            ], selection: $filter)
-                .cardRow(top: 6, bottom: 8)
+            Section {
+                SegmentedSelector(segments: [
+                    (.all, "All"), (.waiting, "To Go"), (.sent, "Sent"),
+                    (.failed, batch.failed > 0 ? "Failed \(batch.failed)" : "Failed")
+                ], selection: $filter)
+                    .cardRow(top: 2, bottom: 6)
 
-            ForEach(mails) { mail in
-                QueuedMailRow(mail: mail, template: batch.templateName(for: mail),
-                              isSending: isInFlight(mail, phase: phase))
-                    .contentShape(.rect)
-                    .onTapGesture {
-                        Haptics.tap(0.5)
-                        previewing = mail
-                    }
-                    .cardRow(top: 3, bottom: 3)
-                    // Taking one person out: they won't be mailed. Not for
-                    // mail that's gone, or may have (cut off mid-send).
-                    .swipeActions(edge: .trailing) {
-                        if mail.status.isRemovable && !isRunning(phase) {
-                            Button("Remove", systemImage: "trash") {
-                                Haptics.thud()
-                                withAnimation(Theme.Motion.snappy) { queue.removeMails([mail.id], from: batchID) }
-                            }
-                            .tint(.danger)
+                ForEach(mails) { mail in
+                    QueuedMailRow(mail: mail, showsCompany: showsCompany,
+                                  isSending: isInFlight(mail, phase: phase))
+                        .contentShape(.rect)
+                        .onTapGesture {
+                            Haptics.tap(0.5)
+                            previewing = mail
                         }
-                    }
-            }
+                        .cardRow(top: 4, bottom: 4)
+                        // Taking one person out: they won't be mailed. Not for
+                        // mail that's gone, or may have (cut off mid-send).
+                        .swipeActions(edge: .trailing) {
+                            if mail.status.isRemovable && !phase.isRunning {
+                                Button("Remove", systemImage: "trash") {
+                                    Haptics.thud()
+                                    withAnimation(Theme.Motion.snappy) { queue.removeMails([mail.id], from: batchID) }
+                                }
+                                .tint(.danger)
+                            }
+                        }
+                }
 
-            if mails.isEmpty {
-                InlineEmptyState(title: filter == .failed ? "Nothing failed" : "Nothing here",
-                                 systemImage: filter == .failed ? "checkmark.circle" : "tray")
-                    .cardRow()
+                if mails.isEmpty {
+                    InlineEmptyState(title: filter == .failed ? "Nothing failed" : "Nothing here",
+                                     systemImage: filter == .failed ? "checkmark.circle" : "tray")
+                        .cardRow()
+                }
+            } header: {
+                SectionLabel(title: "Mails", systemImage: "envelope.fill", count: batch.mails.count)
+                    .padding(.horizontal, Theme.Space.gutter)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+                    .listRowInsets(EdgeInsets())
             }
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
         }
         .cardList()
         .animation(Theme.Motion.snappy, value: batch.mails.map(\.id))
@@ -456,18 +726,18 @@ private struct BatchDetailView: View {
                             Haptics.press()
                             queue.retryFailed(batchID)
                         }
-                        .disabled(isRunning(phase))
+                        .disabled(phase.isRunning)
                         Button(batch.failed == 1 ? "Remove Failed Mail" : "Remove \(batch.failed) Failed Mails",
                                systemImage: "exclamationmark.triangle") {
                             Haptics.thud()
                             let failed = Set(batch.mails.filter(\.status.isFailed).map(\.id))
                             withAnimation(Theme.Motion.snappy) { queue.removeMails(failed, from: batchID) }
                         }
-                        .disabled(isRunning(phase))
+                        .disabled(phase.isRunning)
                         Divider()
                     }
                     Button("Remove Batch", systemImage: "trash", role: .destructive) { confirmingRemove = true }
-                        .disabled(isRunning(phase))
+                        .disabled(phase.isRunning)
                 } label: {
                     Image(systemName: "ellipsis")
                 }
@@ -491,56 +761,127 @@ private struct BatchDetailView: View {
         }
     }
 
-    private func isRunning(_ phase: BatchPhase) -> Bool {
-        phase == .sending || phase == .stopping
-    }
-
     /// The one mail being handed to Gmail right now.
     private func isInFlight(_ mail: QueuedMail, phase: BatchPhase) -> Bool {
-        guard phase == .sending || phase == .stopping, case .sending = mail.status else { return false }
+        guard phase.isRunning, case .sending = mail.status else { return false }
         return true
     }
 }
 
-/// One person in a batch, and where their mail has got to.
+/// The top of a batch's screen, set like the scheduled-mail sheet: its state,
+/// three figures, the meter, every reason it stopped or failed, and every
+/// button. The name is already the screen's title, so it isn't repeated.
+private struct BatchHeader: View {
+    let batch: MailBatch
+
+    @Environment(MailQueue.self) private var queue
+    @State private var confirmingSend = false
+    @State private var rescheduling = false
+
+    var body: some View {
+        let phase = queue.phase(of: batch)
+        let tint = batch.tint(in: phase)
+        let controls = queue.controls(for: batch, phase: phase,
+                                      askSend: { Haptics.press(); confirmingSend = true },
+                                      askLater: { rescheduling = true })
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                PhaseTile(phase: phase, tint: tint)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(phase == .finished && batch.failed > 0 ? "Done, with failures" : phase.label)
+                        .font(.headline)
+                        .foregroundStyle(tint)
+                    Text(stamp(phase))
+                        .font(.caption)
+                        .foregroundStyle(.inkMuted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            VStack(spacing: 12) {
+                HStack(spacing: 0) {
+                    Metric(value: batch.sent, caption: "sent", tint: .statusDone, size: 24)
+                    MetricDivider()
+                    Metric(value: batch.failed, caption: "failed",
+                           tint: batch.failed > 0 ? .statusInvalid : .inkFaint, size: 24)
+                    MetricDivider()
+                    Metric(value: batch.pending, caption: "to go", size: 24)
+                }
+                QueueMeter(sent: batch.sent, failed: batch.failed, total: batch.mails.count)
+            }
+
+            let reasons = batch.failureReasons
+            if (batch.isPaused && batch.pauseReason != nil) || !reasons.isEmpty {
+                VStack(spacing: 6) {
+                    if batch.isPaused, let reason = batch.pauseReason {
+                        QueueNote(text: reason, systemImage: "pause.circle.fill")
+                    }
+                    ForEach(reasons, id: \.reason) { item in
+                        QueueNote(text: "\(item.count) failed: \(item.reason)", systemImage: "xmark.octagon.fill")
+                    }
+                }
+            }
+
+            if !controls.isEmpty {
+                BatchButtons(controls: controls)
+            }
+        }
+        .padding(16)
+        .panel(radius: Theme.Radius.hero)
+        .animation(Theme.Motion.snappy, value: phase)
+        .modifier(BatchPrompts(batch: batch, confirmingSend: $confirmingSend, rescheduling: $rescheduling))
+    }
+
+    private func stamp(_ phase: BatchPhase) -> String {
+        switch phase {
+        case .scheduled(let date): "Goes \(date.queuePhrase)"
+        case .sending: "\(batch.sent + batch.failed) of \(batch.mails.count) done"
+        default: "Queued \(batch.createdAt.queuePhrase)"
+        }
+    }
+}
+
+/// One person in a batch, and where their mail has got to — set like a
+/// contact on a company's page.
 private struct QueuedMailRow: View {
     let mail: QueuedMail
-    /// The saved template it's written from; nil when written by hand.
-    let template: String?
+    /// The batch spans companies, so each row says whose.
+    let showsCompany: Bool
     let isSending: Bool
 
     var body: some View {
         HStack(spacing: 12) {
             MonogramAvatar(text: mail.displayName, size: Theme.Avatar.small)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(mail.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.ink)
-                    .lineLimit(1)
-                Text("\(mail.recipient) · \(mail.company)")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Text(mail.displayName)
+                        .font(.headline)
+                        .foregroundStyle(.ink)
+                        .lineLimit(1)
+                    if mail.override != nil {
+                        Image(systemName: "pencil")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.inkFaint)
+                            .accessibilityLabel("Written by hand")
+                    }
+                }
+                Text(showsCompany ? "\(mail.recipient) · \(mail.company)" : mail.recipient)
                     .font(.caption)
                     .foregroundStyle(.inkMuted)
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    Image(systemName: template == nil ? "pencil" : "doc.text")
-                    Text(template ?? "Written by hand")
-                }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(template == nil ? Color.slate : Color.inkFaint)
-                .lineLimit(1)
+                    .truncationMode(.middle)
                 if case .failed(let reason) = mail.status {
                     Text(QueuedMail.explain(reason))
-                        .font(.caption2.weight(.medium))
+                        .font(.caption)
                         .foregroundStyle(.statusInvalid)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 1)
                 }
             }
-            Spacer(minLength: 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             status
         }
         .padding(12)
-        .panel()
+        .panelAccented(mail.status.isFailed ? .statusInvalid : nil)
     }
 
     @ViewBuilder
@@ -655,7 +996,7 @@ extension MailBatch {
 /// The templates a batch is written from, as it saved them — each opens to the
 /// exact text its mails are written from, and says when the one in Templates
 /// has been changed since.
-private struct SavedTemplatesCard: View {
+private struct SavedTemplatesSection: View {
     let batch: MailBatch
     let onOpen: (MailTemplate.ID) -> Void
 
@@ -663,46 +1004,66 @@ private struct SavedTemplatesCard: View {
 
     var body: some View {
         let used = Dictionary(grouping: batch.mails.filter { $0.override == nil }, by: \.templateID)
+        let ids = batch.templates.keys.filter { used[$0] != nil }.sorted { name($0) < name($1) }
         let byHand = batch.mails.count { $0.override != nil }
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(title: "Saved templates", systemImage: "doc.on.doc")
-            ForEach(batch.templates.keys.filter { used[$0] != nil }.sorted { name($0) < name($1) }, id: \.self) { id in
-                Button {
-                    Haptics.tap(0.5)
-                    onOpen(id)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "doc.text.fill")
-                            .foregroundStyle(.clay)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(name(id))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.ink)
-                            Text("\(used[id]?.count ?? 0) mail\(used[id]?.count == 1 ? "" : "s") · saved "
-                                 + batch.createdAt.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption)
-                                .foregroundStyle(.inkMuted)
-                        }
-                        Spacer(minLength: 6)
-                        if let change = SavedTemplateView.change(of: batch.templates[id], live: templateStore.templates.first { $0.id == id }) {
-                            StatusChip(text: change, systemImage: "pencil", color: .kraft)
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.inkFaint)
+        if !ids.isEmpty || byHand > 0 {
+            Section {
+                ForEach(ids, id: \.self) { id in
+                    Button {
+                        Haptics.tap(0.5)
+                        onOpen(id)
+                    } label: {
+                        row(id, count: used[id]?.count ?? 0)
                     }
-                    .contentShape(.rect)
+                    .buttonStyle(CardPress())
+                    .cardRow(top: 4, bottom: 4)
                 }
-                .buttonStyle(.plain)
+                if byHand > 0 {
+                    Label(byHand == 1 ? "1 mail written by hand" : "\(byHand) mails written by hand", systemImage: "pencil")
+                        .font(.caption)
+                        .foregroundStyle(.inkMuted)
+                        .padding(.horizontal, 4)
+                        .cardRow(top: 2, bottom: 4)
+                }
+            } header: {
+                SectionLabel(title: "Written from", systemImage: "doc.on.doc.fill", count: ids.count)
+                    .padding(.horizontal, Theme.Space.gutter)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+                    .listRowInsets(EdgeInsets())
             }
-            if byHand > 0 {
-                Label(byHand == 1 ? "1 mail written by hand" : "\(byHand) mails written by hand", systemImage: "pencil")
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        }
+    }
+
+    private func row(_ id: MailTemplate.ID, count: Int) -> some View {
+        HStack(spacing: 12) {
+            IconTile(systemImage: "doc.text.fill", size: Theme.Avatar.small)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(name(id))
+                    .font(.headline)
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                Text("\(count) mail\(count == 1 ? "" : "s") · saved \(batch.createdAt.activityPhrase)")
                     .font(.caption)
                     .foregroundStyle(.inkMuted)
+                    .lineLimit(1)
+                // On a line of its own, as a company card's chips are, so it
+                // never squeezes the line above.
+                if let change = SavedTemplateView.change(of: batch.templates[id], live: templateStore.templates.first { $0.id == id }) {
+                    StatusChip(text: change, systemImage: "pencil", color: .kraft)
+                        .padding(.top, 1)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.inkFaint)
         }
-        .padding(14)
+        .padding(12)
         .panel()
+        .contentShape(.rect)
     }
 
     private func name(_ id: MailTemplate.ID) -> String { batch.templates[id]?.name ?? "" }

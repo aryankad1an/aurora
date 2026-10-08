@@ -189,7 +189,7 @@ private struct BouncedLane: View {
                 .cardRow()
         } else {
             BounceSummaryCard(count: bounced.isEmpty ? total : bounced.count,
-                              message: "Gmail couldn't deliver to these. Open one to see why and fix a typo'd address; marking one invalid stops it being mailed again, by anyone.") {
+                              message: "Gmail couldn't deliver these. Fix a typo, or mark them invalid so no one mails them again.") {
                 onMark(bounced)
             }
             .cardRow(top: 0, bottom: 8)

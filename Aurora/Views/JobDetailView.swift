@@ -103,7 +103,7 @@ struct JobDetailView: View {
                     if !bounces.isEmpty {
                         Section {
                             BounceSummaryCard(count: bounces.count,
-                                              message: "Mail to \(bounces.count == 1 ? "this contact" : "these contacts") came back undelivered. They're first in the list below, marked Bounced — open one to see why or fix the address.") {
+                                              message: "\(bounces.count == 1 ? "It's" : "They're") first in the list below. Open one to see why, or fix the address.") {
                                 pendingValidity = ValidityChange(bounces.map(\.contact), isValid: false)
                             }
                             .cardRow(top: 0, bottom: 8)

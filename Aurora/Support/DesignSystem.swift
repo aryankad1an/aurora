@@ -591,6 +591,26 @@ struct PaperList<Content: View>: View {
     }
 }
 
+// MARK: - Tiles
+
+/// A glyph on a tinted rounded square — the same silhouette and size as a
+/// company's avatar, for a card whose subject is a state rather than a
+/// company: a batch in the queue, a set of bounces, a saved template.
+struct IconTile: View {
+    let systemImage: String
+    var tint: Color = .clay
+    var size: CGFloat = Theme.Avatar.medium
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: size * 0.38, weight: .semibold))
+            .foregroundStyle(tint)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: size, height: size)
+            .background(tint.opacity(0.16), in: .rect(cornerRadius: size * 0.28, style: .continuous))
+    }
+}
+
 // MARK: - Empty state
 
 /// A compact empty state for use *inside* a scroll view, where
