@@ -358,17 +358,23 @@ provisioning profiles.
 `Tests/` holds self-contained Swift scripts: reply detection, sync end to end,
 pagination, company/undo logic, and a mutation check that breaks the reply
 filters on purpose to make sure the tests notice. Most include their own copies
-of the logic under test, so they run without Xcode. The bounce tests compile
-against the app's own `BounceParsing.swift` instead:
+of the logic under test, so they run without Xcode. The bounce and greeting
+tests compile against the app's own files instead:
 
 ```bash
 swiftc Aurora/Models/BounceParsing.swift Tests/BounceParsingTests.swift -o /tmp/bt && /tmp/bt
+swiftc Aurora/Models/RecipientName.swift Aurora/Models/NameClassifier.swift \
+  Aurora/Models/MailTemplate.swift Tests/RecipientNameTests.swift -o /tmp/rn && /tmp/rn
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift
 swift Tests/CompanyAndUndoTests.swift
 swift Tests/MutationVerifier.swift
 ```
+
+`scripts/names/` builds and evaluates the classifier that decides whether an
+address names someone and what to greet them by (`Aurora/Models/NameClassifier.swift`,
+model in `Aurora/Resources/NameModel.txt`). See its [README](scripts/names/README.md).
 
 `scripts/company_verification/` is a Python pipeline that checks and repairs the
 shared company/contact catalog (one company per mail domain, typo domains,

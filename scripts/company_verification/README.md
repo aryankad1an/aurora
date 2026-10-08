@@ -144,8 +144,8 @@ rather than guessed, and the app sends "Hi," instead of "Hi Talk,". A stored
 greeting that is only the mailbox copied over (`Talk2saravanan`) or a one- or
 two-letter fragment is cleared for those rows; a greeting a person typed is
 kept. The app follows the same rule on its own: `RecipientName` reads a name
-off an address only when the mailbox separates it (`anjali.kumari`), and
-otherwise greets no one.
+off an address only when its classifier is sure of one (see
+[`scripts/names`](../names/README.md)), and otherwise greets no one.
 
 ## Extending `decisions.json`
 

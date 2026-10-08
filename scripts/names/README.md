@@ -1,0 +1,137 @@
+# Greeting classifier
+
+Decides whether an email address names a person, and the given name to greet
+them by — or that it doesn't, so the mail opens with a bare "Hi,". The app runs
+it on device (`Aurora/Models/NameClassifier.swift`) for any contact whose name
+field doesn't give a usable name; `RecipientName` calls it.
+
+```bash
+pip install pyarrow                    # build only
+python3 build_model.py                 # download (cached in .cache/names/), verify, write the model
+python3 build_model.py --check         # fail if the committed model is stale
+python3 -m unittest -v test_name_model # cases + Swift-vs-Python parity (needs swiftc, else skipped)
+python3 eval_names.py [--sweep]        # precision and coverage
+```
+
+## How it reads an address
+
+A mailbox is read as one of the patterns a work address is built from. Each is
+a tiny generative model with a prior:
+
+| pattern | example | greets |
+|---|---|---|
+| G | `rahul` | Rahul |
+| GS, GSS, GGS | `neha.mathur`, `nehamathur`, `sai.krishna.reddy` | Neha, Sai |
+| SG | `kumar.rahul` | Rahul |
+| Gi, GiS | `rahulk`, `rahul.k.sharma` | Rahul |
+| IG | `r.saravanan` (South Indian order) | Saravanan |
+| IS, IIS, ISI | `akushwah`, `pm.singh`, `a.kumar.s` | no one |
+| S | `sharma` | no one |
+| W, WW | `design` | no one |
+| O | anything else, spelt by letter trigrams | no one |
+
+A slot's likelihood is how common the word is as a given name, a surname or an
+English word. A given name or surname the lists don't have still gets a share,
+spelt out by letter trigrams. It can't be greeted, but it keeps a misreading
+from winning by default: with Gurpreet unlisted, `singh.gurpreet` is still not
+"Hi Singh,". Separators (`.`, `_`, `-`, digits) must fall between slots. Without
+them every split is tried, and each boundary pays the pattern's odds of being
+written with nothing in between. So `aryan` read as a + Ryan pays for an
+initial glued to a given name, which is rare, while `a.ryan` doesn't.
+
+Each reading's posterior goes to the name it greets. A name is used only when
+its **support** reaches the threshold (0.9). Support counts the readings that
+greet by it, plus those that greet by a listed name that is it with a surname
+fused on. So `rakeshkumar`, read as Rakesh + Kumar or as the single name
+Rakeshkumar, greets Rakesh. Two given names fused don't shorten: Nagarjuna is
+not "Nag". Only a listed given name is ever greeted.
+
+Two clean-ups keep common traps out:
+
+- A word listed as a given name less than 1% as often as it's a surname is a
+  record that put the surname first ("Singh", "Das", "Williams"), so it's
+  dropped from the given names. Ram and Ali, at about 2%, stay.
+- An initial glued after a given name is one consonant (`rahulk`). A glued
+  vowel ends a name instead: `suneeta` is Suneeta, not Suneet + A.
+
+`RecipientName` drops role words (`careers`, `hr`), filler (`official`) and the
+company's own name before asking, and treats letters wrapped around digits
+(`talk2saravanan`) as leetspeak, not a name.
+
+## Results
+
+`python3 eval_names.py`, threshold 0.9. *Precision* is the share of greetings
+that were right; *coverage* is the share of named mailboxes greeted.
+
+| set | precision | coverage |
+|---|---|---|
+| 100 hand-labelled mailboxes (`LABELLED` in `test_name_model.py`) | 1.000 | 0.897 |
+| 3,000 synthetic, every name known to the model | 0.997 | 0.939 |
+| 3,000 synthetic, 20% of name types held out of the model | 0.974 (0.981 clear cases) | 0.759 |
+
+The synthetic sets draw given names and surnames by frequency and spell them in
+the patterns above. The held-out run removes a fifth of the name types first,
+so about 19% of the people have a given name the model has never seen. "Clear
+cases" leaves out wrong greetings the synthetic labels can't rule out, such as
+`yo_murugan`, where the SECC files a Tamil given name as the surname.
+
+What's left when a name is unseen: the other half of the address gets greeted
+when it's also a given name (`christy-kim` → Kim, with Christy unknown), or an
+unseen name is cut back to a listed one (`shaheenahott` → Shaheen). The
+hand-labelled misses are all coverage gaps, and each of them gets "Hi,":
+Gurpreet (the rolls have no Punjab data), Aryan, Mohammad (0.83) and
+`r.saravanan` (0.67).
+
+## Data
+
+`build_model.py` pins every source by URL and SHA-256. The model,
+`Aurora/Resources/NameModel.txt` (744 KB, 283 KB compressed), holds only how
+common each given name, surname and word is, plus trigram tables. It holds no
+address and no full name.
+
+| source | used for | terms |
+|---|---|---|
+| Indian electoral rolls, first names by state and birth year (Sood & Laohaprapanon, Harvard Dataverse [doi:10.7910/DVN/WZGJBM](https://doi.org/10.7910/DVN/WZGJBM)), as packaged in [naampy](https://pypi.org/project/naampy/) 0.1.0 | given names, births from 1955 | CC0 per naampy's data manifest; naampy is MIT |
+| SECC 2011 surnames ([doi:10.7910/DVN/LIIBNB](https://doi.org/10.7910/DVN/LIIBNB)), as packaged in [outkast](https://pypi.org/project/outkast/) 2.0.1 | surnames: name and total only; the composition columns are never read | outkast is MIT. The Dataverse terms couldn't be fetched from the build machine, so check them before redistributing beyond the app |
+| US Social Security baby names, top 1,000 a year ([hadley/data-baby-names](https://github.com/hadley/data-baby-names)) | given names, births from 1955 | US government work, public domain |
+| US Census 2000 surnames with 1,000+ people ([fivethirtyeight/data](https://github.com/fivethirtyeight/data/tree/master/most-common-name)) | surnames | Census data is public domain; the FiveThirtyEight compilation is CC BY 4.0 |
+| [SCOWL](http://wordlist.aspell.net/) 2020.12.07, sizes 10–35 | English words; "other" trigrams | notice below |
+
+The Indian lists are 60% of each mixture and the US lists 40%. The rolls cover
+Andhra, the North-East, Goa, J&K and Puducherry, so the US lists fill in a good
+part of the modern and urban names they miss.
+
+SCOWL's notice, as its terms require:
+
+> Copyright 2000-2011 by Kevin Atkinson
+>
+> Permission to use, copy, modify, distribute and sell these word lists, the
+> associated scripts, the output created from the scripts, and its
+> documentation for any purpose is hereby granted without fee, provided that
+> the above copyright notice appears in all copies and that both that copyright
+> notice and this permission notice appear in supporting documentation. Kevin
+> Atkinson makes no representations about the suitability of this array for any
+> purpose. It is provided "as is" without express or implied warranty.
+
+## Tuning
+
+The priors, separator odds, unseen-name shares and threshold are judgement, not
+measurement. The build machine couldn't reach the live catalog, so they aren't
+fitted to it. They live in `build_model.py` (`PRIORS`, `GLUE`, `CONSTANTS`) and
+are written into the model, so the app and the reference read the same values.
+After changing one, rebuild, then run the tests and `eval_names.py --sweep`. A
+change that makes any `LABELLED` case greet wrongly fails the tests.
+
+Raising the threshold trades coverage for precision: 0.98 takes the held-out
+precision to 0.979 and coverage to 0.72. The unseen-name shares barely matter;
+coverage of the name lists does. The best next step is to learn from the
+catalog itself, the way `verify_names.py` already learns from its `first.last`
+addresses.
+
+## The Swift port
+
+`NameClassifier.swift` mirrors `name_model.py` step by step. `SwiftParity` in
+`test_name_model.py` compiles it, runs every labelled case and a few edge cases
+through both, and requires the same greeting to four decimal places of
+confidence. In a release build it reads the model in about a tenth of a second
+on first use and an address in about 0.15 ms, and it remembers what it has read.

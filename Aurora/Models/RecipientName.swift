@@ -11,13 +11,17 @@ import Foundation
 /// "Hi ,", "Hi ANJALI,", "Hi Dr.," and "Hi anjali.kumari@acme.com,", each of
 /// which is worse than not using the person's name at all.
 ///
-/// So a guess is only made when it's a confident one. Anything less gives
-/// ``fallback`` — empty — and the template closes up around it: "Hi
-/// {Receiver-Name}," is sent as "Hi," (see `MailText`). Greeting a stranger by
-/// the wrong name costs more than greeting them by none.
+/// So a guess is only made when it's a confident one — from an address, that
+/// call is `NameClassifier`'s. Anything less gives ``fallback`` — empty — and
+/// the template closes up around it: "Hi {Receiver-Name}," is sent as "Hi,"
+/// (see `MailText`). Greeting a stranger by the wrong name costs more than
+/// greeting them by none.
 enum RecipientName {
     /// What to greet by when no name can be trusted: nothing.
     static let fallback = ""
+
+    /// Reads names off addresses. The bundled model; tests hand in their own.
+    static var classifier: NameClassifier? = NameClassifier.shared
 
     /// Honorifics and credentials that precede a given name. Matched
     /// case-insensitively, with or without a trailing period.
@@ -105,16 +109,17 @@ enum RecipientName {
 
     // MARK: - From the email address
 
-    /// A given name read off the address, only where the address spells one out.
+    /// A given name read off the address, when `NameClassifier` is sure of one.
     ///
-    /// An address alone can't say where one name ends and the next begins:
-    /// `akushwah` is "A Kushwah", `nehamathur` is "Neha Mathur", `rahul` is just
-    /// Rahul — and nothing in the letters tells those apart. So only a mailbox
-    /// that separates its parts (`anjali.kumari`, `anjali_kumari87`) gives a
-    /// name; a glued one, initials (`pm.singh`), or letters wrapped around digits
-    /// (`talk2saravanan`) give nil. `verify_names.py` reads the glued ones with a
-    /// lexicon learned from the whole catalog and stores a `greeting_name` where
-    /// it's sure, which outranks this.
+    /// An address alone doesn't say where one name ends and the next begins:
+    /// `akushwah` is A Kushwah, `nehamathur` is Neha Mathur, `rahul` is Rahul.
+    /// The classifier weighs those readings against lists of given names,
+    /// surnames and words, and gives a name only when the readings that greet by
+    /// it far outweigh the rest; `akushwah`, `pm.singh` and `sharma` give none.
+    /// Role and filler words and the company's own name are dropped first, and
+    /// letters wrapped around digits (`talk2saravanan`) are leetspeak, not a name.
+    /// `verify_names.py` can still store a `greeting_name` from what the whole
+    /// catalog teaches it, which outranks this.
     private static func nameFromEmail(_ email: String) -> String? {
         let parts = email.lowercased().trimmingCharacters(in: .whitespaces)
             .split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
@@ -126,12 +131,16 @@ enum RecipientName {
 
         // The company's own name ("oracle.india@oracle.com") is no one's name.
         let domainLabels = Set(parts.dropFirst().flatMap { $0.split(separator: ".").map(String.init) })
-        let words = local.split(whereSeparator: { ".-_0123456789".contains($0) })
-            .map { letters(in: String($0)) }
-            .filter { !$0.isEmpty && !roleWords.contains($0) && !fillerWords.contains($0)
-                && !domainLabels.contains($0) }
+        let words = local.split(whereSeparator: { !("a"..."z").contains($0) })
+            .map(String.init)
+            .filter { !roleWords.contains($0) && !fillerWords.contains($0) && !domainLabels.contains($0) }
+        guard !words.isEmpty else { return nil }
 
-        // A given name and a surname, the given name spelt out in full.
+        if let classifier {
+            return classifier.greeting(parts: words).name
+        }
+        // No model in the bundle: only a mailbox that spells out a given name
+        // and a surname separately (`anjali.kumari`) is trusted.
         guard words.count >= 2, words[0].count >= 3 else { return nil }
         return recased(words[0])
     }
