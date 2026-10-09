@@ -132,6 +132,11 @@ final class ReplySync {
     /// what has come since (see `ReplyCheckpoint`). Saved per account.
     private(set) var checkpoint = ReplyCheckpoint()
     private var checkpointFile: JSONFile<ReplyCheckpoint>?
+    /// What each check did, for Activity's timeline. Saved per account.
+    private(set) var checkLog = ReplyCheckLog()
+    private var checkLogFile: JSONFile<ReplyCheckLog>?
+    /// Threads deleted in Gmail, so they aren't asked for again this session.
+    private var goneThreadIDs: Set<String> = []
 
     /// Send ids where a Sent message search was attempted but returned nothing.
     /// Kept in memory so subsequent syncs don't re-query Gmail Sent repeatedly
@@ -164,6 +169,15 @@ final class ReplySync {
         self.checkpointFile = checkpointFile
         checkpoint = checkpointFile.load() ?? ReplyCheckpoint()
         lastSyncedAt = checkpoint.checkedThrough
+        let checkLogFile = JSONFile<ReplyCheckLog>(name: "reply-checks-\(account).json")
+        self.checkLogFile = checkLogFile
+        checkLog = checkLogFile.load() ?? ReplyCheckLog()
+        // A check the app was closed in the middle of never finished.
+        for record in checkLog.records where record.result == .running {
+            checkLog.update(record.id) {
+                $0.result = .stopped("The app closed during this check.")
+            }
+        }
     }
 
     /// "Not a bounce": stop flagging this contact until a newer notice arrives.
@@ -211,9 +225,9 @@ final class ReplySync {
     ///   - sends: user's sent records.
     ///   - emailByContact: recipient address per contact id, needed to search Sent.
     ///   - excludingContactIDs: contacts already known to be invalid/bounced, to skip checking.
-    @discardableResult
     ///   - lookingUpNames: addresses to look for a name for in the account's
     ///     mail (`MailboxNames`), as the run's last step.
+    @discardableResult
     func run(sends: [MailSend],
              emailByContact: [String: String],
              excludingContactIDs: Set<String> = [],
@@ -243,6 +257,27 @@ final class ReplySync {
         let since = checkpoint.readFrom(fullCheck: forceFullCheck)
         let lookups = MailboxNames.shared.pending(names)
         progress = Progress(steps: lookups.isEmpty ? 5 : 6)
+        let record = ReplyCheckRecord(startedAt: startedAt, readFrom: since)
+        checkLog.begin(record)
+        saveCheckLog()
+        defer {
+            checkLog.update(record.id) { entry in
+                entry.finishedAt = .now
+                if entry.result == .running {
+                    if needsReconnect {
+                        entry.result = .stopped("Gmail needs reconnecting in Settings.")
+                    } else if needsMigration {
+                        entry.result = .stopped("The database is missing the reply columns.")
+                    } else if let errorMessage {
+                        entry.result = .stopped(errorMessage)
+                    } else {
+                        entry.result = .stopped("Cancelled.")
+                    }
+                }
+            }
+            saveCheckLog()
+        }
+        let after = since.map { " since " + Self.when($0) } ?? ""
         do {
             // Replies that were really "this address is no longer in service".
             let corrected = await correctMisreadReplies(in: sends, emailByContact: emailByContact)
@@ -261,6 +296,12 @@ final class ReplySync {
             outcome.recovered = recovered.count
             outcome.failed += recovered.failed
             outcome.read += recovered.read
+            note(record.id, "Matching sent mail",
+                 recovered.targets == 0
+                    ? "Every sent mail already linked to its thread"
+                    : "Linked \(recovered.count) of \(recovered.targets) sent mails to their threads"
+                        + (recovered.notFound > 0 ? " · \(recovered.notFound) not in Sent" : ""),
+                 issues: ReplyCheckLog.issues(recovered.reasons))
             // Fold the recovered ids back in so this run can check them straight
             // away, instead of finding a reply only on the next sync.
             sends = sends.map { send in
@@ -276,11 +317,27 @@ final class ReplySync {
             outcome.replies = checked.replies
             outcome.failed += checked.failed
             outcome.read += checked.read
+            var read: String
+            if checked.threads == 0 {
+                read = checked.wasFullCheck ? "No open threads to read" : "No open thread had new mail\(after)"
+            } else {
+                read = checked.wasFullCheck
+                    ? "Read all \(checked.threads) open threads"
+                    : "Read \(checked.threads) \(checked.threads == 1 ? "thread" : "threads") with new mail\(after)"
+                read += " · \(checked.replies) \(checked.replies == 1 ? "reply" : "replies")"
+                if !checked.bounces.isEmpty { read += " · \(checked.bounces.count) failure \(checked.bounces.count == 1 ? "notice" : "notices")" }
+                if checked.gone > 0 { read += " · \(checked.gone) deleted in Gmail" }
+            }
+            note(record.id, "Checking for replies", read, issues: ReplyCheckLog.issues(checked.reasons))
             beginStep(3, "Reading bounce notices")
             let confirmed = try await confirmThreadBounces(checked.bounces, emailByContact: emailByContact)
             outcome.bounced += confirmed.found
             outcome.failed += confirmed.failed
             outcome.read += confirmed.read
+            note(record.id, "Reading bounce notices",
+                 checked.bounces.isEmpty ? "None in the threads read"
+                    : "Read \(confirmed.read) · \(confirmed.found) \(confirmed.found == 1 ? "bounce" : "bounces")",
+                 issues: confirmed.failed > 0 ? ["\(confirmed.failed) couldn't be read; tried again next check"] : [])
             // A thread that has a real answer in it isn't a dead address, even
             // if a failure notice sits in it too.
             for contactID in checked.repliedContacts { bounces[contactID] = nil }
@@ -291,6 +348,8 @@ final class ReplySync {
             outcome.bounced += scanned.found
             outcome.failed += scanned.failed
             outcome.read += scanned.read
+            note(record.id, "Looking for bounced mail", Self.scanSummary(scanned, after: after, noun: "failure notice"),
+                 issues: Self.scanIssues(scanned))
 
             // "No longer in service" answers from their side, wherever they are.
             beginStep(5, "Looking for addresses no longer in service")
@@ -298,6 +357,9 @@ final class ReplySync {
             outcome.bounced += dead.found
             outcome.failed += dead.failed
             outcome.read += dead.read
+            note(record.id, "Looking for addresses no longer in service",
+                 Self.scanSummary(dead, after: after, noun: "\"no longer here\" reply"),
+                 issues: Self.scanIssues(dead))
 
             // Names for the people mailed that have none, from the account's own
             // mail: "Aryan Kadian <kdaryan@acme.com>" in anything from, to or
@@ -308,6 +370,8 @@ final class ReplySync {
                 outcome.namesFound = await MailboxNames.shared.lookUp(lookups, accepting: RecipientName.isPersonEntry) {
                     [weak self] looked in self?.progress.done += looked
                 }
+                note(record.id, "Finding names in your mail",
+                     "Looked up \(lookups.count) \(lookups.count == 1 ? "address" : "addresses") · \(outcome.namesFound) named")
             }
             // Contacts already ruled out are dealt with.
             for id in excludingContactIDs { bounces[id] = nil }
@@ -321,8 +385,10 @@ final class ReplySync {
             // on screen is current when it's just as stale as before.
             if outcome.readNothing {
                 errorMessage = "Couldn't reach Gmail, so nothing was checked. Try again in a moment."
+                checkLog.update(record.id) { $0.result = .stopped(errorMessage ?? "") }
             } else {
                 completed = true
+                checkLog.update(record.id) { $0.result = outcome.failed == 0 ? .complete : .incomplete }
             }
         } catch let error as GmailAuthError where error.needsReconnect {
             needsReconnect = true
@@ -332,6 +398,40 @@ final class ReplySync {
             if !error.isCancellation { errorMessage = error.localizedDescription }
         }
         return outcome
+    }
+
+    // MARK: - Timeline
+
+    /// Record what one step of check `id` did.
+    private func note(_ id: UUID, _ title: String, _ summary: String, issues: [String] = []) {
+        checkLog.update(id) { $0.steps.append(.init(title: title, summary: summary, issues: issues)) }
+        saveCheckLog()
+    }
+
+    private func saveCheckLog() {
+        checkLogFile?.save(checkLog)
+    }
+
+    /// "3:04 PM", or "Oct 8, 3:04 PM" when it wasn't today.
+    nonisolated static func when(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+    }
+
+    /// What an inbox search for notices found. `read` counts the search itself.
+    nonisolated private static func scanSummary(_ scan: (found: Int, failed: Int, read: Int),
+                                                after: String, noun: String) -> String {
+        guard scan.read > 0 else { return "Couldn't search" }
+        let notices = scan.read - 1 + scan.failed
+        let range = after.isEmpty ? " in the last 120 days" : after
+        guard notices > 0 else { return "No new \(noun)s\(range)" }
+        return "\(notices) new \(notices == 1 ? noun : noun + "s")\(range) · \(scan.found) \(scan.found == 1 ? "bounce" : "bounces")"
+    }
+
+    nonisolated private static func scanIssues(_ scan: (found: Int, failed: Int, read: Int)) -> [String] {
+        if scan.read == 0 && scan.failed > 0 { return ["The search couldn't be run; tried again next check"] }
+        return scan.failed > 0 ? ["\(scan.failed) couldn't be read; tried again next check"] : []
     }
 
     // MARK: - One mail
@@ -450,6 +550,12 @@ final class ReplySync {
         var threadIDs: [String: GmailAuthStore.SentMessage] = [:]
         var failed = 0
         var read = 0
+        /// Sends without a thread id that were looked for, and of those, ones
+        /// Sent doesn't have.
+        var targets = 0
+        var notFound = 0
+        /// Why the failed ones failed, with how often.
+        var reasons: [String: Int] = [:]
         var count: Int { threadIDs.count }
     }
 
@@ -457,7 +563,7 @@ final class ReplySync {
         case attached(sendID: String, message: GmailAuthStore.SentMessage)
         case notFound(sendID: String)
         case skipped
-        case failed
+        case failed(String)
     }
 
     private func recoverThreadIDs(in sends: [MailSend],
@@ -470,6 +576,7 @@ final class ReplySync {
 
         count(targets.count, "mails")
         var result = Recovered()
+        result.targets = targets.count
 
         for chunk in stride(from: 0, to: targets.count, by: Self.concurrency).map({
             Array(targets[$0..<min($0 + Self.concurrency, targets.count)])
@@ -493,7 +600,7 @@ final class ReplySync {
                         } catch let error as SupabaseError where error.isSchemaOutOfDate {
                             throw error
                         } catch {
-                            return .failed
+                            return .failed(ReplyCheckLog.reason(for: error))
                         }
                     }
                 }
@@ -515,14 +622,17 @@ final class ReplySync {
                         result.threadIDs[sendID] = message
                     } catch {
                         result.failed += 1
+                        result.reasons["Couldn't save it to the database", default: 0] += 1
                     }
                 case .notFound(let sendID):
                     result.read += 1
+                    result.notFound += 1
                     unrecoverableSendIDs.insert(sendID)
                 case .skipped:
                     break
-                case .failed:
+                case .failed(let reason):
                     result.failed += 1
+                    result.reasons[reason, default: 0] += 1
                 }
             }
             progress.done += chunk.count
@@ -589,13 +699,20 @@ final class ReplySync {
         /// Contacts whose threads were actually read this run.
         var checkedContacts: Set<String> = []
         var wasFullCheck = true
+        /// Threads read, and of those, ones deleted in Gmail.
+        var threads = 0
+        var gone = 0
+        /// Why the failed ones failed, with how often.
+        var reasons: [String: Int] = [:]
     }
 
     private enum CheckResult {
         case reply(sendID: String, contactID: String, at: Date, from: String, snippet: String?)
         case bounce(FoundBounce)
         case silent
-        case failed
+        /// Deleted in Gmail: nothing to read, and nothing wrong.
+        case gone(threadID: String)
+        case failed(String)
     }
 
     /// Threads that received mail from someone else since `date`, so a delta
@@ -625,7 +742,7 @@ final class ReplySync {
         guard let reader else { throw GmailAuthError.notConnected }
         let cutoff = Date().addingTimeInterval(-Self.checkWindow)
         let activeSends = sends.filter {
-            $0.gmailThreadID != nil &&
+            $0.gmailThreadID != nil && !goneThreadIDs.contains($0.gmailThreadID ?? "") &&
             !$0.hasReplied &&
             !excludingContactIDs.contains($0.contactID) &&
             ($0.sentAt ?? .distantPast) > cutoff
@@ -647,6 +764,7 @@ final class ReplySync {
             targets = activeSends
         }
         result.checkedContacts = Set(targets.map(\.contactID))
+        result.threads = targets.count
         guard !targets.isEmpty else { return result }
 
         count(targets.count, "mails")
@@ -673,8 +791,10 @@ final class ReplySync {
                             throw error
                         } catch let error as SupabaseError where error.isSchemaOutOfDate {
                             throw error
+                        } catch GmailAuthError.gone {
+                            return .gone(threadID: threadID)
                         } catch {
-                            return .failed
+                            return .failed(ReplyCheckLog.reason(for: error))
                         }
                     }
                 }
@@ -696,14 +816,20 @@ final class ReplySync {
                         result.replies += 1
                     } catch {
                         result.failed += 1
+                        result.reasons["Couldn't save the reply to the database", default: 0] += 1
                     }
                 case .bounce(let found):
                     result.read += 1
                     result.bounces.append(found)
                 case .silent:
                     result.read += 1
-                case .failed:
+                case .gone(let threadID):
+                    result.read += 1
+                    result.gone += 1
+                    goneThreadIDs.insert(threadID)
+                case .failed(let reason):
                     result.failed += 1
+                    result.reasons[reason, default: 0] += 1
                 }
             }
             progress.done += chunk.count

@@ -1,9 +1,11 @@
 import SwiftUI
 
 /// The one line that says whether the reply column can be trusted: when Gmail
-/// was last read ("Checked 5 minutes ago", kept current the way Mail's "Updated
-/// Just Now" is), whether a read is running (with its progress), and — when
-/// replies can't be read — why.
+/// was last read ("Status updated 5 minutes ago", kept current the way Mail's
+/// "Updated Just Now" is), whether a read is running ("Updating", with every
+/// step and count), and — when replies can't be read — why. Tapping it opens
+/// the timeline of checks (`onOpenHistory`), which says what each read and
+/// what, if anything, couldn't be.
 ///
 /// Screens used to carry their own copies of this, down to the same two
 /// blocker messages, and the copies had already drifted apart.
@@ -12,6 +14,8 @@ struct ReplySyncBar: View {
     /// Offers Check Now when set. Left out where the screen's own top bar
     /// already carries that verb.
     var onCheck: (() -> Void)? = nil
+    /// Opens the timeline of checks when the line is tapped.
+    var onOpenHistory: (() -> Void)? = nil
 
     /// Why the last check didn't work, if it didn't. The first two only the
     /// user can fix; the last is worth a retry.
@@ -33,13 +37,11 @@ struct ReplySyncBar: View {
     private func label(now: Date) -> String {
         if sync.isSyncing {
             let summary = sync.progress.summary
-            return summary.isEmpty ? "Starting the Gmail check" : summary
+            return summary.isEmpty ? "Updating" : "Updating · " + summary
         }
-        guard let last = sync.lastSyncedAt else { return "Replies not checked yet" }
-        guard now.timeIntervalSince(last) >= 60 else { return "Checked just now" }
-        let failed = sync.lastOutcome?.failed ?? 0
-        return "Checked \(last.formatted(.relative(presentation: .named)))"
-            + (failed > 0 ? " · \(failed) couldn't be read" : "")
+        guard let last = sync.lastSyncedAt else { return "Status not updated yet" }
+        guard now.timeIntervalSince(last) >= 60 else { return "Status updated just now" }
+        return "Status updated \(last.formatted(.relative(presentation: .named)))"
     }
 
     var body: some View {
@@ -94,8 +96,22 @@ struct ReplySyncBar: View {
                     .controlSize(.small)
                     .disabled(sync.isSyncing)
                 }
+
+                if onOpenHistory != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.inkFaint)
+                }
             }
         }
         .animation(Theme.Motion.snappy, value: sync.isSyncing)
+        .contentShape(.rect)
+        .onTapGesture {
+            guard let onOpenHistory else { return }
+            Haptics.tap(0.5)
+            onOpenHistory()
+        }
+        .accessibilityAddTraits(onOpenHistory != nil ? .isButton : [])
+        .accessibilityHint(onOpenHistory != nil ? "Shows what each check of your mail did" : "")
     }
 }

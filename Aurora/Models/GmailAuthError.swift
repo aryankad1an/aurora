@@ -22,6 +22,9 @@ enum GmailAuthError: LocalizedError {
     /// and otherwise waits it out like a rate limit. `retryAt` as above.
     case unavailable(String, retryAt: Date?)
     case server(String)
+    /// What was asked for isn't there (a 404): a thread or message deleted in
+    /// Gmail. Nothing to read, and nothing wrong.
+    case gone(String)
 
     var errorDescription: String? {
         switch self {
@@ -36,6 +39,7 @@ enum GmailAuthError: LocalizedError {
         case .rateLimited(let message, _): return "Gmail asked to slow down: \(message)"
         case .unavailable(let message, _): return message
         case .server(let message): return message
+        case .gone(let message): return message
         }
     }
 

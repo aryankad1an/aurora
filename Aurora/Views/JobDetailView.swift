@@ -31,6 +31,9 @@ struct JobDetailView: View {
     /// it's confirmed: it rewrites the shared contact row for every user.
     @State private var pendingValidity: ValidityChange?
     @State private var searchText = ""
+    /// Which contacts the list shows: the ones that can be mailed, or the ones
+    /// ruled out.
+    @State private var contactGroup = ContactGroup.valid
     /// This company, while the Send chooser (by rule: not mailed yet, quiet,
     /// follow-ups…) is open for it.
     @State private var sendingTo: SendTarget?
@@ -91,6 +94,10 @@ struct JobDetailView: View {
                 let active = contacts.filter { $0.isValid && bouncedIDs.contains($0.id) }
                     + contacts.filter { $0.isValid && !bouncedIDs.contains($0.id) }
                 let invalid = contacts.filter { !$0.isValid }
+                // Valid and invalid are two lists, one at a time — not the
+                // invalid ones trailing under every valid one. A company with
+                // no invalid contacts has nothing to switch between.
+                let group = invalid.isEmpty ? ContactGroup.valid : contactGroup
 
                 List(selection: $selection.ids) {
                     // Company details card (always visible at top)
@@ -120,28 +127,34 @@ struct JobDetailView: View {
                                 emptyContactsNotice
                                     .cardRow()
                             } else {
-                                contactRows(active, bounced: bouncedIDs)
+                                if !invalid.isEmpty {
+                                    SegmentedSelector(segments: [
+                                        (.valid, "Valid \(active.count)"),
+                                        (.invalid, "Invalid \(invalid.count)")
+                                    ], selection: $contactGroup)
+                                        .cardRow(top: 6, bottom: 6)
+                                }
+                                if group == .valid {
+                                    if active.isEmpty {
+                                        InlineEmptyState(title: "No valid contacts",
+                                                         systemImage: "person.crop.circle.badge.xmark",
+                                                         message: "Everyone here is marked invalid. Swipe one right under Invalid to put them back.")
+                                            .cardRow()
+                                    } else {
+                                        contactRows(active, bounced: bouncedIDs)
+                                    }
+                                } else {
+                                    contactRows(invalid, bounced: [])
+                                    // Ruled-out contacts keep their place in the
+                                    // company: they're the record of who has
+                                    // already been tried.
+                                    Text("Wrong address, or the person has left. These are never suggested and can't be mailed. Swipe right to put one back.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.inkMuted)
+                                        .padding(.horizontal, 4)
+                                        .cardRow(top: 4, bottom: 12)
+                                }
                             }
-                        }
-                    }
-
-                    // Ruled-out contacts keep their place in the company — they're
-                    // the record of who has already been tried — but sit below
-                    // everything live, in a sibling section (Lists don't nest them).
-                    if showsContacts && !invalid.isEmpty {
-                        Section {
-                            contactRows(invalid, bounced: [])
-                        } header: {
-                            Label("Invalid · \(invalid.count)",
-                                  systemImage: "exclamationmark.triangle.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.statusInvalid)
-                                .textCase(nil)
-                        } footer: {
-                            Text("Wrong address, or the person has left. These are never suggested and can't be mailed. Swipe right to put one back.")
-                                .font(.footnote)
-                                .foregroundStyle(.inkMuted)
-                                .padding(.top, 4)
                         }
                     }
                 }
@@ -407,8 +420,8 @@ struct JobDetailView: View {
                     // The full breakdown when it fits on one line, the active
                     // count alone when the avatar peek needs the room.
                     ViewThatFits(in: .horizontal) {
-                        Text(invalid == 0 ? "\(active) active" : "\(active) active · \(invalid) invalid")
-                        Text("\(active) active")
+                        Text(invalid == 0 ? "\(active) valid" : "\(active) valid · \(invalid) invalid")
+                        Text("\(active) valid")
                     }
                     .font(.caption)
                     .foregroundStyle(Color.inkMuted)
@@ -421,8 +434,16 @@ struct JobDetailView: View {
                 // Collapsed, the row previews who's inside rather than only how
                 // many — the faces are what you'd open it to look for.
                 if !showsContacts && !job.contacts.isEmpty {
-                    avatarPeek(job.validContacts.isEmpty ? job.contacts : job.validContacts)
-                        .transition(LiquidMaterialize(scale: 0.7, anchor: .trailing))
+                    // The faces when there's room for them and their count, a
+                    // single face at a larger text size, else none: a "+60"
+                    // squeezed narrower than itself wrapped a digit a line.
+                    let people = job.validContacts.isEmpty ? job.contacts : job.validContacts
+                    ViewThatFits(in: .horizontal) {
+                        avatarPeek(people, showing: 3)
+                        avatarPeek(people, showing: 1)
+                        Color.clear.frame(width: 0, height: 0)
+                    }
+                    .transition(LiquidMaterialize(scale: 0.7, anchor: .trailing))
                 }
 
                 Image(systemName: "chevron.down")
@@ -440,9 +461,9 @@ struct JobDetailView: View {
         .accessibilityHint(showsContacts ? "Collapses the list" : "Shows the list")
     }
 
-    /// Up to three overlapping avatars, then a "+N".
-    private func avatarPeek(_ contacts: [Contact]) -> some View {
-        let shown = contacts.prefix(3)
+    /// Up to `showing` overlapping avatars, then a "+N" that keeps its width.
+    private func avatarPeek(_ contacts: [Contact], showing: Int) -> some View {
+        let shown = contacts.prefix(showing)
         return HStack(spacing: -8) {
             ForEach(shown) { contact in
                 MonogramAvatar(text: contact.displayName, size: 26)
@@ -451,10 +472,14 @@ struct JobDetailView: View {
             if contacts.count > shown.count {
                 Text("+\(contacts.count - shown.count)")
                     .font(.caption2.weight(.bold))
+                    .monospacedDigit()
                     .foregroundStyle(Color.inkMuted)
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.leading, 12)
             }
         }
+        .fixedSize()
         .accessibilityHidden(true)
     }
 
@@ -681,4 +706,9 @@ private struct ContactRow: View {
         if isBounced { return .statusInvalid }
         return contact.hasReplied ? .statusDone : nil
     }
+}
+
+/// The two lists a company's contacts are split into.
+private enum ContactGroup: Hashable {
+    case valid, invalid
 }

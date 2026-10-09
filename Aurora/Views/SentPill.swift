@@ -129,9 +129,15 @@ struct NameNotDetectedLabel: View {
         HStack(spacing: 4) {
             Image(systemName: "person.fill.questionmark")
                 .font(.caption.weight(.bold))
-            Text(detail.isEmpty ? "Name not detected" : "Name not detected · \(detail)")
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
+            // Shortened rather than cut off where the row is narrow (a large
+            // text size beside a status pill): "Name not de…" said nothing.
+            ViewThatFits(in: .horizontal) {
+                Text(detail.isEmpty ? "Name not detected" : "Name not detected · \(detail)")
+                Text("No name" + (detail.isEmpty ? "" : " · \(detail)"))
+                Text("No name")
+            }
+            .font(.caption.weight(.medium))
+            .lineLimit(1)
         }
         .foregroundStyle(.kraft)
         .accessibilityElement(children: .combine)

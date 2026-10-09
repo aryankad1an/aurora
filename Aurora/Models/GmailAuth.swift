@@ -177,19 +177,47 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
     /// token: this exposes the *capability* while the refresh token and its
     /// short-lived access token stay inside this type.
     func gmailGET(path: String, query: [URLQueryItem]) async throws -> Data {
-        let token = try await accessToken()
         var components = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/\(path)")!
         if !query.isEmpty { components.queryItems = query }
 
-        var request = URLRequest(url: components.url!)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // Paced and retried so a long run of reads stays under Gmail's rate
+        // limit (see `GmailReadPolicy`).
+        var attempt = 0
+        while true {
+            try await paceRead()
+            let token = try await accessToken()
+            var request = URLRequest(url: components.url!)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? 0
+            if status == 200 { return data }
+            let google = GoogleError(data: data)
+            let said = Self.retryDate(header: http?.value(forHTTPHeaderField: "Retry-After"),
+                                      message: google?.message ?? "")?.timeIntervalSinceNow
+            if let wait = GmailReadPolicy.retryDelay(status: status, isRateLimit: google?.isRateLimit == true,
+                                                     said: said, attempt: attempt) {
+                attempt += 1
+                // Everything else waits too: the rate is the account's, not this read's.
+                readPacer.hold(until: .now.addingTimeInterval(wait))
+                continue
+            }
+            if status == 404 {
+                // A thread or message deleted in Gmail: there's nothing to read.
+                throw GmailAuthError.gone(google?.message ?? "Not found.")
+            }
             throw Self.error(status: status, data: data, fallback: "Gmail request failed.")
         }
-        return data
+    }
+
+    @ObservationIgnored private var readPacer = GmailReadPacer()
+
+    /// Wait for this read's turn (`GmailReadPacer`).
+    private func paceRead() async throws {
+        let now = Date.now
+        let wait = readPacer.reserve(now: now).timeIntervalSince(now)
+        if wait > 0 { try await Task.sleep(for: .seconds(wait)) }
     }
 
     /// The mail sent to `recipient` since `since`, if Sent mail has one — how a

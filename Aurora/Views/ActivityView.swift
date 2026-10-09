@@ -29,6 +29,8 @@ struct ActivityView: View {
     @State private var pendingValidity: ValidityChange?
     /// A bounced contact opened from the lane, to fix or rule out.
     @State private var openBounce: BouncedContact?
+    /// The timeline of reply checks, opened from the status line.
+    @State private var showsCheckHistory = false
     @Environment(MailQueue.self) private var mailQueue
     /// A batch opened from a queue lane.
     @State private var openBatch: UUID?
@@ -100,6 +102,12 @@ struct ActivityView: View {
             .validityAlert($pendingValidity) { change in
                 Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }
             }
+            .sheet(isPresented: $showsCheckHistory) {
+                ReplyCheckHistoryView(sync: replySync) {
+                    Task { await checkForReplies() }
+                }
+                .presentationDetents([.medium, .large])
+            }
             .sheet(item: $openBounce) { item in
                 ContactDetailView(contact: item.contact, company: item.company) { isValid in
                     Task {
@@ -124,7 +132,7 @@ struct ActivityView: View {
         let entries = Self.feed(jobStore.activity, lane: lane, query: query)
         return List {
             // No Check Now of its own: the bar's ↻ and a pull already ask.
-            ReplySyncBar(sync: replySync)
+            ReplySyncBar(sync: replySync, onOpenHistory: { showsCheckHistory = true })
                 .padding(.horizontal, 4)
                 .cardRow(top: 6, bottom: 6)
 

@@ -1,9 +1,11 @@
 import Foundation
 
-// Up to when a reply check has read an account's mail, and where the next one
-// starts reading. Compiles against the app's own files:
+// Up to when a reply check has read an account's mail, where the next one
+// starts reading, and the timeline of checks kept for Activity. Compiles
+// against the app's own files:
 //
-//   swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift Aurora/Support/JSONFile.swift \
+//   swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift Aurora/Models/ReplyCheckLog.swift \
+//     Aurora/Models/GmailAuthError.swift Aurora/Support/JSONFile.swift \
 //     Tests/ReplyCheckpointTests.swift -o /tmp/rc && /tmp/rc
 
 @main
@@ -55,6 +57,37 @@ struct ReplyCheckpointTests {
         expect(file.load(), checkpoint, "saved and read back")
         let other = JSONFile<ReplyCheckpoint>(name: "reply-checkpoint-b@x.com.json", directory: folder)
         expect(other.load(), nil, "another account's is its own")
+
+        print("The timeline of checks")
+        var log = ReplyCheckLog()
+        var ids: [UUID] = []
+        for minute in 0..<(ReplyCheckLog.limit + 5) {
+            let record = ReplyCheckRecord(startedAt: noon.addingTimeInterval(Double(minute) * 60), readFrom: nil)
+            ids.append(record.id)
+            log.begin(record)
+        }
+        expect(log.records.count, ReplyCheckLog.limit, "keeps the latest \(ReplyCheckLog.limit)")
+        expect(log.records.first?.id, ids.last, "newest first")
+        log.update(ids.last!) {
+            $0.steps.append(.init(title: "Checking for replies", summary: "Read 3 threads"))
+            $0.result = .incomplete
+            $0.finishedAt = $0.startedAt.addingTimeInterval(12)
+        }
+        expect(log.records.first?.steps.count, 1, "a step is recorded")
+        expect(log.records.first?.duration, 12, "…and how long it took")
+        log.update(ids.first!) { $0.result = .complete }
+        expect(log.records.contains { $0.id == ids.first! }, false, "an update to one no longer kept is dropped")
+        let logFile = JSONFile<ReplyCheckLog>(name: "reply-checks-a@x.com.json", directory: folder)
+        logFile.save(log)
+        expect(logFile.load(), log, "saved and read back")
+
+        print("Why reads failed, said briefly")
+        expect(ReplyCheckLog.reason(for: GmailAuthError.server("User-rate limit exceeded")),
+               "Gmail's rate limit, even after waiting", "a rate limit Gmail kept up")
+        expect(ReplyCheckLog.reason(for: URLError(.networkConnectionLost)), "Connection dropped", "a dropped connection")
+        expect(ReplyCheckLog.reason(for: URLError(.notConnectedToInternet)), "Offline", "offline")
+        expect(ReplyCheckLog.issues(["Offline": 1, "Connection dropped": 3]),
+               ["3 couldn't be read: Connection dropped", "1 couldn't be read: Offline"], "most common first")
 
         if failures > 0 {
             print("\n\(failures) failed")

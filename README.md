@@ -58,7 +58,7 @@ sent and read through the Gmail API under Google OAuth.
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
 | **Themes** | Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and Gilded. Each changes the colours, the chart that moves behind every screen, the launch screen and the app icon. |
 | **Send animation** | Sending launches paper planes, one per mail (up to three), that climb on glowing trails, loop and fly off the top of the screen. |
-| **Invalid contacts** | A contact whose address bounces or who has left can be marked invalid, and isn't mailed or suggested again until marked valid. Shared across users, since a dead address is dead for everyone. |
+| **Invalid contacts** | A contact whose address bounces or who has left can be marked invalid, and isn't mailed or suggested again until marked valid. Shared across users, since a dead address is dead for everyone. A company's contacts are split into Valid and Invalid lists, one at a time. |
 
 ## Getting started
 
@@ -358,9 +358,28 @@ only lands if the name field is still what it was, so a name typed in the
 meantime is never overwritten. An address with nothing found is tried again
 after a month.
 
-While a check runs, Activity shows the whole of it, wrapped rather than cut
-off: the step ("Step 2 of 6 · Checking for replies"), how far that step has
-got ("12 of 80 mails (15%)"), and a bar for the run as a whole.
+The status line at the top of Activity says "Updating · Step 2 of 6 ·
+Checking for replies · 12 of 80 mails (15%)" while a check runs, wrapped
+rather than cut off, with a bar for the run as a whole, and "Status updated
+4 minutes ago" once it's done. Tapping it opens **Status Updates**: when the
+last check finished, where the next one starts reading, and a timeline of the
+last 30 checks (`ReplyCheckLog`, kept per account on the phone), each with
+when it ran, how long it took, how far back it read, and what every step did
+("Read 12 threads with new mail since 3:04 PM · 2 replies", "Linked 3 of 5
+sent mails to their threads", "Looked up 40 addresses · 6 named"). Anything
+that couldn't be read is listed under its step with the reason, grouped:
+"3 couldn't be read: Connection dropped". A check that stopped says why.
+
+Gmail lets each user spend about 250 quota units a second, and reading a
+thread costs 10. Read five at a time as fast as they'd go, a full check of
+700-odd threads had about half of them refused. Those all showed up as
+"couldn't be read", and kept the checkpoint from moving on. Reads are now paced
+20 a second (`GmailReadPolicy`), and one Gmail turns away for the rate or a
+moment's outage is tried again after the time Gmail asks, else 1, 2, 4 and 8
+seconds, before it counts as failed. A thread deleted in Gmail is noted as
+deleted, not as a failure. `Tests/GmailReadPolicyTests.swift` checks this
+against a model of the limit: unpaced, a 731-thread check is refused 356
+times; paced, never.
 
 ### Bounces
 
@@ -524,7 +543,8 @@ Conventions the code follows:
 
 `Tests/` holds self-contained Swift programs that run without Xcode. Most carry
 their own copies of the logic under test; the bounce, greeting, name-lookup,
-mail-queue and reply-checkpoint tests compile against the app's own files.
+mail-queue, reply-checkpoint and Gmail read-policy tests compile against the
+app's own files.
 
 ```bash
 swiftc Aurora/Models/BounceParsing.swift Tests/BounceParsingTests.swift -o /tmp/bt && /tmp/bt
@@ -536,8 +556,11 @@ swiftc -parse-as-library -default-isolation MainActor \
   Aurora/Models/MailQueue.swift Aurora/Models/MailBatch.swift \
   Aurora/Models/MailTemplate.swift Aurora/Models/GmailAuthError.swift \
   Aurora/Support/JSONFile.swift Tests/MailQueueTests.swift -o /tmp/mq && /tmp/mq
-swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift Aurora/Support/JSONFile.swift \
+swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift Aurora/Models/ReplyCheckLog.swift \
+  Aurora/Models/GmailAuthError.swift Aurora/Support/JSONFile.swift \
   Tests/ReplyCheckpointTests.swift -o /tmp/rc && /tmp/rc
+swiftc -parse-as-library Aurora/Models/GmailReadPolicy.swift \
+  Tests/GmailReadPolicyTests.swift -o /tmp/gr && /tmp/gr
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift
