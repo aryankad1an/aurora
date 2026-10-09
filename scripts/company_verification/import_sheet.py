@@ -29,7 +29,7 @@ import cdc_review as R  # noqa: E402
 import supabase
 from domains import clean, is_personal, registrable
 from verify_companies import DECISIONS, State, dead_hosts, ilike_exact, load_live, load_snapshot, verify
-from verify_names import ROLE, SHORT_NAMES, Lexicon, derive, tokens
+from verify_names import ROLE, address_name, tokens
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -179,26 +179,10 @@ def person_part(local):
     return ".".join(kept) if kept else local
 
 
-def initials_case(name, lex):
-    """`Neha Pv` -> `Neha PV`: a short vowel-less word is initials."""
-    out = []
-    for w in name.split():
-        if 1 < len(w) <= 3 and not re.search(r"[aeiou]", w.lower()[1:]) and not (
-                lex.is_first(w.lower(), 1) or lex.is_last(w.lower(), 1)):
-            w = w.upper()
-        out.append(w)
-    return " ".join(out)
-
-
-def greeting(name):
-    """What a mail opens with: the first word that isn't an initial."""
-    if name == "Team":
-        return "Team"
-    words = name.split()
-    for w in words:
-        if len(w) > 2 or w.lower() in SHORT_NAMES:
-            return w
-    return words[-1]
+def initials_case(name):
+    """`Neha Pv` -> `Neha PV`: a short word with no vowel after its first letter is initials."""
+    return " ".join(w.upper() if 1 < len(w) <= 3 and not re.search(r"[aeiou]", w.lower()[1:]) else w
+                    for w in name.split())
 
 
 def initials_only(local, sheet_names):
@@ -241,7 +225,6 @@ def plan(snapshot):
     st = State(tables)
     items = json.loads((OUT / "extracted.json").read_text())
     dns = json.loads((OUT / "dns.json").read_text())
-    lex = Lexicon(tables["recruiters"])
     own = owners(st)
     rules = domain_rules()
     relay = set(DECISIONS["relay_domains"])
@@ -352,20 +335,20 @@ def plan(snapshot):
         else:
             core = person_part(local)
             fits = [n for n in sheet_names if explained(core, n)]
-            d_name, _, conf, how_d = derive(core + "@" + host, lex)
+            d_name, _ = address_name(core + "@" + host)
             if d_name and d_name != "Team":
-                d_name = initials_case(d_name, lex)
+                d_name = initials_case(d_name)
             if d_name == "Team":
                 name, source = "Team", "role mailbox"
             elif fits:
                 name, source = tidy(max(fits, key=len)), "sheet"
-            elif d_name and conf == "high":
+            elif d_name:
                 name, source = d_name, ("address (sheet name doesn't match it)" if sheet_names else "address")
             else:
-                needs_review.append(f"{email}: sheet {sheet_names}, address gives {d_name!r} ({conf}, {how_d})")
+                needs_review.append(f"{email}: sheet {sheet_names}, and the address spells no name out")
                 continue
         contacts.append({"email": email, "host": host, "domain": key, "company": company, "how": how,
-                         "why": why, "name": name, "greeting_name": greeting(name), "name_source": source,
+                         "why": why, "name": name, "greeting_name": None, "name_source": source,
                          "sheet_names": sheet_names, "sheet_company": sheet_cos, "where": prov})
 
     if needs_review:

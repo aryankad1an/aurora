@@ -250,14 +250,16 @@ def main():
     fits = collections.Counter()
     for email, r, c in rows:
         name, greet = r["name"], r["greeting_name"]
-        if not name or not greet:
-            problems.append(f"{email}: empty name/greeting"); continue
+        # A greeting is optional: the app works it out from the name (see
+        # verify_names.py), and the 2026-10-09 name pass cleared the importer's.
+        if not name:
+            problems.append(f"{email}: empty name"); continue
         if name == "Team":
             fits["role mailbox -> Team"] += 1
-            if greet != "Team":
+            if greet not in (None, "", "Team"):
                 problems.append(f"{email}: Team with greeting {greet!r}")
             continue
-        if greet not in name.split():
+        if greet and greet not in name.split():
             problems.append(f"{email}: greeting {greet!r} isn't a word of {name!r}")
         f = name_fit(name, email)
         if f >= 0.85:

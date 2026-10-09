@@ -180,7 +180,7 @@ def audit(old, new):
         if rid not in nr:
             continue
         n = nr[rid]
-        local = letters(r["email"].split("@")[0])
+        local = letters(r["email"].split("@")[0].split("+")[0])
         for field in ("name", "greeting_name"):
             if (r.get(field) or "") == (n.get(field) or ""):
                 continue
@@ -189,8 +189,11 @@ def audit(old, new):
             if val == "Team":
                 continue
             old_val = letters(r.get(field))
-            if not val and field == "greeting_name" and (old_val == local or len(old_val) <= 2):
-                continue  # an importer's copy of the mailbox, or a fragment
+            old_words = {letters(w) for w in (r.get("name") or "").split()}
+            if not val and field == "greeting_name" and (n.get("name") == "Team" or old_val in local or old_val in old_words or len(old_val) <= 2):
+                continue  # read off the address or the name, or a fragment: the app works it out
+            if not val and field == "name" and old_val == local:
+                continue  # the mailbox copied or split by a machine: not detected
             if not val:
                 problems.append(f"{r['email']}: {field} was cleared")
             elif letters(val) not in local and not all(letters(w) in local for w in val.split()):

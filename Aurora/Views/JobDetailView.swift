@@ -627,11 +627,15 @@ private struct ContactRow: View {
                     .font(.headline)
                     .foregroundStyle(contact.isValid ? Color.ink : Color.inkMuted)
                     .lineLimit(1)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(contact.isValid && !subtitleIsPlaceholder
-                                     ? Color.inkMuted : Color.inkFaint)
-                    .lineLimit(1)
+                if contact.isValid && !contact.isNameDetected {
+                    NameNotDetectedLabel(detail: contact.position)
+                } else {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(contact.isValid && !subtitleIsPlaceholder
+                                         ? Color.inkMuted : Color.inkFaint)
+                        .lineLimit(1)
+                }
             }
             // Fills the row rather than sharing it with a Spacer, so the address
             // gets every point the chip and button leave.

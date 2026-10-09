@@ -224,6 +224,10 @@ struct ContactDetailView: View {
                         .font(.subheadline)
                         .foregroundStyle(.inkMuted)
                         .multilineTextAlignment(.center)
+                    if !committed.isNameDetected {
+                        NameNotDetectedLabel()
+                            .padding(.top, 2)
+                    }
                 }
                 HStack(spacing: 10) {
                     actionTile("Mail", systemImage: "paperplane.fill",

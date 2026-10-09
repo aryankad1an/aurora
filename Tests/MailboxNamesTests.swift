@@ -5,7 +5,7 @@ import Foundation
 // they lean on:
 //
 //   swiftc Aurora/Models/MailboxNames.swift Aurora/Models/RecipientName.swift \
-//     Aurora/Models/NameClassifier.swift Tests/MailboxNamesTests.swift -o /tmp/mn && /tmp/mn
+//     Tests/MailboxNamesTests.swift -o /tmp/mn && /tmp/mn
 
 // MARK: - Stand-ins
 

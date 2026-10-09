@@ -153,9 +153,9 @@ struct SendMailView: View {
                 Button("Save") { saveName(nameDraft, for: letter) }
                 Button("Leave Empty", role: .cancel) {}
             } message: { letter in
-                Text("Nothing in their contact, replies or address names \(letter.email) with confidence, "
-                     + "so this mail opens “Hi,”. Add the name to greet them by — it's saved to the contact — "
-                     + "or leave it empty.")
+                Text("Their contact, replies and your mail don't name \(letter.email), and the address "
+                     + "doesn't spell a name out, so this mail opens “Hi,”. Add the name to greet them by — "
+                     + "it's saved to the contact — or leave it empty.")
             }
             .onAppear(perform: start)
             // Recipients with only an address to greet them by are looked up in

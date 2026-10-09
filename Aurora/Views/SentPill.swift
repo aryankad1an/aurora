@@ -118,6 +118,26 @@ struct InvalidPill: View {
     }
 }
 
+/// The warning a contact wears when no name was detected for them, so mail
+/// opens "Hi,": on their row and their card (Compose shows it as a strip on
+/// the letter). `detail` rides along after it — the job title, say — so the
+/// line it replaces isn't lost.
+struct NameNotDetectedLabel: View {
+    var detail: String = ""
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "person.fill.questionmark")
+                .font(.caption.weight(.bold))
+            Text(detail.isEmpty ? "Name not detected" : "Name not detected · \(detail)")
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.kraft)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// A mail domain as a chip. `listed` domains are saved on the company and solid;
 /// the others are only seen on its contacts' addresses, and dashed.
 struct DomainChip: View {

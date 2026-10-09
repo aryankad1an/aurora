@@ -73,6 +73,10 @@ struct Contact: Identifiable, Decodable {
                                       mailboxEntry: MailboxNames.shared.entry(for: email))
     }
 
+    /// Whether there's a name to greet them by. When there isn't, mail opens
+    /// "Hi," and the app says "Name not detected" wherever the contact shows.
+    var isNameDetected: Bool { !greeting.isEmpty }
+
     /// Whether this contact has nothing better than its address to be greeted
     /// by, and so is worth looking up in the account's mail.
     var needsNameLookup: Bool {

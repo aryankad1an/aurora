@@ -325,98 +325,48 @@ class ApplySafety(unittest.TestCase):
 
 
 class Names(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        rows = [{"email": f"{f}.{l}@x.com"} for f, l in [
-            ("neha", "mathur"), ("ravi", "mathur"), ("amit", "mathur"), ("neha", "gupta"), ("neha", "singh"), ("anjali", "kushwah"),
-            ("rohit", "kushwah"), ("amit", "kushwah"), ("rahul", "sharma"), ("ravi", "sharma"),
-            ("ajay", "sharma"), ("vijay", "kumar"), ("vijay", "rao"), ("vijay", "singh"),
-            ("vijay", "nair"), ("vijay", "das"), ("rakesh", "kumar"), ("rakesh", "rao"),
-            ("rakesh", "das"), ("radhakrishnan", "iyer"), ("om", "prakash"), ("amit", "singh"),
-            ("sunil", "singh"), ("rohit", "thomas"), ("anil", "thomas"), ("ravi", "thomas")]]
-        cls.lex = vn.Lexicon(rows)
-
     def check(self, email, name, greeting):
-        n, g, conf, how = vn.derive(email, self.lex)
-        self.assertEqual((n, g), (name, greeting), f"{email}: {how}")
+        self.assertEqual(vn.address_name(email), (name, greeting), email)
 
-    def test_readings(self):
+    def test_only_a_separated_given_name_is_read(self):
         self.check("neha.mathur@x.com", "Neha Mathur", "Neha")
-        self.check("nehamathur@x.com", "Neha Mathur", "Neha")
-        self.check("akushwah@x.com", "A Kushwah", "Kushwah")
-        self.check("pm.singh@x.com", "PM Singh", "Singh")
-        self.check("careers@x.com", "Team", "Team")
-        self.check("hr-neha@x.com", "Neha", "Neha")
-        self.check("radhakrishnan@x.com", "Radhakrishnan", "Radhakrishnan")   # whole name, not split
-        self.check("om_sourabh@x.com", "Om Sourabh", "Om")
-        self.check("bi.oracle@oracle.com", "Team", "Team")
+        self.check("neha_mathur@x.com", "Neha Mathur", "Neha")
+        self.check("rahul.k@x.com", "Rahul K", "Rahul")
+        self.check("anjali.kumari87+jobs@x.com", "Anjali Kumari", "Anjali")
+        self.check("hr.neha.mathur@x.com", "Neha Mathur", "Neha")
 
-    def test_ambiguous_mailboxes_are_left_alone(self):
-        for email in ["talk2saravanan@x.com", "vijaym_b4u@x.com", "vk_mms@x.com"]:
-            self.assertNotEqual(vn.derive(email, self.lex)[2], "high", email)
+    def test_nothing_is_guessed(self):
+        for email in ["nehamathur@x.com", "akushwah@x.com", "sanhussain@x.com", "rahul@x.com",
+                      "rahul123@x.com", "pm.singh@x.com", "r.saravanan@x.com", "jsk.patel@x.com",
+                      "talk2saravanan@x.com", "vk_mms@x.com"]:
+            self.assertEqual(vn.address_name(email), (None, None), email)
 
-    def test_human_entered_names_are_never_overwritten(self):
+    def test_role_mailboxes_are_team(self):
+        for email in ["careers@x.com", "hr-neha@x.com", "hr.team@x.com", "bi.oracle@oracle.com"]:
+            self.assertEqual(vn.address_name(email), ("Team", "Team"), email)
+
+    def test_review(self):
         tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
-            {"id": "1", "company_id": "c", "email": "akushwah@x.com", "name": "Anjali Kushwah", "greeting_name": "Anjali"},
-            {"id": "2", "company_id": "c", "email": "akushwah2@x.com", "name": "Akushwah", "greeting_name": "Akushwah"},
-            {"id": "3", "company_id": "c", "email": "careers@x.com", "name": "Priya Nair", "greeting_name": "Priya"},
-            # Same letters as the mailbox, but split, cased or punctuated by a person.
-            {"id": "4", "company_id": "c", "email": "vijaykumar@x.com", "name": "Vijay Kumar", "greeting_name": "Vijay"},
-            {"id": "5", "company_id": "c", "email": "neha.ca@x.com", "name": "Neha C A", "greeting_name": "Neha"},
-            {"id": "6", "company_id": "c", "email": "neha.dsouza@x.com", "name": "Neha D'souza", "greeting_name": "Neha"},
-        ] + [{"id": f"l{i}", "company_id": "c", "email": f"{f}.{l}@x.com", "name": f"{f} {l}".title(),
-              "greeting_name": f.title()} for i, (f, l) in enumerate([("anjali", "kushwah"), ("rohit", "kushwah"), ("amit", "kushwah")])]}
-        fixes, _, _ = vn.review(tables)
-        changed = {f["id"]: f for f in fixes}
-        self.assertNotIn("1", changed)     # human name kept
-        self.assertNotIn("3", changed)     # a person behind a role mailbox kept
-        for rid in ("4", "5", "6"):
-            self.assertNotIn(rid, changed)  # not the mailbox merely re-spaced
-        self.assertEqual(changed["2"]["new_name"], "A Kushwah")
-
-    def test_low_confidence_greetings_are_left_empty(self):
-        tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
-            {"id": "1", "company_id": "c", "email": "talk2saravanan@x.com", "name": "Talk2saravanan",
-             "greeting_name": "Talk2saravanan"},
-            {"id": "2", "company_id": "c", "email": "vk_mms@x.com", "name": "", "greeting_name": "Vk"},
-            {"id": "3", "company_id": "c", "email": "vijaym_b4u@x.com", "name": "Vijay M", "greeting_name": "Vijay"},
-            {"id": "4", "company_id": "c", "email": "qwzx@x.com", "name": "", "greeting_name": None},
+            {"id": "1", "company_id": "c", "email": "akushwah@x.com", "name": "Akushwah", "greeting_name": None},
+            {"id": "2", "company_id": "c", "email": "neha.mathur@x.com", "name": "Neha.mathur", "greeting_name": None},
+            {"id": "3", "company_id": "c", "email": "akushwah2@x.com", "name": "Anjali Kushwah", "greeting_name": "Anjali"},
+            {"id": "4", "company_id": "c", "email": "nehamathur@x.com", "name": "Neha Mathur", "greeting_name": None},
+            {"id": "5", "company_id": "c", "email": "arijit@x.com", "name": "", "greeting_name": "Arijit Sen"},
+            {"id": "6", "company_id": "c", "email": "d.j@x.com", "name": "D J", "greeting_name": "J"},
+            {"id": "7", "company_id": "c", "email": "careers@x.com", "name": "", "greeting_name": None},
+            {"id": "8", "company_id": "c", "email": "priya@x.com", "name": "Priya Nair", "greeting_name": "Careers"},
+            {"id": "9", "company_id": "c", "email": "parag@x.com", "name": "Parag", "greeting_name": "Parag"},
         ]}
-        fixes, _, _ = vn.review(tables)
-        changed = {f["id"]: f for f in fixes}
-        self.assertIsNone(changed["1"]["new_greeting_name"])   # mailbox copy cleared
-        self.assertNotIn("new_name", changed["1"])             # the name itself is never touched
-        self.assertIsNone(changed["2"]["new_greeting_name"])   # fragment cleared
-        self.assertNotIn("3", changed)                         # a greeting a person typed is kept
-        self.assertNotIn("4", changed)                         # nothing guessed for an unreadable mailbox
-
-    def test_a_typed_greeting_matching_the_mailbox_is_kept(self):
-        tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
-            {"id": "1", "company_id": "c", "email": "arijit@x.com", "name": "", "greeting_name": "Arijit"},
-            {"id": "2", "company_id": "c", "email": "subhajit@x.com", "name": "", "greeting_name": "Subhajit"},
-            {"id": "3", "company_id": "c", "email": "akushwah@x.com", "name": "", "greeting_name": "Akushwah"},
-        ]}
-        changed = {f["id"]: f for f in vn.review(tables)[0]}
-        self.assertNotIn("1", changed)                          # a plausible name someone typed stays
-        self.assertNotIn("2", changed)
-        self.assertIsNone(changed["3"]["new_greeting_name"])    # A + Kushwah: the importer's copy goes
-
-    def test_the_classifier_greets_rows_the_catalog_teaches_it_about(self):
-        tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
-            {"id": "1", "company_id": "c", "email": "asen@x.com", "name": "Arijit Sen", "greeting_name": None},
-            {"id": "2", "company_id": "c", "email": "adas@x.com", "name": "Arijit Das", "greeting_name": None},
-            {"id": "3", "company_id": "c", "email": "arijit@x.com", "name": "", "greeting_name": None},
-            {"id": "4", "company_id": "c", "email": "arijitdas@x.com", "name": "Arijitdas", "greeting_name": "Arijitdas"},
-            {"id": "5", "company_id": "c", "email": "zorvexa@x.com", "name": "", "greeting_name": None},
-            {"id": "6", "company_id": "c", "email": "arijit.k@x.com", "name": "Arijit Kumar", "greeting_name": None},
-        ]}
-        fixes, _, _ = vn.review(tables)
-        changed = {f["id"]: f for f in fixes}
-        self.assertEqual(changed["3"]["new_greeting_name"], "Arijit")
-        self.assertEqual(changed["4"]["new_greeting_name"], "Arijit")   # the importer's mailbox copy replaced
-        self.assertNotIn("5", changed)                                   # nothing known, nothing guessed
-        self.assertNotIn("6", changed)                                   # a usable name field is the app's job
-        self.assertNotIn("1", changed)
+        changed = {f["id"]: f for f in vn.review(tables)}
+        self.assertEqual(changed["1"]["new_name"], "")              # a mailbox copy: not detected
+        self.assertNotIn("9", changed)                               # …unless a greeting confirms it
+        self.assertEqual(changed["2"]["new_name"], "Neha Mathur")   # spelt out by the address
+        self.assertNotIn("3", changed)                               # a name written as a name is kept
+        self.assertNotIn("4", changed)                               # whoever split it, it's left alone
+        self.assertNotIn("5", changed)                               # a greeting a person typed is kept
+        self.assertIsNone(changed["6"]["new_greeting_name"])         # a fragment is cleared
+        self.assertEqual(changed["7"]["new_name"], "Team")
+        self.assertIsNone(changed["8"]["new_greeting_name"])         # a role word on a person
 
 
 if __name__ == "__main__":

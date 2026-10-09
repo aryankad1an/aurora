@@ -49,7 +49,7 @@ sent and read through the Gmail API under Google OAuth.
 |---|---|
 | **Companies and contacts** | A company can have several mail domains (`stripe.com`, `stripe.dev`). Adding a contact looks up the domain of their address and suggests the company already on file, so the same company isn't entered twice. |
 | **Templates** | Subject and body with placeholders (`{Receiver-Name}`, `{Receiver-Company}`, `{Sender-College}`, `{Resume-Link}`, …) filled from the contact and your profile. The editor flags misspelled placeholders and ones that would come out blank. A template that names one company in plain text is labelled with it, and compose warns before it goes to anyone else. |
-| **Greetings** | "Hi {Receiver-Name}," greets people by a name the app is sure of: the contact's name field, the name they signed a reply with, what your own mail calls their address, or a reading of the address itself. When it isn't sure, the mail opens with a plain "Hi,". See [Greetings](#greetings). |
+| **Greetings** | "Hi {Receiver-Name}," greets people by a name that's plainly there: the contact's name field, the name they signed a reply with, what your own mail calls their address, or an address that spells the given name out (`anjali.kumari@`). Nothing is guessed: otherwise the mail opens with a plain "Hi," and the app shows "Name not detected". See [Greetings](#greetings). |
 | **Compose** | One screen per batch: who it's going to, a row of templates, and a swipeable deck of the actual mails. Any mail can be edited by hand or moved to another template. Batches have no size limit. |
 | **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. When Gmail rate-limits a send, the queue waits and tries the same mail again instead of failing it. |
 | **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending · mail 4 of 6", "Waiting on Gmail · retry in 0:26"), a progress bar with sent, failed and to-go counts, and who the mail is going to. |
@@ -376,12 +376,13 @@ arrives.
 ### Greetings
 
 `{Receiver-Name}` is filled by `Contact.greeting`, which takes the first of
-these that gives a name it can trust:
+these that gives a name. None of them guesses:
 
 1. **A greeting set on the contact** (`recruiters.greeting_name`).
 2. **The contact's name field**, unless it only copies the mailbox
    ("Akushwah" for `akushwah@`). Honorifics, notes in brackets and
-   surname-first entries ("KUMARI, Anjali") are handled.
+   surname-first entries ("KUMARI, Anjali") are handled, and initials
+   ("A Kumari", "NS Acharya") fall through to the next word.
 3. **The name they signed a reply with**: the `From:` of a reply from the same
    address, which reply tracking already reads.
 4. **What your own mail calls their address.** `MailboxNames` looks each
@@ -389,11 +390,13 @@ these that gives a name it can trust:
    it, and keeps a header like `Aryan Kadian <kdaryan@acme.com>`. It runs for
    your tracked companies after launch and for a batch's recipients as compose
    opens, and the results are cached per account on the phone.
-5. **The address itself**, read by `NameClassifier`: a small generative model
-   that weighs the ways a work address is built (`rahul`, `nehamathur`,
-   `kumar.rahul`, `akushwah`, `pm.singh`) against public lists of given names,
-   surnames and English words, plus names learned from the catalog's own name
-   fields. It greets only when one name has at least 90% of the weight.
+5. **The address**, only when it separates a given name from the rest:
+   `anjali.kumari`, `anjali_kumari` and `rahul.k` greet Anjali, Anjali and
+   Rahul. A glued mailbox (`nehamathur`, `akushwah`), a lone word (`rahul`),
+   initials first (`pm.singh`) and leetspeak (`talk2saravanan`) give nothing:
+   there's no telling where one name ends and the next begins. An address
+   written surname first (`kumar.rahul`) does greet Kumar; nothing short of a
+   model could tell, and a model guessed wrong too often.
 6. **Nobody**: the template closes up, so "Hi {Receiver-Name}," is sent as
    "Hi,". A wrong name costs more than no name.
 
@@ -403,14 +406,17 @@ When no name is detected, the app says so rather than leaving it to chance:
   saves the name you type as the contact's greeting and rewrites the letter;
   **Leave Empty** sends it with "Hi,". The send confirmation counts how many
   mails open that way.
-- **The contact screen** says "Name not detected" under the fields, with the
+- **Contact rows and the contact card** say "Name not detected" where the job
+  title or address would go.
+- **The contact form** says "Name not detected" under the fields, with the
   Greeting Name field right there to fill in or leave empty.
 - **The template editor** warns when `{Receiver-Name}` is placed where an empty
   one would read oddly ("Dear ji,"), and shows how the line would read.
 
 Display names that name a role ("Acme Recruiting") or only repeat the mailbox
-never count. How the classifier is built, its data sources and its measured
-accuracy are in [`scripts/names`](scripts/names/README.md).
+never count. The catalog follows the same rule: a contact whose name can't be
+read this way has an empty name field, the "name not detected" state (see
+[`verify_names.py`](scripts/company_verification/README.md#name-pass-verify_namespy)).
 
 ## Architecture
 
@@ -420,7 +426,7 @@ accuracy are in [`scripts/names`](scripts/names/README.md).
 | State | `@Observable` stores in `Aurora/Models`: `JobStore`, `ProfileStore`, `TemplateStore`, `GmailAuthStore`, `ReplySync`, `MailQueue`, `MailboxNames` |
 | Backend | Supabase (Postgres) through `SupabaseAPI` |
 | Mail | Gmail API via `GmailAuthStore`: OAuth with PKCE, send, and read-only mailbox queries |
-| Greetings | `RecipientName` and `NameClassifier`, with the model in `Aurora/Resources/NameModel.txt` |
+| Greetings | `RecipientName`, with `MailboxNames` for names found in your mail |
 | Live Activity | The `AuroraLive` widget extension, drawn from `SendActivityAttributes` in `Shared/`; `SendLiveActivity` in the app starts, updates and ends it |
 | On the phone | Keychain for the Google refresh token; JSON files in Documents for the mail queue, bounces, found names and a few cached lists (`JSONFile`) |
 
@@ -469,10 +475,10 @@ tests compile against the app's own files.
 
 ```bash
 swiftc Aurora/Models/BounceParsing.swift Tests/BounceParsingTests.swift -o /tmp/bt && /tmp/bt
-swiftc Aurora/Models/RecipientName.swift Aurora/Models/NameClassifier.swift \
-  Aurora/Models/MailTemplate.swift Tests/RecipientNameTests.swift -o /tmp/rn && /tmp/rn
+swiftc Aurora/Models/RecipientName.swift Aurora/Models/MailTemplate.swift \
+  Tests/RecipientNameTests.swift -o /tmp/rn && /tmp/rn
 swiftc Aurora/Models/MailboxNames.swift Aurora/Models/RecipientName.swift \
-  Aurora/Models/NameClassifier.swift Tests/MailboxNamesTests.swift -o /tmp/mn && /tmp/mn
+  Tests/MailboxNamesTests.swift -o /tmp/mn && /tmp/mn
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift
@@ -487,7 +493,6 @@ notice. The Python scripts below have their own `unittest` suites.
 
 | Path | What it does |
 |---|---|
-| [`scripts/names/`](scripts/names/README.md) | Builds and evaluates the greeting classifier: pinned public name data, the Python reference implementation, and a Swift parity test. |
 | [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. Backs up before every change. |
 | `scripts/app_icon/make_icon.swift` | Draws the app icon, one rising curve from rose to amber with a glow behind it, and its tinted variant. Usage is at the top of the file. |
 | `scripts/app_icons/make_theme_icons.swift` | Draws the app icon for each theme. |
@@ -501,12 +506,10 @@ Aurora/
 ├─ Models/                     Stores, Supabase/Gmail access, mail queue, reply sync, greetings
 ├─ Views/                      SwiftUI screens
 ├─ Support/                    Design system, palette, keychain, JSON files, haptics
-├─ Resources/NameModel.txt     Name data for the greeting classifier
 └─ Assets.xcassets/            App icons and colours
 AuroraLive/                    Widget extension: the mail queue's Live Activity
 Shared/                        Code compiled into both the app and the extension
 Tests/                         Standalone Swift test programs
-scripts/names/                 Greeting classifier: data build, reference, evaluation (Python)
 scripts/company_verification/  Catalog verification pipeline (Python)
 scripts/app_icon/              Draws the app icon (Swift, Core Graphics)
 scripts/app_icons/             Draws each theme's app icon (Swift, Core Graphics)

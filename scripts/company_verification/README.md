@@ -130,30 +130,35 @@ off the address.
 
 ## Name pass (`verify_names.py`)
 
-Learns given names and surnames from the catalog's own `first.last` addresses,
-then derives a name and greeting for each mailbox (`akushwah` → "A Kushwah",
-greeted "Kushwah" like the app's `RecipientName`; `nehamathur` → "Neha
-Mathur"; `careers@` → "Team"). It changes a row only when that derivation is
-high-confidence **and** the stored value is empty, a role word, a one- or
-two-letter fragment, or just the mailbox re-spaced by an importer. A
-human-entered name is never overwritten; leetspeak mailboxes
-(`talk2saravanan`) are left alone.
+Holds the catalog to the app's rule (`RecipientName`): a name is read off an
+address only when the mailbox separates a given name from the rest, and
+nothing is guessed. No model, no learned lexicon.
 
-Where the `first.last` lexicon isn't sure, the app's greeting classifier
-([`scripts/names`](../names/README.md)) gets a say, after learning every name
-field in the catalog. A row with no usable name field (empty, or the mailbox
-copied over) and no greeting of its own gets the greeting the classifier is
-sure of: with "Arijit Sen" and "Arijit Das" elsewhere in the catalog, `arijit@`
-is greeted Arijit. The app reaches the same greeting on its own only if it has
-loaded those other rows, so storing it here makes it hold for every client.
+- `anjali.kumari`, `anjali_kumari`, `rahul.k` → "Anjali Kumari", "Rahul K".
+  The given name must be its own part: three letters or more, with a vowel.
+- A glued mailbox (`akushwah`, `nehamathur`), a lone word (`rahul`), initials
+  first (`pm.singh`) and leetspeak (`talk2saravanan`) name no one.
+- A role mailbox (`careers@`, `hr.team@`) or one named after the company is
+  "Team".
 
-When the address can't be read with confidence, the greeting is left **empty**
-rather than guessed, and the app sends "Hi," instead of "Hi Talk,". A stored
-greeting that is only the mailbox copied over (`Talk2saravanan`) or a one- or
-two-letter fragment is cleared for those rows; a greeting a person typed is
-kept. The app follows the same rule on its own: `RecipientName` reads a name
-off an address only when its classifier is sure of one (see
-[`scripts/names`](../names/README.md)), and otherwise greets no one.
+A name field that only copies the mailbox ("Akushwah") becomes what the
+address spells out, or empty. Empty is the "name not detected" state: the app
+shows it on the contact and in Compose, and mail opens "Hi,". A name written
+as a name ("Neha Mathur", "A Kushwah") is never touched.
+
+Greetings aren't derived or stored: the app works them out from the name, a
+signed reply and the account's own mail. A stored `greeting_name` is a
+person's word (Add Name in the app, or a source such as a recruiter sheet
+naming `parag@` "Parag") and is kept; it also confirms a one-word name that
+matches it. Only a one- or two-letter fragment, or a role word on a person, is
+cleared.
+
+On 2026-10-09 the catalog was moved to this rule from the earlier
+classifier-based one: names an earlier pass or the importer had split or
+copied from glued mailboxes were emptied, every machine-written greeting was
+cleared, and names a recruiter sheet or review had confirmed were kept with
+their greeting. Backups: `db_backups/20261009-131233-pre-strict-names` and
+the `-post-strict-names` ones after it.
 
 ## Extending `decisions.json`
 

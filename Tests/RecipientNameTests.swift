@@ -1,14 +1,12 @@
 import Foundation
 
-// Who a mail greets, end to end: the name field, the address read by
-// `NameClassifier`, and the template closing up when there's no one to name.
-// Compiles against the app's own files (with stand-ins for the SwiftUI-side
-// helpers they lean on):
+// Who a mail greets, end to end: the name field, a signed reply, an address
+// that spells a given name out, and the template closing up when there's no
+// one to name. Compiles against the app's own files (with stand-ins for the
+// SwiftUI-side helpers they lean on):
 //
-//   swiftc Aurora/Models/RecipientName.swift Aurora/Models/NameClassifier.swift \
-//     Aurora/Models/MailTemplate.swift Tests/RecipientNameTests.swift -o /tmp/rn && /tmp/rn
-//
-// Run from the repository root: it reads Aurora/Resources/NameModel.txt.
+//   swiftc Aurora/Models/RecipientName.swift Aurora/Models/MailTemplate.swift \
+//     Tests/RecipientNameTests.swift -o /tmp/rn && /tmp/rn
 
 // MARK: - Stand-ins for app types these files reference
 
@@ -50,44 +48,41 @@ struct RecipientNameTests {
     }
 
     static func main() {
-        guard let text = try? String(contentsOfFile: "Aurora/Resources/NameModel.txt", encoding: .utf8),
-              let model = NameClassifier(modelText: text) else {
-            print("❌ Couldn't load Aurora/Resources/NameModel.txt — run from the repository root.")
-            exit(1)
-        }
-        RecipientName.classifier = model
-
-
-        print("From the address")
-        expect(greet("rahul@acme.com"), "Rahul", "a given name alone")
-        expect(greet("nehamathur@acme.com"), "Neha", "given name glued to a surname")
+        print("From the address: only a given name spelt out as its own part")
         expect(greet("neha.mathur@acme.com"), "Neha", "given name and surname")
-        expect(greet("kumar.rahul@acme.com"), "Rahul", "surname first")
-        expect(greet("rahulk@acme.com"), "Rahul", "given name and initial")
-        expect(greet("rakeshkumar@acme.com"), "Rakesh", "a compound name goes by its first part")
-        expect(greet("hr-neha@acme.com"), "Neha", "a role word beside a name is dropped")
+        expect(greet("neha_mathur@acme.com"), "Neha", "underscore")
+        expect(greet("neha-mathur@acme.com"), "Neha", "hyphen")
+        expect(greet("rahul.k@acme.com"), "Rahul", "given name and initial")
+        expect(greet("sai.krishna.reddy@acme.com"), "Sai", "three parts")
         expect(greet("anjali.kumari87+jobs@acme.com"), "Anjali", "digits and a +tag")
-        expect(greet("akushwah@acme.com"), "", "initial and surname: no given name")
-        expect(greet("pm.singh@acme.com"), "", "initials and surname")
-        expect(greet("sharma@acme.com"), "", "a surname alone")
-        expect(greet("singh.gurpreet@acme.com"), "Gurpreet", "surname first, Punjabi")
-        expect(greet("singh.zorvexa@acme.com"), "", "an unknown name isn't swapped for the surname")
-        expect(greet("suneeta@acme.com"), "Suneeta", "a final vowel isn't an initial")
+        expect(greet("hr.neha.mathur@acme.com"), "Neha", "a role word beside a name is dropped")
+        expect(greet("rahul@acme.com"), "", "a lone word: no separation")
+        expect(greet("nehamathur@acme.com"), "", "glued: no guess")
+        expect(greet("akushwah@acme.com"), "", "glued initial and surname")
+        expect(greet("sanhussain@acme.com"), "", "glued, no telling where the name ends")
+        expect(greet("rahul123@acme.com"), "", "a word and digits")
+        expect(greet("pm.singh@acme.com"), "", "initials first")
+        expect(greet("r.saravanan@acme.com"), "", "an initial first")
+        expect(greet("hr-neha@acme.com"), "", "a role word and one name")
+        expect(greet("jsk.patel@acme.com"), "", "a first part with no vowel is initials")
         expect(greet("careers@acme.com"), "", "a role mailbox")
-        expect(greet("design@acme.com"), "", "an English word")
         expect(greet("oracle.india@oracle.com"), "", "the company's own name")
         expect(greet("talk2saravanan@acme.com"), "", "leetspeak")
-        expect(greet("zorvexa@acme.com"), "", "a name the model has never seen")
 
         print("From the name field")
         expect(greet("ak@acme.com", name: "Dr. Anjali Kumari"), "Anjali", "honorific dropped")
         expect(greet("ak@acme.com", name: "KUMARI, Anjali"), "Anjali", "surname-first with a comma")
         expect(greet("akushwah@acme.com", name: "Akushwah"), "", "a name that only copies the mailbox")
-        expect(greet("rahul@acme.com", name: "Rahul"), "Rahul", "…unless the address names someone")
+        expect(greet("neha.mathur@acme.com", name: "Nehamathur"), "Neha", "…the address can still name them")
 
         expect(greet("arijit.sen@acme.com", name: "Arijit Sen"), "Arijit", "a spaced name matching first.last is real")
         expect(greet("arijitsen@acme.com", name: "Arijit Sen"), "Arijit", "…and matching firstlast")
         expect(greet("akushwah@acme.com", name: "A Kushwah"), "Kushwah", "an initial falls through to the surname, as before")
+        expect(greet("nsacharya@acme.com", name: "NS Acharya"), "Acharya", "so do two capital initials")
+        expect(greet("pm.singh@acme.com", name: "Pm Singh"), "Singh", "and two in any case")
+        expect(greet("ak.sinha@acme.com", name: "Ak Sinha"), "Sinha", "even with a vowel")
+        expect(greet("op@acme.com", name: "Om Prakash"), "Om", "a two-letter name is a name")
+        expect(greet("op@acme.com", name: "OM PRAKASH"), "Om", "…in capitals too")
 
         print("From their own reply")
         func signed(_ from: String, _ email: String = "akushwah@acme.com", name: String = "") -> String {
@@ -99,7 +94,7 @@ struct RecipientNameTests {
         expect(signed("akushwah <akushwah@acme.com>"), "", "a display name that repeats the mailbox")
         expect(signed("Anjali Kushwah <anjali@gmail.com>"), "", "a reply from another address")
         expect(signed("Priya Nair <akushwah@acme.com>", name: "Anjali Kushwah"), "Anjali", "the name field still comes first")
-        expect(signed("<rahul@acme.com>", "rahul@acme.com"), "Rahul", "no display name: the address decides")
+        expect(signed("<rahul.verma@acme.com>", "rahul.verma@acme.com"), "Rahul", "no display name: the address decides")
         expect(signed("Arijit Sen <arijit.sen@acme.com>", "arijit.sen@acme.com"), "Arijit", "a signed name matching first.last")
 
         print("Who needs a Gmail lookup")
@@ -109,40 +104,6 @@ struct RecipientNameTests {
         expect(RecipientName.needsLookup(name: "Arijit Sen", email: "arijit.sen@acme.com", greetingName: nil), false,
                "a spaced name matching the address is enough")
 
-        print("Learned from the catalog")
-        expect(greet("arijit@acme.com"), "", "a name no list has isn't guessed…")
-        RecipientName.learnNames(from: [
-            Contact(id: "1", name: "Arijit Sen", email: "asen@acme.com"),
-            Contact(id: "2", name: "DAS, Arijit", email: "ad@acme.com"),
-            Contact(id: "3", name: "Talent Acquisition", email: "ta@acme.com"),
-            Contact(id: "4", name: "Bizdev Lead", email: "bd@acme.com"),
-            Contact(id: "4", name: "Bizdev Lead", email: "bd@acme.com"),
-        ])
-        expect(greet("arijit@acme.com"), "Arijit", "…until the catalog has it twice")
-        expect(greet("arijit.das@acme.com"), "Arijit", "with a surname too")
-        expect(greet("kdaryan@acme.com"), "", "KD + Aryan or K + Daryan: no one…")
-        expect(greet("kdaryan@acme.com", name: "Aryan Kadian"), "Aryan", "…unless the row names them")
-        RecipientName.learnNames(from: [
-            Contact(id: "5", name: "Aryan Kadian", email: "aryan.k@acme.com"),
-            Contact(id: "6", name: "Aryan Sharma", email: "asharma@acme.com"),
-        ])
-        expect(greet("kdaryan@acme.com"), "Aryan", "…or the catalog has Aryans in it")
-        expect(greet("bizdev@acme.com"), "", "a role row teaches nothing")
-        RecipientName.learnNames(from: [])
-        expect(greet("arijit@acme.com"), "", "learning again replaces what was learned")
-
-        print("Catalog rows whose name matches their address")
-        RecipientName.learnNames(from: [
-            Contact(id: "7", name: "Debashis Roy", email: "debashis.roy@acme.com"),
-            Contact(id: "8", name: "Debashis Ghosh", email: "debashisghosh@acme.com"),
-        ])
-        expect(greet("debashis@acme.com"), "Debashis", "first.last rows teach their names")
-        RecipientName.learnNames(from: [
-            Contact(id: "8", name: "Debashis Ghosh", email: "debashisghosh@acme.com"),
-            Contact(id: "7", name: "Debashis Roy", email: "debashis.roy@acme.com"),
-        ])
-        expect(greet("debashis@acme.com"), "Debashis", "the same rows in another order teach the same")
-
         print("Where an empty name would read oddly")
         expect(MailText.awkwardWithoutName(in: "Hi {Receiver-Name},\nHello {Receiver-Name}!"), [], "after a greeting word")
         expect(MailText.awkwardWithoutName(in: "Dear {Receiver-Name} ji,"), ["Dear ji,"], "a word after it")
@@ -150,7 +111,7 @@ struct RecipientNameTests {
 
         print("Into a template")
         let template = MailText("Hi {Receiver-Name},\nI'm {Sender-Name}.")
-        let named = MailContext.make(contact: Contact(name: "", email: "rahul@acme.com"), company: "Acme", profile: Profile())
+        let named = MailContext.make(contact: Contact(name: "", email: "rahul.verma@acme.com"), company: "Acme", profile: Profile())
         let unnamed = MailContext.make(contact: Contact(name: "", email: "akushwah@acme.com"), company: "Acme", profile: Profile())
         expect(template.filled(with: named), "Hi Rahul,\nI'm Asha.", "a name fills in")
         expect(template.filled(with: unnamed), "Hi,\nI'm Asha.", "no name closes up to \"Hi,\"")
