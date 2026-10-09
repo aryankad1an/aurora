@@ -1,7 +1,7 @@
 import Foundation
 
 /// Turns whatever is stored in a contact row into something safe to put after
-/// "Hi ".
+/// "Hi " — or into nothing at all, when no name can be trusted.
 ///
 /// Contact rows come from a shared, largely scraped catalog, so the `name` field
 /// is unreliable in specific ways: it may be empty, ALL CAPS, carry an honorific
@@ -10,10 +10,18 @@ import Foundation
 /// first whitespace-separated word — what this used to do — turns those into
 /// "Hi ,", "Hi ANJALI,", "Hi Dr.," and "Hi anjali.kumari@acme.com,", each of
 /// which is worse than not using the person's name at all.
+///
+/// So a guess is only made when it's a confident one — from an address, that
+/// call is `NameClassifier`'s. Anything less gives ``fallback`` — empty — and
+/// the template closes up around it: "Hi {Receiver-Name}," is sent as "Hi,"
+/// (see `MailText`). Greeting a stranger by the wrong name costs more than
+/// greeting them by none.
 enum RecipientName {
-    /// What to say when no usable name can be recovered. "Hi there," reads as a
-    /// deliberate choice; "Hi ," reads as a broken mail merge.
-    static let fallback = "there"
+    /// What to greet by when no name can be trusted: nothing.
+    static let fallback = ""
+
+    /// Reads names off addresses. The bundled model; tests hand in their own.
+    static var classifier: NameClassifier? = NameClassifier.shared
 
     /// Honorifics and credentials that precede a given name. Matched
     /// case-insensitively, with or without a trailing period.
@@ -22,23 +30,151 @@ enum RecipientName {
         "madam", "madame", "shri", "smt", "sri", "er", "ca", "capt", "rev", "hon"
     ]
 
-    /// Mailbox names that belong to a function rather than a person. A mail to
-    /// `careers@` opening with "Hi Careers," is worse than "Hi there,".
-    private static let roleMailboxes: Set<String> = [
-        "hr", "info", "jobs", "careers", "career", "recruiting", "recruitment",
-        "recruiter", "talent", "hiring", "contact", "hello", "team", "admin",
-        "support", "apply", "applications", "resume", "resumes", "cv", "office",
-        "people", "staffing", "internships", "campus", "noreply", "no-reply"
+    /// Words that belong to a function rather than a person. A mail to
+    /// `careers@` opening with "Hi Careers," is worse than "Hi,". The same list
+    /// as `ROLE` in `scripts/company_verification/verify_names.py`.
+    private static let roleWords: Set<String> = [
+        "hr", "info", "jobs", "job", "careers", "career", "recruiting", "recruitment", "recruiter",
+        "recruiters", "talent", "hiring", "contact", "hello", "team", "admin", "support", "apply",
+        "applications", "resume", "resumes", "cv", "office", "people", "staffing", "internships",
+        "internship", "campus", "noreply", "no-reply", "ta", "talentacquisition", "corporatehr", "hrd",
+        "hrteam", "placement", "placements", "operations", "dl", "mailer", "enquiry", "enquiries",
+        "sales", "backend", "frontend", "engineering", "tech", "india", "global", "services",
+        "connect", "reachouts", "outreach", "partnerships", "partner", "business", "marketing", "ops"
     ]
 
-    /// A given name to greet the recipient by, or ``fallback``.
+    /// Filler that rides along with a name in a mailbox ("naren.official",
+    /// "im_naren") without being one.
+    private static let fillerWords: Set<String> = [
+        "here", "official", "work", "mail", "me", "the", "real", "its", "im", "iam", "mr", "ms", "dr"
+    ]
+
+    /// A given name to greet the recipient by, or ``fallback`` when there's no
+    /// name it can be sure of.
     ///
-    /// `email` is only consulted when `name` yields nothing usable, and only when
-    /// its mailbox looks like a person's rather than a department's.
-    static func greeting(name: String, email: String) -> String {
-        if let fromName = personalName(in: name) { return fromName }
+    /// In order: the `name` field; the name the person signed their own reply
+    /// with (`replyFrom`, the `From:` of a reply from this same address); the
+    /// name their address carries elsewhere in this account's mail
+    /// (`mailboxEntry`, from `MailboxNames`); and the address itself. Each later
+    /// one is consulted only when the ones before yield nothing usable — a name
+    /// that is just the mailbox copied over ("Akushwah" for `akushwah@`) knows
+    /// no more than the address does.
+    static func greeting(name: String, email: String, replyFrom: String? = nil,
+                         mailboxEntry: String? = nil) -> String {
+        let mailbox = email.prefix { $0 != "@" }
+        if bareLetters(name) != bareLetters(String(mailbox)),
+           let fromName = personalName(in: name) {
+            return fromName
+        }
+        if let fromReply = replyFrom.flatMap({ signedName(in: $0, for: email) }) { return fromReply }
+        if let fromMail = mailboxEntry.flatMap({ signedName(in: $0, for: email) }) { return fromMail }
         if let fromEmail = nameFromEmail(email) { return fromEmail }
         return fallback
+    }
+
+    /// Whether a contact has nothing better than its address to be greeted by —
+    /// no greeting of its own, no usable name field — and so is worth looking
+    /// up in the account's mail.
+    static func needsLookup(name: String, email: String, greetingName: String?) -> Bool {
+        guard (greetingName ?? "").trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        let mailbox = email.prefix { $0 != "@" }
+        return bareLetters(name) == bareLetters(String(mailbox)) || personalName(in: name) == nil
+    }
+
+    /// Whether a header entry ("Aryan Kadian <kdaryan@acme.com>") names the
+    /// person at `email`, by the same rules as a signed reply.
+    static func isPersonEntry(_ entry: String, for email: String) -> Bool {
+        signedName(in: entry, for: email) != nil
+    }
+
+    // MARK: - From their own reply
+
+    /// The given name in a `From:` header ("Anjali Kumari <anjali@acme.com>"),
+    /// when it came from `email` itself and names a person: the name someone
+    /// signs their own mail with is the best name there is for them. A display
+    /// name that names a role ("Acme Recruiting") or only repeats the mailbox
+    /// gives nil, as does a reply sent from some other address.
+    private static func signedName(in header: String, for email: String) -> String? {
+        guard let open = header.lastIndex(of: "<"), let close = header.lastIndex(of: ">"), open < close else {
+            return nil
+        }
+        let address = header[header.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+        guard address.caseInsensitiveCompare(email.trimmingCharacters(in: .whitespaces)) == .orderedSame else {
+            return nil
+        }
+        let display = header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+        let words = display.lowercased().split(whereSeparator: { !$0.isLetter })
+        guard !display.isEmpty, !words.contains(where: { roleWords.contains(String($0)) }),
+              bareLetters(display) != bareLetters(String(email.prefix { $0 != "@" })) else { return nil }
+        return personalName(in: display)
+    }
+
+    // MARK: - Learning from the catalog
+
+    /// The name fields `learnNames` last handed the classifier, so a reload
+    /// that changes no one's name doesn't make it learn the same catalog again.
+    private static var lastLearned: [[String]] = []
+
+    /// Teach the classifier the names in the catalog loaded so far, so a name
+    /// the public lists lack ("Arijit Sen" on one contact) can greet another
+    /// contact whose address is all there is (`arijit@`). Rows whose name is
+    /// their mailbox copied over, holds an address, or names a role teach
+    /// nothing; `NameClassifier.learn` decides what the rest teach.
+    static func learnNames(from contacts: [Contact], mailboxEntry: (String) -> String? = { _ in nil }) {
+        guard let classifier else { return }
+        var seen = Set<String>()
+        var people: [[String]] = []
+        for contact in contacts where seen.insert(contact.id.isEmpty ? contact.email : contact.id).inserted {
+            if let words = nameWords(in: contact.name, email: contact.email) {
+                people.append(words)
+            } else {
+                // No usable name on the row, but they signed a reply with one, or
+                // their address carries one in this account's mail.
+                for header in [contact.replyFrom, mailboxEntry(contact.email)].compactMap({ $0 })
+                where signedName(in: header, for: contact.email) != nil {
+                    guard let open = header.lastIndex(of: "<"),
+                          let words = nameWords(in: header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
+                                                email: contact.email) else { continue }
+                    people.append(words)
+                    break
+                }
+            }
+        }
+        guard people != lastLearned else { return }
+        lastLearned = people
+        classifier.learn(people: people)
+    }
+
+    /// A name field as lowercase a-z words, given name first where a comma
+    /// says the surname leads ("KUMARI, Anjali"), or nil if it can't teach.
+    private static func nameWords(in raw: String, email: String) -> [String]? {
+        var text = raw.sanitizedLineSeparators.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.contains("@"),
+              bareLetters(text) != bareLetters(String(email.prefix { $0 != "@" })) else { return nil }
+        if text.contains("(") || text.contains("[") {
+            text = text.replacingOccurrences(of: "\\([^)]*\\)|\\[[^]]*\\]", with: " ",
+                                             options: .regularExpression)
+        }
+        let commaParts = text.split(separator: ",", maxSplits: 1).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        if commaParts.count == 2, !commaParts[1].isEmpty, commaParts[0].split(separator: " ").count == 1 {
+            text = commaParts[1] + " " + commaParts[0]
+        } else {
+            text = commaParts[0]
+        }
+        var words: [String] = []
+        for raw in text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .lowercased().split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "-" || $0 == "." }) {
+            let word = String(raw.filter { $0 != "'" })
+            guard !word.isEmpty else { continue }
+            // A word with anything else in it (digits, another script) is no name to learn.
+            guard word.allSatisfy({ ("a"..."z").contains($0) }) else { return nil }
+            if honorifics.contains(word) { continue }
+            if roleWords.contains(word) { return nil }
+            words.append(word)
+        }
+        return words.count >= 2 ? words : nil
     }
 
     // MARK: - From the name field
@@ -85,19 +221,40 @@ enum RecipientName {
 
     // MARK: - From the email address
 
+    /// A given name read off the address, when `NameClassifier` is sure of one.
+    ///
+    /// An address alone doesn't say where one name ends and the next begins:
+    /// `akushwah` is A Kushwah, `nehamathur` is Neha Mathur, `rahul` is Rahul.
+    /// The classifier weighs those readings against lists of given names,
+    /// surnames and words, and gives a name only when the readings that greet by
+    /// it far outweigh the rest; `akushwah`, `pm.singh` and `sharma` give none.
+    /// Role and filler words and the company's own name are dropped first, and
+    /// letters wrapped around digits (`talk2saravanan`) are leetspeak, not a name.
+    /// `verify_names.py` can still store a `greeting_name` from what the whole
+    /// catalog teaches it, which outranks this.
     private static func nameFromEmail(_ email: String) -> String? {
-        let mailbox = email.split(separator: "@").first.map(String.init)?
-            .trimmingCharacters(in: .whitespaces)
-            .lowercased()
-        guard let mailbox, !mailbox.isEmpty, !roleMailboxes.contains(mailbox) else { return nil }
+        let parts = email.lowercased().trimmingCharacters(in: .whitespaces)
+            .split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        let local = String(parts[0].prefix { $0 != "+" })
+        guard !local.isEmpty, !roleWords.contains(local) else { return nil }
 
-        // "anjali.kumari" / "anjali_kumari" / "anjali-kumari87" → "Anjali".
-        for part in mailbox.split(whereSeparator: { ".-_+0123456789".contains($0) }) {
-            let cleaned = letters(in: String(part))
-            guard cleaned.count >= 2, !roleMailboxes.contains(cleaned) else { continue }
-            return recased(cleaned)
+        // Letters on both sides of a digit are leetspeak, not a separator.
+        if local.range(of: "[a-z][0-9]+[a-z]", options: .regularExpression) != nil { return nil }
+
+        // The company's own name ("oracle.india@oracle.com") is no one's name.
+        let domainLabels = Set(parts.dropFirst().flatMap { $0.split(separator: ".").map(String.init) })
+        let words = local.split(whereSeparator: { !("a"..."z").contains($0) })
+            .map(String.init)
+            .filter { !roleWords.contains($0) && !fillerWords.contains($0) && !domainLabels.contains($0) }
+        guard !words.isEmpty else { return nil }
+
+        if let classifier {
+            return classifier.greeting(parts: words).name
         }
-        return nil
+        // No model in the bundle: only a mailbox that spells out a given name
+        // and a surname separately (`anjali.kumari`) is trusted.
+        guard words.count >= 2, words[0].count >= 3 else { return nil }
+        return recased(words[0])
     }
 
     // MARK: - Helpers
@@ -108,6 +265,11 @@ enum RecipientName {
     private static func letters(in word: String) -> String {
         String(word.filter { $0.isLetter || $0 == "'" || $0 == "-" })
             .trimmingCharacters(in: CharacterSet(charactersIn: "'-"))
+    }
+
+    /// Just the letters, lowercased: "Talk2saravanan" and `talk2saravanan` match.
+    private static func bareLetters(_ text: String) -> String {
+        String(text.lowercased().filter(\.isLetter))
     }
 
     /// Fix case only when the source was uniformly cased, which is the signature

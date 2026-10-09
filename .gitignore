@@ -71,3 +71,6 @@ master_cold_mail.csv
 # Supabase table dumps (personal data — never commit)
 db_backups/
 data_verification/
+
+# Python bytecode
+__pycache__/

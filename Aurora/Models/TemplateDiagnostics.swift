@@ -127,7 +127,8 @@ enum TemplateDiagnostics {
 
     /// Receiver-side gaps are per-contact, so this reports how much of the catalog
     /// is affected rather than a yes/no. `{Receiver-Name}` is deliberately absent:
-    /// `RecipientName` guarantees it a value, so it can't come out blank.
+    /// it's left empty only when `RecipientName` can't trust any name, and then
+    /// `MailText` closes the greeting up to "Hi," — a blank there reads fine.
     private static func recipientGapFindings(used: Set<MailPlaceholder>,
                                              recipients: RecipientCoverage) -> [TemplateFinding] {
         guard used.contains(.receiverPosition), recipients.missingPosition > 0 else { return [] }

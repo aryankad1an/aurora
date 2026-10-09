@@ -143,6 +143,10 @@ struct SendMailView: View {
                           confirmLabel: "Send",
                           isPresented: $confirmingSend) { send() }
             .onAppear(perform: start)
+            // Recipients with only an address to greet them by are looked up in
+            // this account's mail; a name found rewrites the letters not yet
+            // touched by hand.
+            .task { await lookUpNames() }
             // Templates can arrive after the screen does (a cold start, a pull
             // on another device); the first one to land writes the letters, and
             // an edit to one shows in every letter written from it.
@@ -562,6 +566,19 @@ struct SendMailView: View {
         if focus.id == nil { focus.id = letters.first?.id }
     }
 
+    private func lookUpNames() async {
+        let emails = recipients.map(\.contact).filter(\.needsNameLookup).map(\.email)
+        guard await MailboxNames.shared.lookUp(emails, accepting: RecipientName.isPersonEntry) > 0 else { return }
+        let profile = profileStore.profile
+        batch.letters = batch.letters.map { letter in
+            guard !letter.isEdited else { return letter }
+            return MailPreview(contact: letter.contact, company: letter.company,
+                               context: MailContext.make(contact: letter.contact, company: letter.company,
+                                                         profile: profile),
+                               templateID: letter.templateID)
+        }
+    }
+
     /// What a fresh batch is written from: the template written for this very
     /// company when there is one (everyone here works there), then the one the
     /// last batch went out with, then the first meant for anyone — never,
@@ -967,7 +984,8 @@ struct MailPreview: Identifiable {
     /// the greeting alone takes some reading of their name — and reused by
     /// every template the letter is written from.
     let context: MailContext
-    /// Placeholders with nothing to fill them for this person.
+    /// Placeholders with nothing to fill them for this person. Never the name:
+    /// an empty one means no name could be trusted, and "Hi," is the right mail.
     let blanks: Set<MailPlaceholder>
     let name: String
     let email: String
@@ -983,7 +1001,7 @@ struct MailPreview: Identifiable {
         self.company = company
         self.context = context
         self.blanks = Set(MailPlaceholder.allCases.filter {
-            (context.values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            $0 != .receiverName && (context.values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
         })
         self.name = contact.displayName
         self.email = contact.email

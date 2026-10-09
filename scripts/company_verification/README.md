@@ -139,6 +139,22 @@ two-letter fragment, or just the mailbox re-spaced by an importer. A
 human-entered name is never overwritten; leetspeak mailboxes
 (`talk2saravanan`) are left alone.
 
+Where the `first.last` lexicon isn't sure, the app's greeting classifier
+([`scripts/names`](../names/README.md)) gets a say, after learning every name
+field in the catalog. A row with no usable name field (empty, or the mailbox
+copied over) and no greeting of its own gets the greeting the classifier is
+sure of: with "Arijit Sen" and "Arijit Das" elsewhere in the catalog, `arijit@`
+is greeted Arijit. The app reaches the same greeting on its own only if it has
+loaded those other rows, so storing it here makes it hold for every client.
+
+When the address can't be read with confidence, the greeting is left **empty**
+rather than guessed, and the app sends "Hi," instead of "Hi Talk,". A stored
+greeting that is only the mailbox copied over (`Talk2saravanan`) or a one- or
+two-letter fragment is cleared for those rows; a greeting a person typed is
+kept. The app follows the same rule on its own: `RecipientName` reads a name
+off an address only when its classifier is sure of one (see
+[`scripts/names`](../names/README.md)), and otherwise greets no one.
+
 ## Extending `decisions.json`
 
 Names in it are `companies.name` values; the pipeline stops if one doesn't

@@ -535,6 +535,23 @@ final class JobStore {
         // removing a company from Home leaves its sent records here untouched, and
         // every send — including repeats to the same contact — is its own row.
         self.activity = activity.sorted { Self.newestFirst($0, $1) }
+        learnNames()
+    }
+
+    /// Every contact loaded so far teaches greetings the names on its row.
+    private func learnNames() {
+        RecipientName.learnNames(from: (jobs + allCompanies + detachedCompanies.values).flatMap(\.contacts),
+                                 mailboxEntry: MailboxNames.shared.entry(for:))
+    }
+
+    /// Look up, in the account's own mail, the tracked companies' contacts that
+    /// have nothing better than an address to be greeted by. Each address is
+    /// looked up once; what's found greets them from then on.
+    func lookUpNames() async {
+        let emails = jobs.flatMap(\.contacts).filter(\.needsNameLookup).map(\.email)
+        if await MailboxNames.shared.lookUp(emails, accepting: RecipientName.isPersonEntry) > 0 {
+            learnNames()
+        }
     }
 
     private static func newestFirst(_ a: ActivityEntry, _ b: ActivityEntry) -> Bool {
@@ -569,6 +586,7 @@ final class JobStore {
             let existingIDs = Set(allCompanies.map(\.id))
             allCompanies.append(contentsOf: page.filter { !existingIDs.contains($0.id) })
             for company in page { detachedCompanies[company.id] = nil }
+            learnNames()
         } catch {
             report(error)
         }

@@ -87,10 +87,15 @@ struct MailContext {
 /// Also cleans up stray Unicode line separators (see `sanitizedLineSeparators`)
 /// so templates saved before that fix — which may have baked-in ones from the
 /// keyboard bug — render correctly too, not just newly-saved ones.
+///
+/// The spaces in front of a placeholder go with it, so one that fills in empty
+/// takes them away too: with no name it can trust, "Hi {Receiver-Name}," is
+/// sent as "Hi," rather than "Hi ,".
 struct MailText {
     private enum Piece {
         case text(String)
-        case placeholder(MailPlaceholder)
+        /// `lead` is the spaces or tabs that stood right before the token.
+        case placeholder(MailPlaceholder, lead: String)
     }
 
     private let pieces: [Piece]
@@ -107,10 +112,12 @@ struct MailText {
                 cursor = raw.index(after: brace)
                 continue
             }
-            if literalStart < brace {
-                pieces.append(.text(String(raw[literalStart..<brace]).sanitizedLineSeparators))
+            let literal = raw[literalStart..<brace]
+            let body = literal.reversed().drop { $0 == " " || $0 == "\t" }.count
+            if body > 0 {
+                pieces.append(.text(String(literal.prefix(body)).sanitizedLineSeparators))
             }
-            pieces.append(.placeholder(placeholder))
+            pieces.append(.placeholder(placeholder, lead: String(literal.dropFirst(body))))
             placeholders.insert(placeholder)
             cursor = raw.index(brace, offsetBy: placeholder.token.count)
             literalStart = cursor
@@ -128,7 +135,8 @@ struct MailText {
         pieces.reduce(0) { total, piece in
             switch piece {
             case .text(let text): total + text.utf8.count
-            case .placeholder(let placeholder): total + (context.values[placeholder]?.utf8.count ?? 0)
+            case .placeholder(let placeholder, let lead):
+                total + (Self.value(of: placeholder, in: context).map { lead.utf8.count + $0.utf8.count } ?? 0)
             }
         }
     }
@@ -138,10 +146,19 @@ struct MailText {
         for piece in pieces {
             switch piece {
             case .text(let text): result += text
-            case .placeholder(let placeholder): result += (context.values[placeholder] ?? "").sanitizedLineSeparators
+            case .placeholder(let placeholder, let lead):
+                if let value = Self.value(of: placeholder, in: context) {
+                    result += lead + value.sanitizedLineSeparators
+                }
             }
         }
         return result
+    }
+
+    /// What `placeholder` fills in with, or nil when that's nothing.
+    private static func value(of placeholder: MailPlaceholder, in context: MailContext) -> String? {
+        guard let value = context.values[placeholder], !value.isEmpty else { return nil }
+        return value
     }
 }
 
