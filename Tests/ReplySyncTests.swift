@@ -102,8 +102,10 @@ struct GmailThreadMock: Codable {
             }
         }
 
+        // Mirrors `ReplySync.gmailDate`: "NaN" and "inf" parse as Doubles, and
+        // a NaN date would slip past every comparison.
         var date: Date {
-            guard let ms = internalDate.flatMap(Double.init) else { return .distantPast }
+            guard let ms = internalDate.flatMap(Double.init), ms.isFinite, ms > 0 else { return .distantPast }
             return Date(timeIntervalSince1970: ms / 1000)
         }
 
@@ -590,7 +592,7 @@ class ReplySyncTestSuite {
         }
 
         await runTest("Malformed internalDate values do not crash") {
-            let malformedDates = ["", "NaN", "not_a_number", "-999999", "   "]
+            let malformedDates = ["", "NaN", "nan", "inf", "-inf", "not_a_number", "-999999", "0", "   "]
             for badDate in malformedDates {
                 let mock = GmailThreadMock(messages: [
                     .init(id: "m1", labelIds: ["INBOX"], snippet: "Bad date", internalDate: badDate,

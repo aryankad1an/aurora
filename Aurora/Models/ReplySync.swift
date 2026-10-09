@@ -670,6 +670,16 @@ final class ReplySync {
         return result
     }
 
+    /// A message's `internalDate` (milliseconds since 1970, as a string) as a
+    /// date; `distantPast` when it isn't a finite, positive number. `Double`
+    /// reads "NaN" and "inf" as numbers, and a NaN date compares false against
+    /// everything — it would slip past the "after the send" check and be taken
+    /// for a reply.
+    nonisolated static func gmailDate(_ internalDate: String?) -> Date {
+        guard let ms = internalDate.flatMap(Double.init), ms.isFinite, ms > 0 else { return .distantPast }
+        return Date(timeIntervalSince1970: ms / 1000)
+    }
+
     /// Whether a value is safe to interpolate into an API path: letters and
     /// digits only, which is what Gmail's message and thread ids are.
     nonisolated static func isSafePathComponent(_ id: String) -> Bool {
@@ -1163,7 +1173,7 @@ final class ReplySync {
         func header(_ name: String) -> String? {
             message.payload?.headers?.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value
         }
-        let at = message.internalDate.flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast
+        let at = Self.gmailDate(message.internalDate)
         return HeaderMessage(id: message.id, threadID: message.threadId, from: header("From"),
                              subject: header("Subject"), snippet: message.snippet?.htmlUnescaped, at: at)
     }
@@ -1245,7 +1255,7 @@ final class ReplySync {
             URLQueryItem(name: "fields", value: "id,snippet,internalDate,raw")
         ]))
         guard let raw = message.raw, let notice = BounceParsing.parseNotice(base64URL: raw) else { return nil }
-        let at = message.internalDate.flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast
+        let at = Self.gmailDate(message.internalDate)
         let snippet = message.snippet?.htmlUnescaped
 
         var original: String?
@@ -1363,8 +1373,7 @@ nonisolated private struct GmailThread: Decodable {
         /// server's own receive time, so unlike the `Date:` header it can't be
         /// backdated by the sender.
         var date: Date {
-            guard let ms = internalDate.flatMap(Double.init) else { return .distantPast }
-            return Date(timeIntervalSince1970: ms / 1000)
+            ReplySync.gmailDate(internalDate)
         }
 
         /// Our own copy of the mail (or a draft of one), never a response.
