@@ -162,6 +162,34 @@ struct MailText {
     }
 }
 
+extension MailText {
+    /// The lines of `text` that read oddly when `{Receiver-Name}` comes out
+    /// empty, as they would then read.
+    ///
+    /// An empty name takes the spaces before it with it, which is exactly right
+    /// straight after a greeting word: "Hi {Receiver-Name}," is sent as "Hi,".
+    /// Anywhere else it isn't: "Dear {Receiver-Name} ji," becomes "Dear ji,",
+    /// and "{Receiver-Name}, quick question" becomes ", quick question".
+    static func awkwardWithoutName(in text: String) -> [String] {
+        let token = MailPlaceholder.receiverName.token
+        var awkward: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) where line.contains(token) {
+            let pieces = line.components(separatedBy: token)
+            var closed = pieces[0]
+            var fine = true
+            for (index, after) in pieces.dropFirst().enumerated() {
+                let lead = pieces[index].trimmingCharacters(in: .whitespaces)
+                let next = after.drop { $0 == " " || $0 == "\t" }.first
+                // Fine: a word right before it, and punctuation or the line's end after.
+                if !(lead.last?.isLetter ?? false) || !(next.map { ",.!:;?".contains($0) } ?? true) { fine = false }
+                closed = String(closed.reversed().drop { $0 == " " || $0 == "\t" }.reversed()) + after
+            }
+            if !fine { awkward.append(closed.trimmingCharacters(in: .whitespaces)) }
+        }
+        return awkward
+    }
+}
+
 extension MailTemplate {
     /// The company this template was written for, if it's one company's
     /// template: it names that company outright and never uses

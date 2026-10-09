@@ -36,7 +36,7 @@ struct Profile {
 struct RecipientNameTests {
     static var failures = 0
 
-    static func expect(_ got: String, _ want: String, _ label: String, line: Int = #line) {
+    static func expect<T: Equatable>(_ got: T, _ want: T, _ label: String, line: Int = #line) {
         if got == want {
             print("  ✓ \(label)")
         } else {
@@ -85,6 +85,10 @@ struct RecipientNameTests {
         expect(greet("akushwah@acme.com", name: "Akushwah"), "", "a name that only copies the mailbox")
         expect(greet("rahul@acme.com", name: "Rahul"), "Rahul", "…unless the address names someone")
 
+        expect(greet("arijit.sen@acme.com", name: "Arijit Sen"), "Arijit", "a spaced name matching first.last is real")
+        expect(greet("arijitsen@acme.com", name: "Arijit Sen"), "Arijit", "…and matching firstlast")
+        expect(greet("akushwah@acme.com", name: "A Kushwah"), "Kushwah", "an initial falls through to the surname, as before")
+
         print("From their own reply")
         func signed(_ from: String, _ email: String = "akushwah@acme.com", name: String = "") -> String {
             RecipientName.greeting(name: name, email: email, replyFrom: from)
@@ -96,6 +100,14 @@ struct RecipientNameTests {
         expect(signed("Anjali Kushwah <anjali@gmail.com>"), "", "a reply from another address")
         expect(signed("Priya Nair <akushwah@acme.com>", name: "Anjali Kushwah"), "Anjali", "the name field still comes first")
         expect(signed("<rahul@acme.com>", "rahul@acme.com"), "Rahul", "no display name: the address decides")
+        expect(signed("Arijit Sen <arijit.sen@acme.com>", "arijit.sen@acme.com"), "Arijit", "a signed name matching first.last")
+
+        print("Who needs a Gmail lookup")
+        expect(RecipientName.needsLookup(name: "", email: "akushwah@acme.com", greetingName: nil), true, "no name at all")
+        expect(RecipientName.needsLookup(name: "", email: "akushwah@acme.com", greetingName: nil,
+                                         replyFrom: "Anjali Kushwah <akushwah@acme.com>"), false, "a signed reply is enough")
+        expect(RecipientName.needsLookup(name: "Arijit Sen", email: "arijit.sen@acme.com", greetingName: nil), false,
+               "a spaced name matching the address is enough")
 
         print("Learned from the catalog")
         expect(greet("arijit@acme.com"), "", "a name no list has isn't guessed…")
@@ -118,6 +130,23 @@ struct RecipientNameTests {
         expect(greet("bizdev@acme.com"), "", "a role row teaches nothing")
         RecipientName.learnNames(from: [])
         expect(greet("arijit@acme.com"), "", "learning again replaces what was learned")
+
+        print("Catalog rows whose name matches their address")
+        RecipientName.learnNames(from: [
+            Contact(id: "7", name: "Debashis Roy", email: "debashis.roy@acme.com"),
+            Contact(id: "8", name: "Debashis Ghosh", email: "debashisghosh@acme.com"),
+        ])
+        expect(greet("debashis@acme.com"), "Debashis", "first.last rows teach their names")
+        RecipientName.learnNames(from: [
+            Contact(id: "8", name: "Debashis Ghosh", email: "debashisghosh@acme.com"),
+            Contact(id: "7", name: "Debashis Roy", email: "debashis.roy@acme.com"),
+        ])
+        expect(greet("debashis@acme.com"), "Debashis", "the same rows in another order teach the same")
+
+        print("Where an empty name would read oddly")
+        expect(MailText.awkwardWithoutName(in: "Hi {Receiver-Name},\nHello {Receiver-Name}!"), [], "after a greeting word")
+        expect(MailText.awkwardWithoutName(in: "Dear {Receiver-Name} ji,"), ["Dear ji,"], "a word after it")
+        expect(MailText.awkwardWithoutName(in: "{Receiver-Name}, quick question"), [", quick question"], "starting a line")
 
         print("Into a template")
         let template = MailText("Hi {Receiver-Name},\nI'm {Sender-Name}.")

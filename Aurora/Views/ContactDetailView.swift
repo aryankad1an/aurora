@@ -115,7 +115,7 @@ struct ContactDetailView: View {
 
                 // No company header: the card above already names it.
                 ContactFields(email: $email, name: $name, position: $position, phone: $phone,
-                              greetingName: $greetingName, isEditing: isEditing)
+                              greetingName: $greetingName, isEditing: isEditing, replyFrom: contact.replyFrom)
 
                 // The bounce section above has its own Mark as Invalid.
                 if bounce == nil || !isContactValid { validitySection }

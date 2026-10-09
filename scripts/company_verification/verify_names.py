@@ -259,8 +259,10 @@ def review(tables):
             if guess and guess != greet and (not greet or machine_greeting(greet, local)):
                 new["greeting_name"] = guess
                 reason.append(f"greeting {greet or '(none)'!r} -> {guess!r} (classifier, {sure:.0%} sure)")
-            elif greet and machine_greeting(greet, local):
-                # Not sure who this is: greet no one rather than the mailbox.
+            elif greet and machine_greeting(greet, local) and not name_model.plausible_given_name(model, greet):
+                # Not sure who this is, and what's stored can't be a name anyone
+                # typed for them ("Akushwah" is A Kushwah): greet no one rather
+                # than the mailbox. A typed "Arijit" for arijit@ stays.
                 new["greeting_name"] = None
                 reason.append(f"greeting {greet!r} cleared ({conf} confidence: {how})")
         # Names that disagree with a clean first.last address: report only.

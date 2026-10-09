@@ -306,14 +306,32 @@ def mailbox_parts(email):
     return words or None
 
 
+def is_mailbox_copy(name, email):
+    """As `RecipientName.isMailboxCopy`: one word with the mailbox's letters
+    ("Akushwah" for `akushwah@`). A spaced name that matches a `first.last`
+    address ("Arijit Sen" for `arijit.sen@`) is a real name."""
+    text = (name or "").strip()
+    bare = lambda t: "".join(c for c in t.lower() if c.isalpha())
+    return not any(c.isspace() for c in text) and bare(text) == bare((email or "").split("@")[0])
+
+
+def plausible_given_name(model, word):
+    """Whether `word` read alone could well be someone's given name, listed or
+    not: at least 5% of the readings take the whole word as one. `arijit` and
+    `subhajit` are; `akushwah` (A + Kushwah) and `talksaravanan` aren't."""
+    w = word.lower()
+    if len(w) < 3 or not w.isalpha():
+        return False
+    return sum(p for g, p in model.readings([w]) if g == w) >= 0.05
+
+
 def name_words(name, email):
     """What `RecipientName.nameWords` teaches from a row: its name field as
     lowercase a-z words, given name first where a comma says the surname
     leads, or None (a mailbox copied over, an address, a role)."""
     import unicodedata
     text = (name or "").strip()
-    bare = lambda t: "".join(c for c in t.lower() if c.isalpha())  # as `RecipientName.bareLetters`
-    if not text or "@" in text or bare(text) == bare((email or "").split("@")[0]):
+    if not text or "@" in text or is_mailbox_copy(text, email):
         return None
     text = re.sub(r"\([^)]*\)|\[[^]]*\]", " ", text)
     head, comma, tail = (x.strip() for x in text.partition(","))

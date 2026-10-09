@@ -43,6 +43,7 @@ enum TemplateDiagnostics {
         let used = Set(MailPlaceholder.allCases.filter { text.contains($0.token) })
         findings += profileGapFindings(used: used, profile: profile)
         findings += recipientGapFindings(used: used, recipients: recipients)
+        if used.contains(.receiverName) { findings += emptyNameFindings(subject: subject, content: content) }
 
         return findings.sorted { ($0.severity, $0.id) < ($1.severity, $1.id) }
     }
@@ -129,6 +130,7 @@ enum TemplateDiagnostics {
     /// is affected rather than a yes/no. `{Receiver-Name}` is deliberately absent:
     /// it's left empty only when `RecipientName` can't trust any name, and then
     /// `MailText` closes the greeting up to "Hi," — a blank there reads fine.
+    /// Where it wouldn't, `emptyNameFindings` says so.
     private static func recipientGapFindings(used: Set<MailPlaceholder>,
                                              recipients: RecipientCoverage) -> [TemplateFinding] {
         guard used.contains(.receiverPosition), recipients.missingPosition > 0 else { return [] }
@@ -140,6 +142,24 @@ enum TemplateDiagnostics {
             detail: "\(MailPlaceholder.receiverPosition.token) will be blank for them — "
                 + "check the preview reads correctly with it empty.",
             token: MailPlaceholder.receiverPosition.token,
+            suggestion: nil
+        )]
+    }
+
+    /// `{Receiver-Name}` placed where an empty one reads oddly. Anyone the app
+    /// can't name gets the mail without it, and "Dear ji," or ", quick
+    /// question" is what they'd read.
+    private static func emptyNameFindings(subject: String, content: String) -> [TemplateFinding] {
+        guard let example = (MailText.awkwardWithoutName(in: subject) + MailText.awkwardWithoutName(in: content)).first
+        else { return [] }
+        let token = MailPlaceholder.receiverName.token
+        return [TemplateFinding(
+            id: "empty-name-placement",
+            severity: .warning,
+            title: "Reads oddly for contacts with no name to greet",
+            detail: "When the app can't trust anyone's name it leaves \(token) out, so they'd read “\(example)”. "
+                + "Put it straight after a greeting word, as in “Hi \(token),”.",
+            token: token,
             suggestion: nil
         )]
     }

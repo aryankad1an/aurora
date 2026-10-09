@@ -29,6 +29,10 @@ final class MailboxNames {
     @ObservationIgnored private var missed: [String: Date] = [:]
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var file: JSONFile<Log>?
+    /// Bumped by every `load`. A lookup started for one account that finishes
+    /// after another has loaded keeps nothing: one mailbox's names must never
+    /// greet another account's contacts, or its misses hide them.
+    @ObservationIgnored private var generation = 0
 
     private struct Log: Codable {
         var found: [String: String] = [:]
@@ -50,6 +54,7 @@ final class MailboxNames {
         found = log.found
         missed = log.missed
         inFlight = []
+        generation += 1
     }
 
     /// The header entry naming `email`, if one was found.
@@ -73,8 +78,9 @@ final class MailboxNames {
             todo.append(email)
         }
         guard !todo.isEmpty else { return 0 }
+        let started = generation
         inFlight.formUnion(todo)
-        defer { inFlight.subtract(todo) }
+        defer { if generation == started { inFlight.subtract(todo) } }
 
         var named = 0
         for chunk in stride(from: 0, to: todo.count, by: Self.concurrency).map({
@@ -101,6 +107,7 @@ final class MailboxNames {
             } catch {
                 break  // the Gmail session has ended; nothing more can be looked up
             }
+            guard generation == started else { return 0 }  // another account has loaded since
             for (email, entries) in results {
                 guard let entries else { continue }
                 if let entry = entries.first(where: { accepts($0, email) }) {
@@ -112,6 +119,7 @@ final class MailboxNames {
                 }
             }
         }
+        guard generation == started else { return 0 }
         file?.save(Log(found: found, missed: missed))
         return named
     }

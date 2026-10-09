@@ -76,7 +76,7 @@ struct Contact: Identifiable, Decodable {
     /// Whether this contact has nothing better than its address to be greeted
     /// by, and so is worth looking up in the account's mail.
     var needsNameLookup: Bool {
-        RecipientName.needsLookup(name: name, email: email, greetingName: greetingName)
+        RecipientName.needsLookup(name: name, email: email, greetingName: greetingName, replyFrom: replyFrom)
     }
 
     /// What to call this contact on screen: their name, or their address when

@@ -179,6 +179,17 @@ class Readings(unittest.TestCase):
         m.learn([["zorvexa", "qlarbin"], ["design", "lead"]] * 3)
         self.assertEqual(sum(m.learned["given"].values()), 0)
 
+    def test_names_matching_a_first_last_address_teach(self):
+        self.assertEqual(nm.name_words("Arijit Sen", "arijit.sen@x.com"), ["arijit", "sen"])
+        self.assertEqual(nm.name_words("Arijit Sen", "arijitsen@x.com"), ["arijit", "sen"])
+        self.assertIsNone(nm.name_words("Akushwah", "akushwah@x.com"))       # one word: the mailbox copied
+
+    def test_plausible_given_names(self):
+        for w in ("arijit", "subhajit", "rahul"):
+            self.assertTrue(nm.plausible_given_name(self.m, w), w)
+        for w in ("akushwah", "talk2saravanan", "pmsingh", "vk"):
+            self.assertFalse(nm.plausible_given_name(self.m, w), w)
+
     def test_splits_respect_separators(self):
         self.assertEqual(list(nm.splits("nehamathur", 2, {4})), [["neha", "mathur"]])
         self.assertEqual(len(list(nm.splits("abcd", 2, set()))), 3)

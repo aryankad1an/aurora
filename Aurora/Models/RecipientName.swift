@@ -61,9 +61,7 @@ enum RecipientName {
     /// no more than the address does.
     static func greeting(name: String, email: String, replyFrom: String? = nil,
                          mailboxEntry: String? = nil) -> String {
-        let mailbox = email.prefix { $0 != "@" }
-        if bareLetters(name) != bareLetters(String(mailbox)),
-           let fromName = personalName(in: name) {
+        if !isMailboxCopy(name, of: email), let fromName = personalName(in: name) {
             return fromName
         }
         if let fromReply = replyFrom.flatMap({ signedName(in: $0, for: email) }) { return fromReply }
@@ -73,12 +71,23 @@ enum RecipientName {
     }
 
     /// Whether a contact has nothing better than its address to be greeted by —
-    /// no greeting of its own, no usable name field — and so is worth looking
-    /// up in the account's mail.
-    static func needsLookup(name: String, email: String, greetingName: String?) -> Bool {
+    /// no greeting of its own, no usable name field, no signed reply — and so is
+    /// worth looking up in the account's mail.
+    static func needsLookup(name: String, email: String, greetingName: String?, replyFrom: String? = nil) -> Bool {
         guard (greetingName ?? "").trimmingCharacters(in: .whitespaces).isEmpty else { return false }
-        let mailbox = email.prefix { $0 != "@" }
-        return bareLetters(name) == bareLetters(String(mailbox)) || personalName(in: name) == nil
+        if !isMailboxCopy(name, of: email), personalName(in: name) != nil { return false }
+        return replyFrom.flatMap { signedName(in: $0, for: email) } == nil
+    }
+
+    /// A name that is only the mailbox copied over: one word with the same
+    /// letters ("Akushwah" or "Talk2saravanan" for `akushwah@`, `talk2saravanan@`).
+    /// It knows no more than the address does. A spaced name that matches a
+    /// `first.last` address ("Arijit Sen" for `arijit.sen@`) is a real name: it
+    /// says where one part ends and the next begins, and which comes first.
+    static func isMailboxCopy(_ name: String, of email: String) -> Bool {
+        let text = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.contains(where: \.isWhitespace) else { return false }
+        return bareLetters(text) == bareLetters(String(email.prefix { $0 != "@" }))
     }
 
     /// Whether a header entry ("Aryan Kadian <kdaryan@acme.com>") names the
@@ -105,15 +114,20 @@ enum RecipientName {
         let display = header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
         let words = display.lowercased().split(whereSeparator: { !$0.isLetter })
         guard !display.isEmpty, !words.contains(where: { roleWords.contains(String($0)) }),
-              bareLetters(display) != bareLetters(String(email.prefix { $0 != "@" })) else { return nil }
+              !isMailboxCopy(display, of: email) else { return nil }
         return personalName(in: display)
     }
 
     // MARK: - Learning from the catalog
 
-    /// The name fields `learnNames` last handed the classifier, so a reload
-    /// that changes no one's name doesn't make it learn the same catalog again.
-    private static var lastLearned: [[String]] = []
+    /// What each contact last taught, by contact: compared as a whole, so a
+    /// reload that changes no one's name (or only the order they arrive in)
+    /// doesn't make the classifier learn the same catalog again.
+    private static var lastLearned: [String: [String]] = [:]
+    /// Name words already worked out, by everything they're worked out from, so
+    /// each catalog page reads only the rows it hasn't seen.
+    private static var wordsCache: [String: [String]] = [:]
+    private static let noWords: [String] = []
 
     /// Teach the classifier the names in the catalog loaded so far, so a name
     /// the public lists lack ("Arijit Sen" on one contact) can greet another
@@ -122,35 +136,40 @@ enum RecipientName {
     /// nothing; `NameClassifier.learn` decides what the rest teach.
     static func learnNames(from contacts: [Contact], mailboxEntry: (String) -> String? = { _ in nil }) {
         guard let classifier else { return }
-        var seen = Set<String>()
-        var people: [[String]] = []
-        for contact in contacts where seen.insert(contact.id.isEmpty ? contact.email : contact.id).inserted {
-            if let words = nameWords(in: contact.name, email: contact.email) {
-                people.append(words)
-            } else {
-                // No usable name on the row, but they signed a reply with one, or
-                // their address carries one in this account's mail.
-                for header in [contact.replyFrom, mailboxEntry(contact.email)].compactMap({ $0 })
-                where signedName(in: header, for: contact.email) != nil {
-                    guard let open = header.lastIndex(of: "<"),
-                          let words = nameWords(in: header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
-                                                email: contact.email) else { continue }
-                    people.append(words)
-                    break
-                }
-            }
+        if wordsCache.count > 50_000 { wordsCache.removeAll(keepingCapacity: true) }
+        var people: [String: [String]] = [:]
+        for contact in contacts {
+            let id = contact.id.isEmpty ? contact.email : contact.id
+            guard people[id] == nil else { continue }
+            let entry = mailboxEntry(contact.email)
+            let key = [contact.name, contact.email, contact.replyFrom ?? "", entry ?? ""].joined(separator: "\u{1F}")
+            let words = wordsCache[key] ?? taught(by: contact, entry: entry)
+            wordsCache[key] = words
+            if !words.isEmpty { people[id] = words }
         }
         guard people != lastLearned else { return }
         lastLearned = people
-        classifier.learn(people: people)
+        classifier.learn(people: Array(people.values))
+    }
+
+    /// What one contact teaches: its name field, or failing that the name it
+    /// signed a reply with or its address carries in this account's mail.
+    private static func taught(by contact: Contact, entry: String?) -> [String] {
+        if let words = nameWords(in: contact.name, email: contact.email) { return words }
+        for header in [contact.replyFrom, entry].compactMap({ $0 }) where signedName(in: header, for: contact.email) != nil {
+            guard let open = header.lastIndex(of: "<"),
+                  let words = nameWords(in: header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
+                                        email: contact.email) else { continue }
+            return words
+        }
+        return noWords
     }
 
     /// A name field as lowercase a-z words, given name first where a comma
     /// says the surname leads ("KUMARI, Anjali"), or nil if it can't teach.
     private static func nameWords(in raw: String, email: String) -> [String]? {
         var text = raw.sanitizedLineSeparators.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !text.contains("@"),
-              bareLetters(text) != bareLetters(String(email.prefix { $0 != "@" })) else { return nil }
+        guard !text.isEmpty, !text.contains("@"), !isMailboxCopy(text, of: email) else { return nil }
         if text.contains("(") || text.contains("[") {
             text = text.replacingOccurrences(of: "\\([^)]*\\)|\\[[^]]*\\]", with: " ",
                                              options: .regularExpression)

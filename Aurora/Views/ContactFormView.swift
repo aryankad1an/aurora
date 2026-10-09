@@ -333,6 +333,9 @@ struct ContactFields: View {
     @Binding var greetingName: String
     var isEditing = true
     var header = "Contact"
+    /// The `From:` of their reply, if they've replied: the greeting can come
+    /// from the name they signed it with, so the preview has to see it too.
+    var replyFrom: String? = nil
     /// Put the cursor in the first field as the form opens — for adding someone,
     /// where typing is the only thing to do next.
     var focusesFirstField = false
@@ -349,7 +352,7 @@ struct ContactFields: View {
     /// address. Shown under the fields so the effect of filling in "Greeting
     /// Name" is visible before anything is sent.
     private var greetingPreview: String {
-        Contact(email: email, name: name, greetingName: greetingName).greeting
+        Contact(email: email, name: name, greetingName: greetingName, replyFrom: replyFrom).greeting
     }
 
     var body: some View {

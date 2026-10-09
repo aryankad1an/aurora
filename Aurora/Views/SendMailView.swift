@@ -144,9 +144,11 @@ struct SendMailView: View {
                           isPresented: $confirmingSend) { send() }
             .onAppear(perform: start)
             // Recipients with only an address to greet them by are looked up in
-            // this account's mail; a name found rewrites the letters not yet
-            // touched by hand.
-            .task { await lookUpNames() }
+            // this account's mail; a name found — by this lookup or one already
+            // running from launch — rewrites the letters not yet touched by hand.
+            .task { await MailboxNames.shared.lookUp(recipients.map(\.contact).filter(\.needsNameLookup).map(\.email),
+                                                     accepting: RecipientName.isPersonEntry) }
+            .onChange(of: MailboxNames.shared.found.count) { refreshGreetings() }
             // Templates can arrive after the screen does (a cold start, a pull
             // on another device); the first one to land writes the letters, and
             // an edit to one shows in every letter written from it.
@@ -566,12 +568,16 @@ struct SendMailView: View {
         if focus.id == nil { focus.id = letters.first?.id }
     }
 
-    private func lookUpNames() async {
-        let emails = recipients.map(\.contact).filter(\.needsNameLookup).map(\.email)
-        guard await MailboxNames.shared.lookUp(emails, accepting: RecipientName.isPersonEntry) > 0 else { return }
+    /// Rewrite the letters whose greeting has changed since they were written —
+    /// a name found in the account's mail — unless they were edited by hand.
+    private func refreshGreetings() {
         let profile = profileStore.profile
+        let stale = batch.letters.contains { letter in
+            !letter.isEdited && letter.context.values[.receiverName] != letter.contact.greeting
+        }
+        guard stale else { return }
         batch.letters = batch.letters.map { letter in
-            guard !letter.isEdited else { return letter }
+            guard !letter.isEdited, letter.context.values[.receiverName] != letter.contact.greeting else { return letter }
             return MailPreview(contact: letter.contact, company: letter.company,
                                context: MailContext.make(contact: letter.contact, company: letter.company,
                                                          profile: profile),

@@ -390,6 +390,17 @@ class Names(unittest.TestCase):
         self.assertNotIn("3", changed)                         # a greeting a person typed is kept
         self.assertNotIn("4", changed)                         # nothing guessed for an unreadable mailbox
 
+    def test_a_typed_greeting_matching_the_mailbox_is_kept(self):
+        tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
+            {"id": "1", "company_id": "c", "email": "arijit@x.com", "name": "", "greeting_name": "Arijit"},
+            {"id": "2", "company_id": "c", "email": "subhajit@x.com", "name": "", "greeting_name": "Subhajit"},
+            {"id": "3", "company_id": "c", "email": "akushwah@x.com", "name": "", "greeting_name": "Akushwah"},
+        ]}
+        changed = {f["id"]: f for f in vn.review(tables)[0]}
+        self.assertNotIn("1", changed)                          # a plausible name someone typed stays
+        self.assertNotIn("2", changed)
+        self.assertIsNone(changed["3"]["new_greeting_name"])    # A + Kushwah: the importer's copy goes
+
     def test_the_classifier_greets_rows_the_catalog_teaches_it_about(self):
         tables = {"companies": [{"id": "c", "name": "C"}], "recruiters": [
             {"id": "1", "company_id": "c", "email": "asen@x.com", "name": "Arijit Sen", "greeting_name": None},

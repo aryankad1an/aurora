@@ -111,9 +111,25 @@ struct MailboxNamesTests {
         _ = await names.lookUp(["kdaryan@acme.com", "nobody@acme.com"], accepting: RecipientName.isPersonEntry)
         expect(gmail.requests, before, "found and missed addresses aren't looked up again")
 
+        print("Switching accounts mid-lookup")
+        let other = FakeGmail()
+        other.searches = ["from:anjali@acme.com": ["d1"]]
+        other.headers = ["d1": [("From", "Anjali Kushwah <anjali@acme.com>")]]
+        let switching = MailboxNames()
+        switching.reader = { path, query in
+            // Another account signs in while this account's lookup is out.
+            if path == "messages" { switching.load(account: "someone-else") }
+            return try other.get(path, query)
+        }
+        let kept = await switching.lookUp(["anjali@acme.com"], accepting: RecipientName.isPersonEntry)
+        expect(kept, 0, "a lookup outlived by an account switch keeps nothing")
+        expect(switching.entry(for: "anjali@acme.com") ?? "", "", "…and the new account doesn't get its names")
+
         print("Who needs a lookup")
         expect(RecipientName.needsLookup(name: "", email: "kdaryan@acme.com", greetingName: nil), true, "no name")
         expect(RecipientName.needsLookup(name: "Kdaryan", email: "kdaryan@acme.com", greetingName: nil), true, "mailbox copied")
+        expect(RecipientName.needsLookup(name: "", email: "kdaryan@acme.com", greetingName: nil,
+                                         replyFrom: "Aryan Kadian <kdaryan@acme.com>"), false, "a signed reply")
         expect(RecipientName.needsLookup(name: "Aryan Kadian", email: "kdaryan@acme.com", greetingName: nil), false, "a real name")
         expect(RecipientName.needsLookup(name: "", email: "kdaryan@acme.com", greetingName: "Aryan"), false, "a greeting set")
 
