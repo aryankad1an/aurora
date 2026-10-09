@@ -26,6 +26,7 @@ struct ReplyCheckHistoryView: View {
                                     .id(row.id)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, Theme.Space.gutter)
                         .padding(.vertical, 16)
                         .animation(.smooth(duration: 0.45), value: record.steps.count)
@@ -39,21 +40,31 @@ struct ReplyCheckHistoryView: View {
                 .onAppear { follow(proxy, animated: false) }
                 .onChange(of: sync.progress.step) { follow(proxy, animated: true) }
             }
-            .paperScreen()
+            // Check Everything along the bottom, full width, rather than
+            // crowding the title in the top bar.
+            .safeAreaInset(edge: .bottom) {
+                if let onCheckEverything {
+                    Button {
+                        Haptics.press()
+                        onCheckEverything()
+                    } label: {
+                        Label(sync.isSyncing ? "Checking" : "Check Everything",
+                              systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .secondaryButton()
+                    .disabled(sync.isSyncing)
+                    .accessibilityHint("Reads every open thread again, not only ones with new mail")
+                    .padding(.horizontal, Theme.Space.gutter)
+                    .padding(.bottom, 8)
+                }
+            }
             .navigationTitle("Status")
             .navigationSubtitle(subtitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if let onCheckEverything {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Check Everything") {
-                            Haptics.press()
-                            onCheckEverything()
-                        }
-                        .disabled(sync.isSyncing)
-                        .accessibilityHint("Reads every open thread again, not only ones with new mail")
-                    }
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
                         Haptics.tap(0.5)
@@ -62,6 +73,10 @@ struct ReplyCheckHistoryView: View {
                 }
             }
         }
+        // The paper is the sheet's own background, edge to edge. Drawn inside
+        // it instead, it stopped short of the floating sheet's sides and left
+        // a strip of the system's glass down each edge.
+        .presentationBackground { ChartGround() }
     }
 
     /// While a check runs, keep the step it's on in view.
