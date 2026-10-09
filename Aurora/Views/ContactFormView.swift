@@ -416,7 +416,7 @@ struct ContactFields: View {
             Text(header)
         } footer: {
             Text(greetingPreview.isEmpty
-                 ? "Mail opens “Hi,” — no name here it can trust. Add a Greeting Name to use one."
+                 ? "Name not detected, so mail opens “Hi,”. Type a Greeting Name to greet them by name, or leave it empty."
                  : "Mail opens “Hi \(greetingPreview),”")
         }
     }

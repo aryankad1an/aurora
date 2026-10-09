@@ -397,6 +397,17 @@ these that gives a name it can trust:
 6. **Nobody**: the template closes up, so "Hi {Receiver-Name}," is sent as
    "Hi,". A wrong name costs more than no name.
 
+When no name is detected, the app says so rather than leaving it to chance:
+
+- **Compose** marks the letter "Name not detected — opens “Hi,”". **Add Name**
+  saves the name you type as the contact's greeting and rewrites the letter;
+  **Leave Empty** sends it with "Hi,". The send confirmation counts how many
+  mails open that way.
+- **The contact screen** says "Name not detected" under the fields, with the
+  Greeting Name field right there to fill in or leave empty.
+- **The template editor** warns when `{Receiver-Name}` is placed where an empty
+  one would read oddly ("Dear ji,"), and shows how the line would read.
+
 Display names that name a role ("Acme Recruiting") or only repeat the mailbox
 never count. How the classifier is built, its data sources and its measured
 accuracy are in [`scripts/names`](scripts/names/README.md).

@@ -66,6 +66,9 @@ struct SendMailView: View {
     /// How tall every letter is drawn: the longest one's height (see `deckSizer`).
     @State private var deckHeight: CGFloat = 0
     @State private var editing: MailPreview?
+    /// The letter whose recipient is being given a name, and the name typed so far.
+    @State private var naming: MailPreview?
+    @State private var nameDraft = ""
     /// A template tap that would overwrite hand edits, held until confirmed.
     @State private var pendingTemplate: MailTemplate?
     @State private var confirmingSend = false
@@ -142,6 +145,18 @@ struct SendMailView: View {
                           message: sendConfirmation,
                           confirmLabel: "Send",
                           isPresented: $confirmingSend) { send() }
+            .alert("No name detected",
+                   isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } }),
+                   presenting: naming) { letter in
+                TextField("Name to greet them by", text: $nameDraft)
+                    .textInputAutocapitalization(.words)
+                Button("Save") { saveName(nameDraft, for: letter) }
+                Button("Leave Empty", role: .cancel) {}
+            } message: { letter in
+                Text("Nothing in their contact, replies or address names \(letter.email) with confidence, "
+                     + "so this mail opens “Hi,”. Add the name to greet them by — it's saved to the contact — "
+                     + "or leave it empty.")
+            }
             .onAppear(perform: start)
             // Recipients with only an address to greet them by are looked up in
             // this account's mail; a name found — by this lookup or one already
@@ -345,7 +360,8 @@ struct SendMailView: View {
                     LetterCard(letter: letter,
                                face: batch.face(of: letter),
                                minHeight: deckHeight,
-                               onEdit: { editing = letter }) {
+                               onEdit: { editing = letter },
+                               onAddName: { nameDraft = ""; naming = letter }) {
                         letterMenu(letter)
                     }
                 }
@@ -453,6 +469,11 @@ struct SendMailView: View {
             message += mismatchCount == 1
                 ? " One of them was written for a different company."
                 : " \(mismatchCount) of them were written for a different company."
+        }
+        if tally.nameless > 0 {
+            message += tally.nameless == 1
+                ? " One opens with “Hi,”: no name was detected for them."
+                : " \(tally.nameless) open with “Hi,”: no name was detected for them."
         }
         return message
     }
@@ -566,6 +587,23 @@ struct SendMailView: View {
                         templateID: template?.id)
         }
         if focus.id == nil { focus.id = letters.first?.id }
+    }
+
+    /// Save a name typed for a recipient none was detected for, as the contact's
+    /// greeting, and rewrite their letters with it.
+    private func saveName(_ typed: String, for letter: MailPreview) {
+        let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        var contact = letter.contact
+        contact.greetingName = name
+        Task { await jobStore.updateContact(contact) }
+        let profile = profileStore.profile
+        batch.letters = batch.letters.map { other in
+            guard other.contact.id == contact.id, !other.isEdited else { return other }
+            return MailPreview(contact: contact, company: other.company,
+                               context: MailContext.make(contact: contact, company: other.company, profile: profile),
+                               templateID: other.templateID)
+        }
     }
 
     /// Rewrite the letters whose greeting has changed since they were written —
@@ -860,6 +898,8 @@ private struct LetterCard<MenuItems: View>: View {
     /// The deck's shared height, so a short letter matches its neighbours.
     var minHeight: CGFloat = 0
     let onEdit: () -> Void
+    /// Offered when no name was detected for them: give one, or leave it.
+    var onAddName: () -> Void = {}
     @ViewBuilder let menu: () -> MenuItems
 
     var body: some View {
@@ -903,6 +943,11 @@ private struct LetterCard<MenuItems: View>: View {
                 warningStrip(symbol: "circle.dashed",
                              text: "Blank here: " + face.missing.map(\.blankLabel).joined(separator: ", "),
                              action: "Fill in", onTap: onEdit)
+            }
+            if face.nameless {
+                warningStrip(symbol: "person.fill.questionmark",
+                             text: "Name not detected — opens “Hi,”",
+                             action: "Add Name", onTap: onAddName)
             }
         }
         .frame(minHeight: minHeight, maxHeight: .infinity, alignment: .top)
@@ -1024,6 +1069,9 @@ private struct LetterFace {
     /// The other company the letter's template was written for, when it isn't
     /// this recipient's.
     var writtenFor: String?
+    /// The template greets by name but no name was detected for them, so the
+    /// greeting closes up to "Hi,".
+    var nameless = false
 }
 
 /// A template parsed once for the whole compose screen (see `MailText`).
@@ -1054,6 +1102,8 @@ private struct LetterBatch {
         var unwritten = 0
         var blanks = 0
         var mismatched = 0
+        /// Letters that open with "Hi," because no name was detected.
+        var nameless = 0
         var anyEdited = false
         /// The letter that draws tallest, roughly — the deck sizes to it.
         var longestID: MailPreview.ID?
@@ -1078,7 +1128,14 @@ private struct LetterBatch {
         return LetterFace(subject: template.subject.filled(with: letter.context),
                           body: template.body.filled(with: letter.context),
                           missing: missing(in: letter),
-                          writtenFor: writtenFor(letter, template))
+                          writtenFor: writtenFor(letter, template),
+                          nameless: isNameless(letter, template))
+    }
+
+    /// Whether `letter` greets by name and has none: the template uses
+    /// `{Receiver-Name}` and nothing was detected for this person.
+    private func isNameless(_ letter: MailPreview, _ template: ParsedTemplate) -> Bool {
+        template.placeholders.contains(.receiverName) && (letter.context.values[.receiverName] ?? "").isEmpty
     }
 
     /// The placeholders left blank in `letter` — without writing it.
@@ -1118,9 +1175,11 @@ private struct LetterBatch {
                 if blank { tally.blanks += 1 }
                 let mismatched = writtenFor(letter, template) != nil
                 if mismatched { tally.mismatched += 1 }
+                let nameless = isNameless(letter, template)
+                if nameless { tally.nameless += 1 }
                 // Roughly how tall it draws: its length, and a line for each warning.
                 length = template.subject.length(with: letter.context) + template.body.length(with: letter.context)
-                    + (blank ? 120 : 0) + (mismatched ? 120 : 0)
+                    + (blank ? 120 : 0) + (mismatched ? 120 : 0) + (nameless ? 120 : 0)
             } else {
                 tally.unwritten += 1
                 length = 0
