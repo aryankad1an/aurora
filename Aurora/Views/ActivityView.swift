@@ -103,10 +103,8 @@ struct ActivityView: View {
                 Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }
             }
             .sheet(isPresented: $showsCheckHistory) {
-                ReplyCheckHistoryView(sync: replySync) {
-                    Task { await checkForReplies() }
-                }
-                .presentationDetents([.medium, .large])
+                ReplyCheckHistoryView(sync: replySync)
+                    .presentationDetents([.medium, .large])
             }
             .sheet(item: $openBounce) { item in
                 ContactDetailView(contact: item.contact, company: item.company) { isValid in

@@ -42,7 +42,9 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
         }
 
         var phase: Phase
-        /// The batch sending (or that last sent).
+        /// Who it's to, by company: the company the mail on its way (or next)
+        /// is to — "ACKO Insurance" — else the batch's, "ACKO Insurance and 5
+        /// more". Not the batch's name, which is often the rule that picked it.
         var title: String
         var sent: Int
         var failed: Int

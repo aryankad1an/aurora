@@ -32,17 +32,20 @@ struct SendLiveActivityWidget: Widget {
                     Tally(state: state, isStale: context.isStale)
                         .padding(.trailing, 10)
                         .padding(.top, 8)
+                        .dynamicTypeSize(...DynamicTypeSize.large)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    // What's happening, then which batch — each on its own line,
-                    // so a long batch name never pushes the count.
+                    // What's happening, then which company — each on its own
+                    // line, so a long name never pushes the count.
                     VStack(alignment: .leading, spacing: 3) {
                         Headline(state: state, style: style, isStale: context.isStale)
                             .font(.subheadline.weight(.semibold))
-                        BatchName(title: state.title)
+                        CompanyName(title: state.title)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 4)
+                    // The expanded island has a fixed height too.
+                    .dynamicTypeSize(...DynamicTypeSize.large)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -66,6 +69,7 @@ struct SendLiveActivityWidget: Widget {
                     // bar's ends otherwise.
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
+                    .dynamicTypeSize(...DynamicTypeSize.large)
                 }
             } compactLeading: {
                 Glyph(phase: state.phase, style: style, size: 13)
@@ -171,16 +175,16 @@ private struct Headline: View {
     }
 }
 
-/// The batch's name, marked as one — "Not mailed yet" is the name of the
-/// group it was picked by, not a status.
-private struct BatchName: View {
+/// Who the mail is to, by company — "ACKO Insurance", or "ACKO Insurance and
+/// 5 more" — marked with a building so it reads as who, not as a status.
+private struct CompanyName: View {
     let title: String
 
     var body: some View {
         Label {
             Text(title)
         } icon: {
-            Image(systemName: "tray.full.fill")
+            Image(systemName: "building.2.fill")
         }
         .labelStyle(Tight())
         .font(.caption)
@@ -198,9 +202,13 @@ private struct BatchName: View {
     }
 }
 
-/// The Lock Screen and Notification Center: everything at once — what's
-/// happening, the batch, how far it's got (sent, failed, to go), and who the
-/// mail on its way is to, with their company and address.
+/// The Lock Screen and Notification Center: what's happening, to which
+/// company, how far it's got, and who the mail on its way is to.
+///
+/// iOS gives a Lock Screen Live Activity about 160 points of height and clips
+/// anything taller — at a large text size the old layout lost its top margin
+/// and the bottom of its recipient card. So this is four short rows with even
+/// margins, and its text stops growing at extra large.
 private struct LockScreenView: View {
     let attributes: SendActivityAttributes
     let state: SendActivityAttributes.ContentState
@@ -209,13 +217,13 @@ private struct LockScreenView: View {
     var body: some View {
         let style = Style(attributes)
         let ready = Phrase.isReady(state, isStale: isStale)
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
-                Tile(phase: state.phase, style: style, size: 44)
-                VStack(alignment: .leading, spacing: 3) {
+                Tile(phase: state.phase, style: style, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
                     Headline(state: state, style: style, isStale: isStale)
                         .font(.subheadline.weight(.semibold))
-                    BatchName(title: state.title)
+                    CompanyName(title: state.title)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Tally(state: state, isStale: isStale)
@@ -224,17 +232,25 @@ private struct LockScreenView: View {
             if state.phase == .scheduled {
                 ScheduledDetail(state: state, style: style, ready: ready, compact: false)
             } else {
-                VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 10) {
                     Meter(state: state, style: style)
-                    Legend(state: state, style: style)
+                    if state.failed > 0 {
+                        Text("\(state.failed) failed")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(style.attention)
+                            .fixedSize()
+                    }
                 }
                 if state.recipient != nil {
                     Recipient(state: state, style: style, compact: false)
+                } else {
+                    Legend(state: state, style: style)
                 }
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 16)
+        .padding(.vertical, 18)
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
     }
 }
 
@@ -249,7 +265,7 @@ private struct ScheduledDetail: View {
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(state.total) \(state.total == 1 ? "mail" : "mails")\(state.company.map { " · \($0)" } ?? "")")
+                Text("\(state.total) \(state.total == 1 ? "mail" : "mails")")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white)
                 if ready {
@@ -311,27 +327,26 @@ private struct Legend: View {
     }
 }
 
-/// Who the mail on its way is to — or, while the run waits, who's next —
-/// with their company and address.
+/// Who the mail on its way is to — or, while the run waits, who's next — and
+/// their address. The company is the line above.
 private struct Recipient: View {
     let state: SendActivityAttributes.ContentState
     let style: Style
-    /// The Dynamic Island's two plain lines, rather than the Lock Screen's card.
+    /// The Dynamic Island's two plain lines, without the Lock Screen's glyph.
     let compact: Bool
 
     var body: some View {
         let label = state.phase == .sending || state.phase == .pausing ? "To" : "Next"
-        let who = [state.recipient, state.company].compactMap { $0 }.joined(separator: " · ")
         HStack(spacing: 10) {
             if !compact {
                 Image(systemName: label == "To" ? "envelope.fill" : "clock.fill")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(style.tint(state.phase))
-                    .frame(width: 28, height: 28)
+                    .frame(width: 26, height: 26)
                     .background(.white.opacity(0.1), in: Circle())
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(Text(label).foregroundStyle(.white.opacity(0.55))) \(who)")
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(Text(label).foregroundStyle(.white.opacity(0.55))) \(state.recipient ?? "")")
                     .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                 if let email = state.recipientEmail {
@@ -343,12 +358,6 @@ private struct Recipient: View {
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(compact ? 0 : 10)
-        .background {
-            if !compact {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.07))
-            }
         }
     }
 }

@@ -161,12 +161,12 @@ struct SendQueueBar: View {
                 return "Gmail asked to slow down · trying again at "
                     + cooldown.until.formatted(date: .omitted, time: .standard)
             }
-            return "\(queue.completed) of \(queue.total) · \(queue.running?.title ?? "")"
+            return "\(queue.completed) of \(queue.total) · \(queue.running?.liveCompany ?? "")"
         case .result(let outcome):
             if let reason = outcome.stoppedBecause { return reason }
             if outcome.isPaused { return "Tap to open it in Activity and resume" }
             guard !outcome.failed.isEmpty else {
-                return (queue.batch(outcome.batchID)?.title).map { "\($0) · tap to open it in Activity" } ?? "Tap to open it in Activity"
+                return (queue.batch(outcome.batchID)?.companiesLabel).map { "\($0) · tap to open it in Activity" } ?? "Tap to open it in Activity"
             }
             // Why they failed, which is what decides what to do next — a list
             // of names ("Couldn't reach Priya, Rahul") read as a network fault
@@ -175,13 +175,13 @@ struct SendQueueBar: View {
             return "Couldn't send to \(outcome.failed.prefix(2).joined(separator: ", "))"
                 + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
         case .due(let batch):
-            return "\(batch.title) · tap Review to see it and send"
+            return "\(batch.companiesLabel) · tap Review to see it and send"
         case .paused(let batches):
             if batches.count == 1, let reason = batches[0].pauseReason { return reason }
-            return batches.count == 1 ? "\(batches[0].title) · tap to open it in Activity" : "\(batches.count) batches · tap to open it in Activity"
+            return batches.count == 1 ? "\(batches[0].liveCompany) · tap to open it in Activity" : "\(batches.count) batches · tap to open it in Activity"
         case .scheduled(let batch):
             let day = batch.scheduledFor.map { Calendar.current.isDateInToday($0) ? "today" : $0.formatted(.dateTime.weekday(.wide)) } ?? ""
-            return "\(batch.pending) mail\(batch.pending == 1 ? "" : "s") · \(batch.title) · \(day)"
+            return "\(batch.pending) mail\(batch.pending == 1 ? "" : "s") · \(batch.companiesLabel) · \(day)"
         case .idle:
             return ""
         }

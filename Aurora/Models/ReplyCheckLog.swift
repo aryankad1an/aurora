@@ -1,14 +1,18 @@
 import Foundation
 
-/// One reply check, as Activity's timeline shows it: when it ran, how far back
-/// it read, and what each step did — kept on the phone per account
-/// (`reply-checks-<account>.json`), newest first.
+/// One reply check, as the status timeline shows it: when it ran, how far back
+/// it read, and what each step did. Only the latest is kept, per account, on
+/// the phone (`reply-checks-<account>.json`): a check that finishes replaces
+/// the one before it.
 nonisolated struct ReplyCheckRecord: Codable, Identifiable, Equatable {
     var id = UUID()
     let startedAt: Date
     var finishedAt: Date?
     /// Where it started reading: nil when it read everything.
     let readFrom: Date?
+    /// The steps this check set out to take, in order, so the timeline can
+    /// show the ones still to come.
+    var plan: [String]?
     var steps: [Step] = []
     var result: Result = .running
 
@@ -35,14 +39,20 @@ nonisolated struct ReplyCheckRecord: Codable, Identifiable, Equatable {
     var duration: TimeInterval? { finishedAt.map { $0.timeIntervalSince(startedAt) } }
 }
 
-/// The checks kept, newest first, at most `limit`.
+/// The checks kept, newest first: the latest, and while one is running, the
+/// one before it.
 nonisolated struct ReplyCheckLog: Codable, Equatable {
     var records: [ReplyCheckRecord] = []
-    static let limit = 30
+    static let limit = 2
 
     mutating func begin(_ record: ReplyCheckRecord) {
         records.insert(record, at: 0)
         if records.count > Self.limit { records.removeLast(records.count - Self.limit) }
+    }
+
+    /// Keep only the record with `id`: a finished check replaces the one before.
+    mutating func keepOnly(_ id: UUID) {
+        records.removeAll { $0.id != id }
     }
 
     /// Change the record with `id`, if it's still kept.

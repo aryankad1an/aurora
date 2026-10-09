@@ -52,13 +52,13 @@ sent and read through the Gmail API under Google OAuth.
 | **Greetings** | "Hi {Receiver-Name}," greets people by a name that's plainly there: the contact's name field, the name they signed a reply with, what your own mail calls their address, or an address that spells the given name out (`anjali.kumari@`). Nothing is guessed: otherwise the mail opens with a plain "Hi," and the app shows "Name not detected". See [Greetings](#greetings). |
 | **Compose** | One screen per batch: who it's going to, a row of templates, and a swipeable deck of the actual mails. Any mail can be edited by hand or moved to another template. Batches have no size limit. |
 | **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. When Gmail rate-limits a send or the connection drops, the queue waits and carries on by itself. Nobody is ever mailed twice: a mail Gmail may already have is looked for in Sent before it can go again, and tests interrupt the queue at every stage to prove it. |
-| **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending mail 4 of 6", "Connection lost · retrying in 0:05"), a progress bar, and who the mail is going to. One activity follows the queue through pauses and retries, and a scheduled batch shows a countdown, then a Send Now button when its time comes. |
+| **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending mail 4 of 6", "Connection lost · retrying in 0:05"), a progress bar, and who the mail is going to, at which company. One activity follows the queue through pauses and retries, and a scheduled batch shows a countdown, then a Send Now button when its time comes. |
 | **Reply tracking** | Each send records its Gmail thread. The app reads those threads to find replies, skipping auto-replies and bounces. |
 | **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. Answers saying the address is no longer in service, or the person has left, count too. Any sent mail can be checked on its own from Activity. |
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
 | **Themes** | Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and Gilded. Each changes the colours, the chart that moves behind every screen, the launch screen and the app icon. |
 | **Send animation** | Sending launches paper planes, one per mail (up to three), that climb on glowing trails, loop and fly off the top of the screen. |
-| **Invalid contacts** | A contact whose address bounces or who has left can be marked invalid, and isn't mailed or suggested again until marked valid. Shared across users, since a dead address is dead for everyone. A company's contacts are split into Valid and Invalid lists, one at a time. |
+| **Invalid contacts** | A contact whose address bounces or who has left can be marked invalid, and isn't mailed or suggested again until marked valid. Shared across users, since a dead address is dead for everyone. A company's contacts are split into Valid and Invalid lists, one at a time; Select All selects the list on screen. |
 
 ## Getting started
 
@@ -284,13 +284,16 @@ Lock Screen for 15 minutes).
 
 - **Lock Screen and Notification Center:** the status in the theme's colour
   ("Sending mail 4 of 6", "Connection lost · retrying in 0:05", "Paused",
-  "All 6 sent", "Scheduled for 7:00 PM", "Ready to send"), the batch's name
-  under a tray icon, so it doesn't read as a status, a count ("3/6 done"), a
-  progress bar with sent, failed and to-go counts, and a card saying who the
-  mail is going to: their name, company and address. While the run waits, the
-  card shows who goes next instead.
-- **Dynamic Island, expanded:** the status, the batch, the count, who it's to
-  and the bar, with margins all round.
+  "All 6 sent", "Scheduled for 7:00 PM", "Ready to send"), the company the mail
+  going out now is to ("ACKO Insurance", or "ACKO Insurance and 5 more" for a
+  batch that's finished or not started), a count ("3/6 done"), a progress bar,
+  and who the mail is going to: their name and address. While the run waits,
+  it shows who goes next instead. iOS gives a Lock Screen Live Activity about
+  160 points of height and clips anything taller, so the layout is four short
+  rows with even margins, and its text stops growing at extra large: at larger
+  text sizes the old layout ran into the card's top edge and lost its bottom.
+- **Dynamic Island, expanded:** the status, the company, the count, who it's to
+  and the bar, with margins all round and the same cap on text size.
 - **Dynamic Island, compact:** the phase's glyph and the count, or the
   countdown while waiting, or a scheduled batch's time.
 
@@ -338,14 +341,21 @@ Matching by thread instead of by sender address matters: replies often come
 from a colleague or an applicant-tracking system, which keep the thread but not
 the address.
 
-Each account's checks are kept to new mail by a checkpoint saved on the phone
-(`ReplyCheckpoint`, in `reply-checkpoint-<account>.json`): when a check has read
-everything it tried, the time it began is stored, and the next check (on
-launch, on returning to the app, or pulling to refresh) reads only the threads
-with inbound mail since then, and searches for failure notices only since then,
-with a 15-minute overlap. A check where any read failed leaves the checkpoint
-where it was, so those threads are read again. An account's first check, and
-the one after reconnecting Gmail in Settings, read everything.
+A check never reads every sent mail. It first searches Gmail once for mail
+from anyone else since the last check (`after:<time> -from:me`, paged, up to
+5,000 messages), and reads only the open threads that search turns up. Every
+check works this way: on launch, on returning to the app, after reconnecting
+Gmail, and when you pull to refresh. An account's first check searches the
+last 120 days, the window sends are checked for. Only when that search fails
+or runs past 5,000 messages does a check read every open thread.
+
+"Since the last check" is a checkpoint saved on the phone per account
+(`ReplyCheckpoint`, in `reply-checkpoint-<account>.json`): the time the last
+check began, less a 15-minute overlap. It moves on after every check, even one
+where a few reads failed; those threads are kept on a short list and read again
+next time whatever else is read. Failure notices are found by inbox searches
+rather than by thread, so their own checkpoint only moves on once every notice
+was read, and notices already read are skipped by id.
 
 The same check names the people you've mailed who have no name on file (an
 empty name field, or the mailbox copied over). Its last step looks each such
@@ -358,17 +368,32 @@ only lands if the name field is still what it was, so a name typed in the
 meantime is never overwritten. An address with nothing found is tried again
 after a month.
 
-The status line at the top of Activity says "Updating · Step 2 of 6 ·
-Checking for replies · 12 of 80 mails (15%)" while a check runs, wrapped
-rather than cut off, with a bar for the run as a whole, and "Status updated
-4 minutes ago" once it's done. Tapping it opens **Status Updates**: when the
-last check finished, where the next one starts reading, and a timeline of the
-last 30 checks (`ReplyCheckLog`, kept per account on the phone), each with
-when it ran, how long it took, how far back it read, and what every step did
-("Read 12 threads with new mail since 3:04 PM · 2 replies", "Linked 3 of 5
-sent mails to their threads", "Looked up 40 addresses · 6 named"). Anything
-that couldn't be read is listed under its step with the reason, grouped:
-"3 couldn't be read: Connection dropped". A check that stopped says why.
+A check runs in up to six steps:
+
+1. **Linking sent mail to threads:** finds the Gmail thread of any send
+   recorded without one.
+2. **Checking threads for replies:** reads the threads with new mail.
+3. **Reading bounces found in threads:** reads the failure notices step 2
+   found *inside* a sent mail's thread, to see whether each is a real bounce
+   (and why) or only a delay.
+4. **Searching inbox for other bounces:** searches the whole inbox, Spam and
+   Trash included, for failure notices that never joined the mail's thread,
+   as many servers send them, and matches each to the send it names.
+5. **Searching for "no longer here" replies:** finds answers saying the
+   address is no longer in use.
+6. **Finding names in your mail**, when someone mailed has no name on file.
+
+The status line at the top of Activity says "Updating · Step 2 of 5 ·
+Checking threads for replies · 12 of 80 mails (15%)" while a check runs,
+wrapped rather than cut off, and "Status updated 4 minutes ago" once it's done.
+Tapping it opens **Status**: the latest check as a simple timeline. Finished
+steps are ticked with what they did ("Read 12 threads with new mail since
+3:04 PM · 0 replies"). The step running now moves, with its count and a bar,
+and the timeline scrolls smoothly to follow it. Steps still to come are greyed
+out. Anything that couldn't be read is listed under its step with the reason
+("3 couldn't be read: Connection dropped"), and a check that stopped says why.
+Only the latest check is kept (`ReplyCheckLog`): once a new one finishes, it
+replaces the one before.
 
 Gmail lets each user spend about 250 quota units a second, and reading a
 thread costs 10. Read five at a time as fast as they'd go, a full check of

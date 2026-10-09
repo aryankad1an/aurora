@@ -83,9 +83,25 @@ final class ReplySync {
         }
     }
 
+    /// A check's steps, in order. The last runs only when someone mailed has
+    /// no name to look up.
+    ///
+    /// The two bounce steps find different notices: the first reads the ones
+    /// that arrived *inside* a sent mail's thread (spotted while checking it for
+    /// replies); the second searches the whole inbox, Spam and Trash included,
+    /// for the ones that never joined the thread, as many servers send them.
+    nonisolated static let stepTitles = [
+        "Linking sent mail to threads",
+        "Checking threads for replies",
+        "Reading bounces found in threads",
+        "Searching inbox for other bounces",
+        "Searching for “no longer here” replies",
+        "Finding names in your mail"
+    ]
+
     /// Start step `step` of this run, before it knows how much it has to do.
-    private func beginStep(_ step: Int, _ label: String) {
-        progress = Progress(label: label, step: step, steps: progress.steps)
+    private func beginStep(_ step: Int) {
+        progress = Progress(label: Self.stepTitles[step - 1], step: step, steps: progress.steps)
     }
 
     /// The current step has `total` things to read.
@@ -255,12 +271,16 @@ final class ReplySync {
         let startedAt = Date.now
         // Mail before this has been read already, unless asked to read it all.
         let since = checkpoint.readFrom(fullCheck: forceFullCheck)
+        let noticesSince = checkpoint.noticesReadFrom(fullCheck: forceFullCheck)
         let lookups = MailboxNames.shared.pending(names)
         progress = Progress(steps: lookups.isEmpty ? 5 : 6)
-        let record = ReplyCheckRecord(startedAt: startedAt, readFrom: since)
+        var record = ReplyCheckRecord(startedAt: startedAt, readFrom: since)
+        record.plan = Array(Self.stepTitles.prefix(progress.steps))
         checkLog.begin(record)
         saveCheckLog()
         defer {
+            // The latest check replaces the one before it.
+            checkLog.keepOnly(record.id)
             checkLog.update(record.id) { entry in
                 entry.finishedAt = .now
                 if entry.result == .running {
@@ -277,7 +297,8 @@ final class ReplySync {
             }
             saveCheckLog()
         }
-        let after = since.map { " since " + Self.when($0) } ?? ""
+        let after = since.map { " since " + Self.when($0) } ?? " in the last 120 days"
+        let noticesAfter = noticesSince.map { " since " + Self.when($0) } ?? ""
         do {
             // Replies that were really "this address is no longer in service".
             let corrected = await correctMisreadReplies(in: sends, emailByContact: emailByContact)
@@ -291,12 +312,12 @@ final class ReplySync {
                 return cleared
             }
 
-            beginStep(1, "Matching sent mail")
+            beginStep(1)
             let recovered = try await recoverThreadIDs(in: sends, emailByContact: emailByContact)
             outcome.recovered = recovered.count
             outcome.failed += recovered.failed
             outcome.read += recovered.read
-            note(record.id, "Matching sent mail",
+            note(record.id, Self.stepTitles[0],
                  recovered.targets == 0
                     ? "Every sent mail already linked to its thread"
                     : "Linked \(recovered.count) of \(recovered.targets) sent mails to their threads"
@@ -309,10 +330,11 @@ final class ReplySync {
                 return send.attaching(message: message)
             }
 
-            beginStep(2, "Checking for replies")
+            beginStep(2)
             let checked = try await checkForReplies(in: sends,
                                                     excludingContactIDs: excludingContactIDs,
                                                     alwaysChecking: Set(recovered.threadIDs.keys),
+                                                    retrying: forceFullCheck ? [] : checkpoint.retryThreadIDs,
                                                     since: since)
             outcome.replies = checked.replies
             outcome.failed += checked.failed
@@ -328,13 +350,13 @@ final class ReplySync {
                 if !checked.bounces.isEmpty { read += " · \(checked.bounces.count) failure \(checked.bounces.count == 1 ? "notice" : "notices")" }
                 if checked.gone > 0 { read += " · \(checked.gone) deleted in Gmail" }
             }
-            note(record.id, "Checking for replies", read, issues: ReplyCheckLog.issues(checked.reasons))
-            beginStep(3, "Reading bounce notices")
+            note(record.id, Self.stepTitles[1], read, issues: ReplyCheckLog.issues(checked.reasons))
+            beginStep(3)
             let confirmed = try await confirmThreadBounces(checked.bounces, emailByContact: emailByContact)
             outcome.bounced += confirmed.found
             outcome.failed += confirmed.failed
             outcome.read += confirmed.read
-            note(record.id, "Reading bounce notices",
+            note(record.id, Self.stepTitles[2],
                  checked.bounces.isEmpty ? "None in the threads read"
                     : "Read \(confirmed.read) · \(confirmed.found) \(confirmed.found == 1 ? "bounce" : "bounces")",
                  issues: confirmed.failed > 0 ? ["\(confirmed.failed) couldn't be read; tried again next check"] : [])
@@ -343,41 +365,49 @@ final class ReplySync {
             for contactID in checked.repliedContacts { bounces[contactID] = nil }
 
             // Failure notices that never joined the mail's thread.
-            beginStep(4, "Looking for bounced mail")
-            let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact, since: since)
+            beginStep(4)
+            let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact, since: noticesSince)
             outcome.bounced += scanned.found
             outcome.failed += scanned.failed
             outcome.read += scanned.read
-            note(record.id, "Looking for bounced mail", Self.scanSummary(scanned, after: after, noun: "failure notice"),
+            note(record.id, Self.stepTitles[3], Self.scanSummary(scanned, after: noticesAfter, noun: "failure notice", plural: "failure notices"),
                  issues: Self.scanIssues(scanned))
 
             // "No longer in service" answers from their side, wherever they are.
-            beginStep(5, "Looking for addresses no longer in service")
-            let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact, since: since)
+            beginStep(5)
+            let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact, since: noticesSince)
             outcome.bounced += dead.found
             outcome.failed += dead.failed
             outcome.read += dead.read
-            note(record.id, "Looking for addresses no longer in service",
-                 Self.scanSummary(dead, after: after, noun: "\"no longer here\" reply"),
+            note(record.id, Self.stepTitles[4],
+                 Self.scanSummary(dead, after: noticesAfter, noun: "“no longer here” reply", plural: "“no longer here” replies"),
                  issues: Self.scanIssues(dead))
 
             // Names for the people mailed that have none, from the account's own
             // mail: "Aryan Kadian <kdaryan@acme.com>" in anything from, to or
             // copying them.
             if !lookups.isEmpty {
-                beginStep(6, "Finding names in your mail")
+                beginStep(6)
                 count(lookups.count, "addresses")
                 outcome.namesFound = await MailboxNames.shared.lookUp(lookups, accepting: RecipientName.isPersonEntry) {
                     [weak self] looked in self?.progress.done += looked
                 }
-                note(record.id, "Finding names in your mail",
+                note(record.id, Self.stepTitles[5],
                      "Looked up \(lookups.count) \(lookups.count == 1 ? "address" : "addresses") · \(outcome.namesFound) named")
             }
             // Contacts already ruled out are dealt with.
             for id in excludingContactIDs { bounces[id] = nil }
             // Everything Gmail had when this check began has now been read —
             // if every read worked (`ReplyCheckpoint.complete`).
-            checkpoint.complete(startedAt: startedAt, failedReads: outcome.failed)
+            // Threads a bounce notice in couldn't be read are read again too.
+            var failedThreads = checked.failedThreadIDs
+            for contactID in confirmed.unreadContacts {
+                if let thread = sends.first(where: { $0.contactID == contactID })?.gmailThreadID {
+                    failedThreads.insert(thread)
+                }
+            }
+            checkpoint.complete(startedAt: startedAt, failedThreadIDs: failedThreads,
+                                failedNotices: scanned.failed + dead.failed)
             checkpointFile?.save(checkpoint)
             saveBounces()
             // A run where every request failed (offline, Gmail down) read
@@ -421,12 +451,12 @@ final class ReplySync {
 
     /// What an inbox search for notices found. `read` counts the search itself.
     nonisolated private static func scanSummary(_ scan: (found: Int, failed: Int, read: Int),
-                                                after: String, noun: String) -> String {
+                                                after: String, noun: String, plural: String) -> String {
         guard scan.read > 0 else { return "Couldn't search" }
         let notices = scan.read - 1 + scan.failed
         let range = after.isEmpty ? " in the last 120 days" : after
-        guard notices > 0 else { return "No new \(noun)s\(range)" }
-        return "\(notices) new \(notices == 1 ? noun : noun + "s")\(range) · \(scan.found) \(scan.found == 1 ? "bounce" : "bounces")"
+        guard notices > 0 else { return "No new \(plural)\(range)" }
+        return "\(notices) new \(notices == 1 ? noun : plural)\(range) · \(scan.found) \(scan.found == 1 ? "bounce" : "bounces")"
     }
 
     nonisolated private static func scanIssues(_ scan: (found: Int, failed: Int, read: Int)) -> [String] {
@@ -704,33 +734,41 @@ final class ReplySync {
         var gone = 0
         /// Why the failed ones failed, with how often.
         var reasons: [String: Int] = [:]
+        /// Threads that couldn't be read (or whose reply couldn't be saved),
+        /// for the next check to read again.
+        var failedThreadIDs: Set<String> = []
     }
 
     private enum CheckResult {
-        case reply(sendID: String, contactID: String, at: Date, from: String, snippet: String?)
+        case reply(sendID: String, threadID: String, contactID: String, at: Date, from: String, snippet: String?)
         case bounce(FoundBounce)
         case silent
         /// Deleted in Gmail: nothing to read, and nothing wrong.
         case gone(threadID: String)
-        case failed(String)
+        case failed(threadID: String, reason: String)
     }
 
-    /// Threads that received mail from someone else since `date`, so a delta
-    /// sync reads only those. Nil when the answer doesn't fit in one page — then
-    /// the caller can't tell what it's missing and has to read everything.
+    /// Threads that received mail from someone else since `date`, so a check
+    /// reads only those. Read page by page, up to 5,000 messages; nil beyond
+    /// that — then the caller can't tell what it's missing and reads everything.
     nonisolated private static func findIncomingThreadIDs(after date: Date,
                                                           reader: (String, [URLQueryItem]) async throws -> Data) async throws -> Set<String>? {
-        let data = try await reader("messages", [
-            URLQueryItem(name: "q", value: "after:\(Int(date.timeIntervalSince1970)) -from:me"),
-            URLQueryItem(name: "maxResults", value: "500")
-        ])
         struct Listing: Decodable {
             let messages: [GmailAuthStore.SentMessage]?
             let nextPageToken: String?
         }
-        let listing = try JSONDecoder().decode(Listing.self, from: data)
-        guard listing.nextPageToken == nil else { return nil }
-        return Set(listing.messages?.map(\.threadID) ?? [])
+        var threads = Set<String>()
+        var pageToken: String?
+        for _ in 0..<10 {
+            var query = [URLQueryItem(name: "q", value: "after:\(Int(date.timeIntervalSince1970)) -from:me"),
+                         URLQueryItem(name: "maxResults", value: "500")]
+            if let pageToken { query.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+            let listing = try JSONDecoder().decode(Listing.self, from: try await reader("messages", query))
+            threads.formUnion(listing.messages?.map(\.threadID) ?? [])
+            guard let next = listing.nextPageToken else { return threads }
+            pageToken = next
+        }
+        return nil
     }
 
     /// - Parameter alwaysChecking: sends to read even on a delta sync — ones whose
@@ -738,6 +776,7 @@ final class ReplySync {
     private func checkForReplies(in sends: [MailSend],
                                  excludingContactIDs: Set<String>,
                                  alwaysChecking: Set<String>,
+                                 retrying: Set<String>,
                                  since: Date?) async throws -> Checked {
         guard let reader else { throw GmailAuthError.notConnected }
         let cutoff = Date().addingTimeInterval(-Self.checkWindow)
@@ -749,16 +788,19 @@ final class ReplySync {
         }
         guard !activeSends.isEmpty else { return Checked() }
 
-        // Only threads that have had inbound mail since the last check (`since`,
-        // which already carries the overlap). If that lookup fails or
-        // overflows, or there's no last check, read every open thread.
+        // Only threads that have had mail from anyone else since the last check
+        // (`since`, which already carries the overlap) — or, on an account's
+        // first check, in the 120 days sends are checked for. One search, then
+        // a read per thread that has something new, instead of a read per open
+        // thread. If the search fails or overflows, read every open thread.
         var result = Checked()
         let targets: [MailSend]
-        if let since,
-           let incoming = try? await Self.findIncomingThreadIDs(after: since, reader: reader) {
+        if let incoming = try? await Self.findIncomingThreadIDs(after: since ?? cutoff, reader: reader) {
             result.wasFullCheck = false
+            // Plus the ones the last check couldn't read.
             targets = activeSends.filter { send in
-                alwaysChecking.contains(send.id) || send.gmailThreadID.map(incoming.contains) == true
+                alwaysChecking.contains(send.id)
+                    || send.gmailThreadID.map { incoming.contains($0) || retrying.contains($0) } == true
             }
         } else {
             targets = activeSends
@@ -780,7 +822,8 @@ final class ReplySync {
                         do {
                             switch try await Self.firstResponse(inThread: threadID, after: send.sentAt, reader: reader) {
                             case .reply(let date, let sender, let snippet):
-                                return .reply(sendID: send.id, contactID: send.contactID, at: date, from: sender, snippet: snippet)
+                                return .reply(sendID: send.id, threadID: threadID, contactID: send.contactID,
+                                              at: date, from: sender, snippet: snippet)
                             case .bounce(let date, let messageID, let snippet):
                                 return .bounce(FoundBounce(contactID: send.contactID, messageID: messageID,
                                                            at: date, snippet: snippet))
@@ -794,7 +837,7 @@ final class ReplySync {
                         } catch GmailAuthError.gone {
                             return .gone(threadID: threadID)
                         } catch {
-                            return .failed(ReplyCheckLog.reason(for: error))
+                            return .failed(threadID: threadID, reason: ReplyCheckLog.reason(for: error))
                         }
                     }
                 }
@@ -807,7 +850,7 @@ final class ReplySync {
 
             for outcome in chunkResults {
                 switch outcome {
-                case .reply(let sendID, let contactID, let date, let sender, let snippet):
+                case .reply(let sendID, let threadID, let contactID, let date, let sender, let snippet):
                     result.read += 1
                     result.repliedContacts.insert(contactID)
                     do {
@@ -817,6 +860,7 @@ final class ReplySync {
                     } catch {
                         result.failed += 1
                         result.reasons["Couldn't save the reply to the database", default: 0] += 1
+                        result.failedThreadIDs.insert(threadID)
                     }
                 case .bounce(let found):
                     result.read += 1
@@ -827,9 +871,10 @@ final class ReplySync {
                     result.read += 1
                     result.gone += 1
                     goneThreadIDs.insert(threadID)
-                case .failed(let reason):
+                case .failed(let threadID, let reason):
                     result.failed += 1
                     result.reasons[reason, default: 0] += 1
+                    result.failedThreadIDs.insert(threadID)
                 }
             }
             progress.done += chunk.count
@@ -859,18 +904,20 @@ final class ReplySync {
     /// delay, and why. Each notice is read once: one already seen was dealt
     /// with on an earlier sync.
     private func confirmThreadBounces(_ found: [FoundBounce],
-                                      emailByContact: [String: String]) async throws -> (found: Int, failed: Int, read: Int) {
+                                      emailByContact: [String: String]) async throws
+        -> (found: Int, failed: Int, read: Int, unreadContacts: [String]) {
         let fresh = found.filter { !seenBounceMessages.contains($0.messageID) && Self.isSafePathComponent($0.messageID) }
-        guard !fresh.isEmpty else { return (0, 0, 0) }
+        guard !fresh.isEmpty else { return (0, 0, 0, []) }
         count(fresh.count, "notices")
         let notices = try await readNotices(ids: fresh.map(\.messageID), lookingUpOriginals: false)
-        var result = (found: 0, failed: 0, read: 0)
+        var result = (found: 0, failed: 0, read: 0, unreadContacts: [String]())
         for bounce in fresh {
             guard let address = emailByContact[bounce.contactID]?.lowercased() else { continue }
             guard let read = notices[bounce.messageID] else {
-                // Couldn't read it: go on what the thread showed, and try the
-                // notice again next time.
+                // Couldn't read it: go on what the thread showed, and read the
+                // thread (and so the notice) again next time.
                 result.failed += 1
+                result.unreadContacts.append(bounce.contactID)
                 if record(Bounce(contactID: bounce.contactID, address: address, at: bounce.at,
                                  snippet: bounce.snippet, status: nil, diagnostic: nil)) {
                     result.found += 1

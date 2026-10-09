@@ -119,9 +119,8 @@ final class SendLiveActivity {
         let phase: SendActivityAttributes.ContentState.Phase =
             cooldown != nil ? .waiting : queue.isStopping ? .pausing : .sending
         // The mail on its way — or, while waiting, the one that goes next.
-        let current = batch.mails.first { if case .sending = $0.status { true } else { false } }
-            ?? batch.mails.first(where: \.status.isWaiting)
-        return .init(phase: phase, title: batch.title, sent: batch.sent, failed: batch.failed,
+        let current = batch.current
+        return .init(phase: phase, title: batch.liveCompany, sent: batch.sent, failed: batch.failed,
                      total: batch.mails.count, recipient: current?.displayName,
                      recipientEmail: current?.recipient, company: current?.company,
                      resumesAt: cooldown?.until, note: cooldown.map { _ in "Gmail asked to slow down" },
@@ -130,23 +129,22 @@ final class SendLiveActivity {
 
     private static func state(held batch: MailBatch) -> SendActivityAttributes.ContentState {
         let next = batch.mails.first(where: \.status.isWaiting)
-        return .init(phase: batch.resumeAt != nil ? .waiting : .paused, title: batch.title,
+        return .init(phase: batch.resumeAt != nil ? .waiting : .paused, title: batch.liveCompany,
                      sent: batch.sent, failed: batch.failed, total: batch.mails.count,
                      recipient: next?.displayName, recipientEmail: next?.recipient, company: next?.company,
                      resumesAt: batch.resumeAt, note: batch.stopNote, batchID: batch.id.uuidString)
     }
 
     private static func state(scheduled batch: MailBatch) -> SendActivityAttributes.ContentState {
-        .init(phase: .scheduled, title: batch.title, sent: batch.sent, failed: batch.failed,
-              total: batch.mails.count, recipient: nil, recipientEmail: nil,
-              company: batch.companies.count == 1 ? batch.companies.first : "\(batch.companies.count) companies",
+        .init(phase: .scheduled, title: batch.companiesLabel, sent: batch.sent, failed: batch.failed,
+              total: batch.mails.count, recipient: nil, recipientEmail: nil, company: nil,
               resumesAt: nil, note: nil, batchID: batch.id.uuidString, startsAt: batch.scheduledFor)
     }
 
     /// How the run ended, from the last batch it sent.
     private static func finalState(queue: MailQueue) -> SendActivityAttributes.ContentState? {
         guard let outcome = queue.outcome, let batch = queue.batch(outcome.batchID) else { return nil }
-        return .init(phase: outcome.isPaused ? .paused : .done, title: batch.title,
+        return .init(phase: outcome.isPaused ? .paused : .done, title: batch.companiesLabel,
                      sent: batch.sent, failed: batch.failed, total: batch.mails.count,
                      recipient: nil, recipientEmail: nil, company: nil,
                      resumesAt: batch.resumeAt, note: batch.stopNote, batchID: batch.id.uuidString)

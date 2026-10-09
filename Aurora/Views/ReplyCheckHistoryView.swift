@@ -1,49 +1,46 @@
 import SwiftUI
 
-/// Every recent reply check as a timeline, newest first: when it ran, how far
-/// back it read, and what each step did — threads read, replies and bounces
-/// found, names looked up — with what couldn't be read and why. Opened from
-/// the status line at the top of Activity.
+/// The latest reply check as a timeline, opened by tapping the status line in
+/// Activity: each step on a rule, what it did once done, the one running now
+/// moving, and the ones still to come greyed out. While a check runs the
+/// timeline scrolls smoothly to follow it. Nothing else — one check, the
+/// latest; the one before it is gone once a new one finishes.
 struct ReplyCheckHistoryView: View {
     let sync: ReplySync
-    /// Starts a check now.
-    var onCheck: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
+
+    private var record: ReplyCheckRecord? { sync.checkLog.records.first }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    current
-                    if sync.checkLog.records.isEmpty {
-                        InlineEmptyState(title: "No checks yet",
-                                         systemImage: "clock.arrow.circlepath",
-                                         message: "Each check of your mail for replies and bounces shows up here.")
-                    } else {
-                        SectionLabel(title: "Timeline", systemImage: "clock", count: sync.checkLog.records.count)
-                            .padding(.top, 6)
-                        ForEach(sync.checkLog.records) { record in
-                            CheckCard(record: record, isLive: sync.isSyncing && record.result == .running)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if let record {
+                        VStack(alignment: .leading, spacing: 0) {
+                            let rows = Self.rows(record, sync: sync)
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                                TimelineRow(row: row, isLast: index == rows.count - 1)
+                                    .id(row.id)
+                            }
                         }
+                        .padding(.horizontal, Theme.Space.gutter)
+                        .padding(.vertical, 16)
+                        .animation(.smooth(duration: 0.45), value: record.steps.count)
+                    } else {
+                        InlineEmptyState(title: "Not checked yet",
+                                         systemImage: "clock",
+                                         message: "Your mail is checked for replies and bounces when the app opens.")
+                            .padding(.horizontal, Theme.Space.gutter)
                     }
                 }
-                .padding(.horizontal, Theme.Space.gutter)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                .onAppear { follow(proxy, animated: false) }
+                .onChange(of: sync.progress.step) { follow(proxy, animated: true) }
             }
             .paperScreen()
-            .navigationTitle("Status Updates")
+            .navigationTitle("Status")
+            .navigationSubtitle(subtitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if let onCheck {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Check Now") {
-                            Haptics.press()
-                            onCheck()
-                        }
-                        .disabled(sync.isSyncing)
-                    }
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
                         Haptics.tap(0.5)
@@ -54,183 +51,137 @@ struct ReplyCheckHistoryView: View {
         }
     }
 
-    /// Where things stand: updating now, or when it last finished and where
-    /// the next check will start reading.
-    private var current: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                IconTile(systemImage: sync.isSyncing ? "arrow.trianglehead.2.clockwise.rotate.90"
-                            : sync.lastSyncedAt == nil ? "clock" : "checkmark",
-                         tint: sync.isSyncing ? .clay : sync.lastSyncedAt == nil ? .inkFaint : .statusDone,
-                         size: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(sync.isSyncing ? "Updating" : headline)
-                        .font(.headline)
-                        .foregroundStyle(.ink)
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            if sync.isSyncing {
-                ProgressView(value: sync.progress.overall)
-                    .tint(.clay)
-                Text(sync.progress.summary)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.inkMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .panel()
-    }
-
-    private var headline: String {
-        guard let last = sync.lastSyncedAt else { return "Not updated yet" }
-        return "Updated " + last.formatted(.relative(presentation: .named))
-    }
-
-    private var detail: String {
-        if sync.isSyncing { return "Reading your mail for replies, bounces and names." }
-        var lines: [String] = []
-        if let last = sync.lastSyncedAt { lines.append("Last updated \(ReplySync.when(last)).") }
-        if let from = sync.checkpoint.readFrom(fullCheck: false) {
-            lines.append("The next check reads mail since \(ReplySync.when(from)).")
+    /// While a check runs, keep the step it's on in view.
+    private func follow(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard sync.isSyncing, sync.progress.step > 0 else { return }
+        let id = ReplySync.stepTitles[sync.progress.step - 1]
+        if animated {
+            withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) }
         } else {
-            lines.append("The next check reads all your open threads.")
+            proxy.scrollTo(id, anchor: .center)
         }
-        return lines.joined(separator: " ")
-    }
-}
-
-/// One check: when, how far back, how it ended, then each step on a rule.
-private struct CheckCard: View {
-    let record: ReplyCheckRecord
-    let isLive: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: symbol)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(tint)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(ReplySync.when(record.startedAt))
-                        .font(.headline)
-                        .foregroundStyle(.ink)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Text(resultLabel)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(tint)
-                    .fixedSize()
-            }
-
-            if !record.steps.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(record.steps.enumerated()), id: \.element.id) { index, step in
-                        StepRow(step: step, isLast: index == record.steps.count - 1 && !isLive)
-                    }
-                }
-            }
-            if case .stopped(let why) = record.result {
-                Label(why, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.statusInvalid)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .panel()
     }
 
     private var subtitle: String {
-        var parts: [String] = []
-        if let readFrom = record.readFrom {
-            parts.append("Mail since \(ReplySync.when(readFrom))")
-        } else {
-            parts.append("Everything")
-        }
-        if let duration = record.duration {
-            parts.append(Duration.seconds(duration.rounded())
-                .formatted(.units(allowed: [.minutes, .seconds], width: .abbreviated)))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private var resultLabel: String {
+        guard let record else { return "" }
+        if record.result == .running { return "Updating" }
+        let finished = ReplySync.when(record.finishedAt ?? record.startedAt)
         switch record.result {
-        case .running: "Updating"
-        case .complete: "Complete"
-        case .incomplete: "Some unread"
-        case .stopped: "Stopped"
+        case .stopped: return "Stopped at \(finished)"
+        default: return "Updated \(finished)"
         }
     }
 
-    private var symbol: String {
-        switch record.result {
-        case .running: "arrow.trianglehead.2.clockwise.rotate.90"
-        case .complete: "checkmark.circle.fill"
-        case .incomplete: "exclamationmark.circle.fill"
-        case .stopped: "xmark.circle.fill"
+    /// One row per step: the plan, each step done, running or waiting — and,
+    /// for a check that stopped, why.
+    static func rows(_ record: ReplyCheckRecord, sync: ReplySync) -> [TimelineRow.Model] {
+        let running = record.result == .running && sync.isSyncing
+        let plan = record.plan ?? record.steps.map(\.title)
+        let activeTitle = running && sync.progress.step > 0 ? ReplySync.stepTitles[sync.progress.step - 1] : nil
+        var rows: [TimelineRow.Model] = plan.compactMap { title in
+            if let step = record.steps.first(where: { $0.title == title }) {
+                return .init(id: title, title: title, detail: step.summary, issues: step.issues, state: .done)
+            }
+            if title == activeTitle {
+                let progress = sync.progress
+                let detail = progress.total > 0
+                    ? "\(min(progress.done, progress.total)) of \(progress.total) \(progress.unit)" : "Starting"
+                return .init(id: title, title: title, detail: detail, state: .active(progress.fraction))
+            }
+            // Still to come — or, once a check is over, a step it never reached.
+            return running ? .init(id: title, title: title, detail: "Waiting", state: .waiting) : nil
         }
-    }
-
-    private var tint: Color {
-        switch record.result {
-        case .running: .clay
-        case .complete: .statusDone
-        case .incomplete: .kraft
-        case .stopped: .statusInvalid
+        if case .stopped(let why) = record.result {
+            rows.append(.init(id: "stopped", title: "Stopped", detail: why, state: .stopped))
         }
+        return rows
     }
 }
 
-/// A step on the card's timeline: a dot on a rule, its title, what it did,
-/// and anything that went wrong.
-private struct StepRow: View {
-    let step: ReplyCheckRecord.Step
+/// A step on the timeline: a marker on a rule, its title and what it did.
+struct TimelineRow: View {
+    struct Model: Identifiable {
+        let id: String
+        let title: String
+        let detail: String
+        var issues: [String] = []
+        let state: State
+    }
+
+    enum State: Equatable {
+        case done
+        /// Running now, with how far it has got.
+        case active(Double)
+        case waiting
+        case stopped
+    }
+
+    let row: Model
     let isLast: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             VStack(spacing: 0) {
-                Circle()
-                    .fill(step.issues.isEmpty ? Color.inkFaint : Color.kraft)
-                    .frame(width: 7, height: 7)
-                    .padding(.top, 5)
+                marker
+                    .frame(width: 18, height: 18)
                 if !isLast {
                     Rectangle()
-                        .fill(Color.hairline)
-                        .frame(width: 1)
+                        .fill(row.state == .done ? Color.statusDone.opacity(0.5) : Color.hairline)
+                        .frame(width: 2)
                         .frame(maxHeight: .infinity)
                 }
             }
-            .frame(width: 7)
+            .frame(width: 18)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(step.title)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.ink)
-                Text(step.summary)
+                    .foregroundStyle(row.state == .stopped ? Color.statusInvalid : Color.ink)
+                Text(row.detail)
                     .font(.caption)
+                    .monospacedDigit()
                     .foregroundStyle(.inkMuted)
-                ForEach(step.issues, id: \.self) { issue in
+                    .contentTransition(.numericText())
+                if case .active(let fraction) = row.state {
+                    ProgressView(value: fraction)
+                        .tint(.clay)
+                        .animation(.smooth, value: fraction)
+                        .padding(.top, 4)
+                }
+                ForEach(row.issues, id: \.self) { issue in
                     Text(issue)
                         .font(.caption)
                         .foregroundStyle(.kraft)
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.bottom, isLast ? 0 : 12)
+            .padding(.bottom, isLast ? 0 : 22)
+        }
+        // Steps still to come sit greyed out until their turn.
+        .opacity(row.state == .waiting ? 0.4 : 1)
+        .animation(.smooth(duration: 0.4), value: row.state)
+    }
+
+    @ViewBuilder
+    private var marker: some View {
+        switch row.state {
+        case .done:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(row.issues.isEmpty ? Color.statusDone : Color.kraft)
+        case .active:
+            Image(systemName: "circle.dotted")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.clay)
+                .symbolEffect(.rotate, options: .repeat(.continuous))
+        case .waiting:
+            Circle()
+                .strokeBorder(Color.inkFaint, lineWidth: 2)
+                .frame(width: 14, height: 14)
+        case .stopped:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.statusInvalid)
         }
     }
 }

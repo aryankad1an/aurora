@@ -198,7 +198,7 @@ struct SettingsView: View {
             // Check straight away with the new sign-in, which also clears the
             // warning above rather than leaving it until the next sync.
             if gmail.errorMessage == nil {
-                await jobStore.syncReplies(using: replySync, forceFullCheck: true)
+                await jobStore.syncReplies(using: replySync)
             }
         }
     }

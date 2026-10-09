@@ -77,6 +77,30 @@ struct MailBatch: Codable, Identifiable {
 
     var companies: Set<String> { Set(mails.map(\.company)) }
 
+    /// The mail going out now, else the next to go.
+    var current: QueuedMail? {
+        mails.first { if case .sending = $0.status { true } else { false } }
+            ?? mails.first(where: \.status.isWaiting)
+    }
+
+    /// Who the batch is to, by company: "ACKO Insurance", or "ACKO Insurance
+    /// and 5 more" — in the order they're mailed. A batch's own name is often
+    /// the rule that picked it ("First outreach"), which says nothing about
+    /// who's being written to.
+    var companiesLabel: String {
+        var seen = Set<String>()
+        let ordered = mails.map(\.company).filter { !$0.isEmpty && seen.insert($0).inserted }
+        guard let first = ordered.first else { return title }
+        return ordered.count == 1 ? first : "\(first) and \(ordered.count - 1) more"
+    }
+
+    /// The company the mail going out now (or next) is to; once none is
+    /// left, `companiesLabel`.
+    var liveCompany: String {
+        guard let company = current?.company, !company.isEmpty else { return companiesLabel }
+        return company
+    }
+
     /// Why its mails failed: each distinct reason, explained, with how many
     /// failed for it — commonest first.
     var failureReasons: [(reason: String, count: Int)] {
