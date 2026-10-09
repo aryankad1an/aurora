@@ -150,6 +150,16 @@ class Readings(unittest.TestCase):
         self.assertEqual(m.greeting(["sreejith", "nair"])[0], "Sreejith")
         self.assertEqual(m.greeting(["jithin"])[0], "Jithin")
 
+    def test_initials_glued_before_a_name_need_the_catalog_to_pick_the_name(self):
+        # `kdaryan` is KD + Aryan or K + Daryan; alone it's a guess, so no one.
+        m = nm.NameModel()
+        self.assertIsNone(m.greeting(["kdaryan"])[0])
+        m.learn([["aryan", "kadian"], ["aryan", "sharma"]])
+        for local in ("kdaryan", "kadianaryan", "kadian.aryan"):
+            self.assertEqual(m.greeting(nm.parts_of(local))[0], "Aryan", local)
+        for local in ("dkaryan", "aryankd"):  # closer calls: Aryan or no one, never another name
+            self.assertIn(m.greeting(nm.parts_of(local))[0], ("Aryan", None), local)
+
     def test_learning_reads_which_way_round_a_name_is(self):
         m = nm.NameModel()
         m.learn([["singh", "gurpreet"], ["sreejith", "nair"]])

@@ -108,6 +108,13 @@ struct RecipientNameTests {
         ])
         expect(greet("arijit@acme.com"), "Arijit", "…until the catalog has it twice")
         expect(greet("arijit.das@acme.com"), "Arijit", "with a surname too")
+        expect(greet("kdaryan@acme.com"), "", "KD + Aryan or K + Daryan: no one…")
+        expect(greet("kdaryan@acme.com", name: "Aryan Kadian"), "Aryan", "…unless the row names them")
+        RecipientName.learnNames(from: [
+            Contact(id: "5", name: "Aryan Kadian", email: "aryan.k@acme.com"),
+            Contact(id: "6", name: "Aryan Sharma", email: "asharma@acme.com"),
+        ])
+        expect(greet("kdaryan@acme.com"), "Aryan", "…or the catalog has Aryans in it")
         expect(greet("bizdev@acme.com"), "", "a role row teaches nothing")
         RecipientName.learnNames(from: [])
         expect(greet("arijit@acme.com"), "", "learning again replaces what was learned")
