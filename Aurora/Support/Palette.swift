@@ -4,54 +4,60 @@ import UIKit
 /// The app's colours, in one place.
 ///
 /// Black, like a chart on a trading terminal: a near-black ground, cards one
-/// step up, light ink, hairline rules — and a single clay accent that carries
-/// every action. Colour is scarce on purpose: when almost nothing is coloured,
-/// the one thing that is (a reply, a warning, the accent on a button) is read
-/// first. `grid` is the faint graph-paper rule the whole app is drawn on.
+/// step up, light ink, hairline rules — and a single accent that carries every
+/// action. Colour is scarce on purpose: when almost nothing is coloured, the one
+/// thing that is (a reply, a warning, the accent on a button) is read first.
+/// `grid` is the faint graph-paper rule the whole app is drawn on.
 ///
-/// There is one appearance. The app forces dark (`RootView`), so system chrome
-/// — sheets, alerts, keyboards, glass — agrees with these values everywhere.
+/// The values come from the current ``AppTheme``. Reading one inside a view's
+/// body subscribes that view to the theme, so a theme change repaints exactly
+/// the views that draw colour — and, inside an animation, blends them.
+///
+/// There is one appearance. The app forces dark (`RootView`), and every theme
+/// is dark, so system chrome agrees with these values everywhere.
 enum Palette {
+    private static var theme: ThemePalette { ThemeStore.shared.current.palette }
 
     // MARK: - Ground and surfaces
 
     /// The page. Everything else sits on this.
-    static let paper = Color(hex: 0x09090B)
+    static var paper: Color { theme.paper }
 
     /// A raised surface: cards, panels, rows.
-    static let paperRaised = Color(hex: 0x151518)
+    static var paperRaised: Color { theme.paperRaised }
 
     /// A recessed surface: the trough of a control, a segmented track. Lighter
     /// than the ground, not darker — on black, a well has to be lit to be seen.
-    static let paperSunken = Color(hex: 0x1C1C20)
+    static var paperSunken: Color { theme.paperSunken }
 
     // MARK: - Ink
 
     /// Primary text.
-    static let ink = Color(hex: 0xF4F4F5)
+    static var ink: Color { theme.ink }
     /// Secondary text: captions, subtitles, the second line of a row.
-    static let inkMuted = Color(hex: 0x9D9DA6)
+    static var inkMuted: Color { theme.inkMuted }
     /// Tertiary text: chevrons, timestamps, anything you should be able to ignore.
-    static let inkFaint = Color(hex: 0x62626B)
+    static var inkFaint: Color { theme.inkFaint }
 
     /// Hairline rules and card borders. Carries structure so shadows don't have to.
-    static let hairline = Color(hex: 0x27272C)
+    static var hairline: Color { theme.hairline }
 
     /// Graph-paper rules behind every screen and inside every chart.
-    static let grid = Color(hex: 0x17171B)
+    static var grid: Color { theme.grid }
 
     // MARK: - Accent and status
 
-    /// The one accent: clay. Buttons, selection, the active state, the curve.
-    static let clay = Color(hex: 0xE8794F)
+    /// The one accent (clay in the original theme). Buttons, selection, the
+    /// active state, the curve.
+    static var clay: Color { theme.accent }
     /// A reply landed.
-    static let olive = Color(hex: 0x8CC47E)
-    /// Sent, waiting, in progress. Cool enough to read as neutral beside clay.
-    static let slate = Color(hex: 0x8EA8CC)
+    static var olive: Color { theme.reply }
+    /// Sent, waiting, in progress. Cool enough to read as neutral beside the accent.
+    static var slate: Color { theme.waiting }
     /// Set aside or needs attention: bounced, invalid, unmigrated.
-    static let kraft = Color(hex: 0xE0AA6E)
+    static var kraft: Color { theme.attention }
     /// Destructive and broken: delete, a template that won't render.
-    static let danger = Color(hex: 0xF0705F)
+    static var danger: Color { theme.danger }
 }
 
 /// The palette as `Color` members, so `Color.clay` reads naturally in a fill.

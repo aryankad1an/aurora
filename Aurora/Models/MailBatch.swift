@@ -24,6 +24,14 @@ struct MailBatch: Codable, Identifiable {
     var startedAt: Date?
     /// Stopped by the user, or found half-sent when the app opened.
     var isPaused = false
+    /// Why the queue stopped it, when the queue did (Gmail refused the account,
+    /// the connection dropped, the app closed mid-send) — shown on the batch
+    /// until it's resumed. Nil when the user paused it, or it never stopped.
+    var pauseReason: String?
+    /// When the queue carries on by itself: set when Gmail's sending limit
+    /// stopped the batch with a known (or a sensible) time to try again.
+    /// Cleared by anything the user does to the batch.
+    var resumeAt: Date?
     var fromName: String
     var templates: [MailTemplate.ID: TemplateSnapshot]
     var mails: [QueuedMail]
@@ -63,6 +71,29 @@ struct MailBatch: Codable, Identifiable {
     }
 
     var companies: Set<String> { Set(mails.map(\.company)) }
+
+    /// Why its mails failed: each distinct reason, explained, with how many
+    /// failed for it — commonest first.
+    var failureReasons: [(reason: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        var order: [String] = []
+        for mail in mails {
+            guard case .failed(let raw) = mail.status else { continue }
+            let reason = QueuedMail.explain(raw)
+            if counts[reason] == nil { order.append(reason) }
+            counts[reason, default: 0] += 1
+        }
+        return order.map { ($0, counts[$0]!) }.sorted { $0.count > $1.count }
+    }
+
+    /// The same in one line, for the shelf: the commonest reason, and how many
+    /// failed for something else.
+    var failureSummary: String? {
+        let reasons = failureReasons
+        guard let top = reasons.first else { return nil }
+        let others = reasons.dropFirst().reduce(0) { $0 + $1.count }
+        return others == 0 ? top.reason : "\(top.reason) +\(others) more"
+    }
 }
 
 /// One person in a batch, and where their mail has got to.
@@ -112,6 +143,40 @@ struct QueuedMail: Codable, Identifiable {
             if case .failed = self { return true }
             return false
         }
+
+        /// Not sent and not in Gmail's hands: safe to take out of the queue.
+        /// A mail cut off mid-send may have gone, so it stays until checked.
+        var isRemovable: Bool {
+            switch self {
+            case .pending, .failed: true
+            default: false
+            }
+        }
+    }
+
+    /// A failure reason as a person can act on it.
+    ///
+    /// Gmail's own sentence is kept where it already says what to do; the
+    /// common ones are said plainly. A reason recorded before the queue could
+    /// read Gmail's errors is only "{" — the first line of the JSON they came
+    /// in — and is said to be lost rather than shown as is.
+    static func explain(_ reason: String) -> String {
+        let text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = text.lowercased()
+        if text.isEmpty || text.hasPrefix("{") || text.hasPrefix("[") {
+            return "Gmail refused it, but its reason wasn't kept. Retry to see why."
+        }
+        if lower.contains("invalid to header") || lower.contains("invalid recipient")
+            || lower.contains("invalid email") {
+            return "Gmail won't take this address. Check it, or mark the contact invalid."
+        }
+        if lower.contains("limit exceeded") || lower.contains("rate limit") || lower.contains("quota") {
+            return "Gmail's sending limit for your account was reached. Retry in a few hours."
+        }
+        if lower.contains("mail service not enabled") {
+            return "Sending is turned off for this Gmail account."
+        }
+        return text
     }
 
     init(id: Contact.ID, recipient: String, displayName: String, company: String,

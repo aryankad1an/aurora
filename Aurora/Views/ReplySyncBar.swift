@@ -5,8 +5,8 @@ import SwiftUI
 /// Just Now" is), whether a read is running (with its progress), and — when
 /// replies can't be read — why.
 ///
-/// Activity and Quick Actions each used to carry a copy of this, down to the
-/// same two blocker messages, and the copies had already drifted apart.
+/// Screens used to carry their own copies of this, down to the same two
+/// blocker messages, and the copies had already drifted apart.
 struct ReplySyncBar: View {
     let sync: ReplySync
     /// Offers Check Now when set. Left out where the screen's own top bar
@@ -22,7 +22,7 @@ struct ReplySyncBar: View {
         }
         if sync.needsReconnect {
             return ("lock.trianglebadge.exclamationmark.fill",
-                    "Reconnect Gmail in Profile to read replies")
+                    "Reconnect Gmail in Settings to read replies")
         }
         if let message = sync.errorMessage, !sync.isSyncing {
             return ("exclamationmark.triangle.fill", message)

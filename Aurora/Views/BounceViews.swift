@@ -16,6 +16,8 @@ extension BounceReason {
             "The mailbox exists but is full. It may start accepting mail again, so this one is worth a second try later."
         case .rejected:
             "Their server refused the mail — often a spam filter or a company policy rather than a dead address."
+        case .noLongerThere:
+            "Their side answered that this address is no longer in service — the person has likely left. Find their new address, or mark this one invalid."
         case .other:
             "The mail couldn't be delivered. The server's own message is below."
         }
@@ -25,7 +27,7 @@ extension BounceReason {
     /// mailbox or a refusal it often isn't, and the screen says so.
     var suggestsInvalid: Bool {
         switch self {
-        case .addressNotFound, .domainNotFound, .other: true
+        case .addressNotFound, .domainNotFound, .noLongerThere, .other: true
         case .mailboxFull, .rejected: false
         }
     }
@@ -38,92 +40,104 @@ struct BouncedPill: View {
     }
 }
 
-/// The card a list of bounces opens with: how many, what that means, and the
-/// one action that deals with all of them.
+/// The card a list of bounces opens with: how many, what to do about them,
+/// and the one action that deals with all of them.
 struct BounceSummaryCard: View {
     let count: Int
     let message: String
     let onMarkAll: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label {
-                Text(count == 1 ? "1 address bounced" : "\(count) addresses bounced")
-                    .font(.headline)
-                    .foregroundStyle(.ink)
-            } icon: {
-                Image(systemName: "arrow.uturn.backward.circle.fill")
-                    .foregroundStyle(.statusInvalid)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                IconTile(systemImage: "arrow.uturn.backward", tint: .statusInvalid)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(count == 1 ? "1 address bounced" : "\(count) addresses bounced")
+                        .font(.headline)
+                        .foregroundStyle(.ink)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.inkMuted)
-                .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .combine)
+
             Button {
                 Haptics.press()
                 onMarkAll()
             } label: {
-                Text(count == 1 ? "Mark as Invalid" : "Mark All \(count) as Invalid")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    Image(systemName: "person.crop.circle.badge.xmark")
+                        .imageScale(.small)
+                    Text(count == 1 ? "Mark as Invalid" : "Mark All \(count) as Invalid")
+                }
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity)
             }
             .filledButton(.statusInvalid, label: .paper)
-            .controlSize(.large)
         }
-        .padding(16)
+        .padding(14)
         .panel(accent: .statusInvalid)
         .accessibilityElement(children: .contain)
     }
 }
 
-/// One bounced address in a list: who, and why, in words — tap it to deal
-/// with it; Mark Invalid is right there for the common case.
+/// One bounced address in a list, set like a contact on a company's page:
+/// who, the address, and why it came back — with Mark Invalid as a round
+/// button at the end, where a contact row has its send button, so it
+/// never squeezes the words beside it. Tap the row to deal with it in full.
 ///
 /// VoiceOver reads it as one sentence and offers Mark Invalid and Not a Bounce
-/// as actions on it, so neither needs finding by touch. At the largest text
-/// sizes the button moves under the text rather than squeezing it.
+/// as actions on it, so neither needs finding by touch.
 struct BounceListRow: View {
     let item: BouncedContact
     let onOpen: () -> Void
     let onMark: () -> Void
     let onDismiss: () -> Void
 
-    @Environment(\.dynamicTypeSize) private var typeSize
-
     var body: some View {
         let reason = item.bounce.reason
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
-            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
-        layout {
+        HStack(spacing: 12) {
             Button(action: onOpen) {
-                HStack(alignment: .top, spacing: 12) {
-                    if !typeSize.isAccessibilitySize {
-                        MonogramAvatar(text: item.contact.displayName, size: Theme.Avatar.small)
-                    }
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(item.contact.displayName)
-                            .font(.headline)
-                            .foregroundStyle(.ink)
-                        Text(item.contact.email)
-                            .font(.subheadline)
-                            .foregroundStyle(.inkMuted)
-                            .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
-                            .truncationMode(.middle)
-                        // Icon and words tight together, as one phrase.
-                        HStack(alignment: .firstTextBaseline, spacing: 5) {
-                            Image(systemName: reason.systemImage)
-                                .imageScale(.small)
-                            Text(reason.label)
+                HStack(spacing: 12) {
+                    MonogramAvatar(text: item.contact.displayName, size: Theme.Avatar.small)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(item.contact.displayName)
+                                .font(.headline)
+                                .foregroundStyle(.ink)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text(item.bounce.at.activityLabel)
+                                .font(.caption)
+                                .foregroundStyle(.inkFaint)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.statusInvalid)
-                        .padding(.top, 2)
-                        Text(([item.company].filter { !$0.isEmpty } + ["bounced " + item.bounce.at.activityPhrase])
-                            .joined(separator: " · "))
-                            .font(.footnote)
+                        Text(item.contact.email)
+                            .font(.caption)
                             .foregroundStyle(.inkMuted)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        // Why, then whose — one line, so every row is the same
+                        // height. Whose goes first when both don't fit, rather
+                        // than shrinking to "A…".
+                        let why = Text("\(Image(systemName: reason.systemImage)) \(reason.label)")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color.statusInvalid)
+                        let whose = Text(item.company.isEmpty ? "" : "  ·  \(item.company)")
+                            .foregroundStyle(Color.inkFaint)
+                        ViewThatFits(in: .horizontal) {
+                            Text("\(why)\(whose)").fixedSize()
+                            why
+                        }
+                        .font(.caption)
                     }
+                    .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .contentShape(.rect)
@@ -141,13 +155,13 @@ struct BounceListRow: View {
                 Haptics.press()
                 onMark()
             } label: {
-                Text("Mark Invalid")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(minHeight: 30)
+                Image(systemName: "nosign")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.statusInvalid)
+                    .frame(width: 36, height: 36)
+                    .background(Color.statusInvalid.opacity(0.14), in: Circle())
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .tint(.statusInvalid)
+            .buttonStyle(BouncyPress(scale: 0.82))
             // Its action is already on the row for VoiceOver.
             .accessibilityHidden(true)
         }

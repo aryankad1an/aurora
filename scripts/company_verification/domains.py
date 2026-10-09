@@ -10,7 +10,7 @@ PERSONAL = {
     "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in", "ymail.com",
     "outlook.com", "hotmail.com", "live.com", "msn.com", "icloud.com", "me.com",
     "mac.com", "aol.com", "proton.me", "protonmail.com", "rediffmail.com",
-    "zoho.com", "gmx.com", "mail.com", "yandex.com",
+    "zoho.com", "gmx.com", "gmx.us", "mail.com", "yandex.com",
     # Not in the app's list, but just as personal: regional variants, ISP
     # mailboxes, free-mail brands and alias/hosting services. None says where
     # the owner works.
@@ -26,7 +26,8 @@ PERSONAL = {
 # Two-label public suffixes seen in (or plausible for) the data. A registrable
 # domain is one label plus its public suffix.
 MULTI_SUFFIXES = {
-    *(f"{s}.in" for s in ("co", "ac", "org", "net", "gov", "edu", "ind", "res", "nic", "gen", "firm", "ernet")),
+    *(f"{s}.in" for s in ("co", "ac", "org", "net", "gov", "edu", "ind", "res", "nic", "gen", "firm", "ernet",
+                          "bank", "fin")),  # RBI-mandated bank.in / fin.in (2025)
     *(f"{s}.uk" for s in ("co", "org", "ac", "gov", "ltd", "plc", "me")),
     *(f"com.{c}" for c in ("au", "br", "mx", "qa", "sg", "hk", "ar", "cn", "my", "tr", "sa",
                            "eg", "ph", "pk", "tw", "vn", "ng", "co", "pe", "bd", "np", "lk")),

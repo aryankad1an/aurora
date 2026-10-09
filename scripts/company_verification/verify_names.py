@@ -224,8 +224,11 @@ def review(tables):
         local = (r["email"] or "").split("@")[0]
         d_name, d_greet, conf, how = derive(r["email"], lex)
         # A name that is only the mailbox re-spaced ("Akhandelwal India") was
-        # made by an importer, not a person, so the address outranks it.
-        blob = bool(name) and letters(name) == letters(local)
+        # made by an importer, not a person, so the address outranks it. One
+        # that splits, cases or punctuates it differently ("Vijay Kumar" for
+        # vijaykumar@, "Neha C A" for neha.ca@, "Neha D'souza") was
+        # written by a person and is kept.
+        blob = bool(name) and name == " ".join(title(t) for t in tokens(local))
         new = {}
         reason = []
         if conf == "high":

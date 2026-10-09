@@ -5,19 +5,26 @@ Back to the [README](README.md).
 
 <table>
   <tr>
-    <td align="center" width="50%"><img src="docs/screenshots/home.png" alt="Home" width="300"><br><sub><b>Home.</b> Tracked companies, the reply rate, and a scheduled batch on the shelf.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/home.png" alt="Home" width="300"><br><sub><b>Home.</b> Tracked companies, and a scheduled batch on the shelf.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/company.png" alt="Company" width="300"><br><sub><b>Company.</b> Its mail domains, counts, and contacts, bounced ones first.</sub></td>
   </tr>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/compose.png" alt="Compose" width="300"><br><sub><b>Compose.</b> Recipients, a row of templates, and a deck of the actual mails.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/quick-actions.png" alt="Quick Actions" width="300"><br><sub><b>Quick Actions.</b> Who's waiting, who replied, who's new, ready to send to.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/templates.png" alt="Templates" width="300"><br><sub><b>Templates.</b> Each one's placeholders and whether it's ready.</sub></td>
   </tr>
   <tr>
-    <td align="center" width="50%"><img src="docs/screenshots/activity.png" alt="Activity" width="300"><br><sub><b>Activity.</b> Every mail sent, by day, with replies marked.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/queued.png" alt="Queued" width="300"><br><sub><b>Queued.</b> The mail queue in Activity: a batch waiting out a Gmail rate limit, and one ready to send.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/live-activity.png" alt="Live Activity" width="300"><br><sub><b>Live Activity.</b> Status, progress, and the company and address the mail is going to.</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/activity.png" alt="Sent" width="300"><br><sub><b>Sent.</b> Every mail sent, by day, with replies marked.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/reply.png" alt="Reply" width="300"><br><sub><b>Reply.</b> What they said, above the mail that was sent.</sub></td>
   </tr>
   <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/bounced.png" alt="Bounced" width="300"><br><sub><b>Bounced.</b> Addresses that came back, including one whose company answered that it's no longer in service.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/bounce-detail.png" alt="Bounce detail" width="300"><br><sub><b>Bounce.</b> The server's own message, and ways to fix it.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/templates.png" alt="Templates" width="300"><br><sub><b>Templates.</b> Each one's placeholders and whether it's ready.</sub></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><img src="docs/screenshots/themes.png" alt="Themes" width="300"><br><sub><b>Themes.</b> Each one live, with its own chart, colours and icon.</sub></td>
   </tr>
 </table>

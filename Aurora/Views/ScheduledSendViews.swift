@@ -133,6 +133,7 @@ private struct DueBatchSummary: ViewModifier {
                                         if batch == nil, isEnabled, let due = queue.dueBatch { queue.snooze(due.id) }
                                     })) { batch in
             DueBatchSheet(batch: batch) {
+                SendFlight.launch(count: batch.pending)
                 queue.sendNow(batch.id)
             } onLater: {
                 queue.snooze(batch.id)
@@ -270,7 +271,7 @@ struct DueBatchSheet: View {
     private var actions: some View {
         VStack(spacing: 8) {
             if !gmail.isConnected {
-                Label("Connect Gmail in Profile to send.", systemImage: "exclamationmark.circle.fill")
+                Label("Connect Gmail in Settings to send.", systemImage: "exclamationmark.circle.fill")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.kraft)
             }

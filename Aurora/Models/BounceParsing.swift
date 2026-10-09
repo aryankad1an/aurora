@@ -96,6 +96,9 @@ nonisolated enum BounceParsing {
                "recipient not found", "address rejected") {
             return .addressNotFound
         }
+        // Their side saying the address is dead reads as that, whatever else
+        // it mentions ("per company policy, this mailbox is no longer monitored").
+        if isDeadAddressNotice(subject: nil, text: snippet) { return .noLongerThere }
         if has("mailbox full", "mailbox is full", "over quota", "quota exceeded", "5.2.2", "out of storage", "inbox is full") {
             return .mailboxFull
         }
@@ -103,6 +106,116 @@ nonisolated enum BounceParsing {
             return .rejected
         }
         return .other
+    }
+
+    // MARK: - "No longer in service"
+
+    /// Phrases that on their own say the address is dead: the person has left,
+    /// or the mailbox is no longer in service.
+    private static let deadPhrases = [
+        "no longer in service", "no longer in use", "no longer active", "no longer monitored",
+        "no longer being monitored", "no longer checked", "no longer with ", "no longer works",
+        "no longer working", "no longer employed", "no longer part of", "no longer associated",
+        "no longer at ", "has left the", "have left the", "left the company", "left the organization",
+        "left the organisation", "left the firm", "decommissioned", "deactivated"
+    ]
+
+    /// Phrases that say so too — unless the message is an out-of-office, where
+    /// "my mail isn't monitored" means only "until I'm back".
+    private static let inactivePhrases = [
+        "not monitored", "not being monitored", "is inactive", "has been disabled", "is disabled",
+        "has been closed", "is closed"
+    ]
+
+    /// Phrases that only say it when they're about the address, not anything
+    /// else: "the role is no longer available" is news, not a dead mailbox.
+    private static let addressPhrases = ["no longer valid", "no longer exists", "no longer available",
+                                         "no longer accessible", "not in use"]
+    private static let addressWords = ["address", "mailbox", "email", "e-mail", "inbox", "account"]
+
+    /// An out-of-office: someone who's coming back.
+    private static let awayPhrases = [
+        "out of office", "out of the office", "on leave", "on vacation", "on holiday", "annual leave",
+        "parental leave", "maternity leave", "paternity leave", "will return", "will be back",
+        "i'll be back", "back on", "back in the office", "away until", "away from", "limited access",
+        "returning on", "currently travelling", "currently traveling"
+    ]
+
+    /// Whether a message from the recipient's side — their own auto-responder,
+    /// their company's, or a colleague — says the address is dead: no longer
+    /// in service, no longer monitored, the person has left. These come from a
+    /// person's address rather than the mailer daemon, often outside the
+    /// mail's thread, and read like a reply; they're bounces all the same.
+    ///
+    /// An out-of-office is not one, nor is a reply that only mentions
+    /// something being "no longer available".
+    static func isDeadAddressNotice(subject: String?, text: String?) -> Bool {
+        let body = [subject, text].compactMap { $0 }.joined(separator: " ")
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .lowercased()
+        guard !body.isEmpty else { return false }
+        func has(_ phrases: [String]) -> Bool { phrases.contains { body.contains($0) } }
+        if has(deadPhrases) { return true }
+        if has(awayPhrases) { return false }
+        if has(inactivePhrases) { return true }
+        return has(addressPhrases) && has(addressWords)
+    }
+
+    /// The search for those messages: anyone but you, the last 120 days.
+    static let deadAddressQuery = "{\"no longer in service\" \"no longer in use\" \"no longer active\" "
+        + "\"no longer monitored\" \"not monitored\" \"no longer with\" \"no longer works\" "
+        + "\"no longer employed\" \"no longer at\" \"has left the\" \"left the company\" "
+        + "\"no longer valid\" \"no longer exists\" deactivated decommissioned} -from:me newer_than:120d"
+
+    /// The address in a `From` header: `Jane <jane@acme.com>` → `jane@acme.com`.
+    static func senderAddress(_ from: String?) -> String? {
+        guard let from else { return nil }
+        if let open = from.lastIndex(of: "<"), let close = from.lastIndex(of: ">"), open < close {
+            let inner = from[from.index(after: open)..<close].trimmingCharacters(in: .whitespaces).lowercased()
+            return inner.contains("@") ? inner : nil
+        }
+        let bare = from.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return bare.contains("@") && !bare.contains(" ") ? bare : nil
+    }
+
+    /// One person mailed, as far as matching a "no longer in service" message
+    /// needs to know.
+    struct Mailed: Equatable {
+        let contactID: String
+        /// Lowercased.
+        let address: String
+        let sentAt: Date
+        let threadID: String?
+    }
+
+    /// Who a "no longer in service" message is about, of the people mailed:
+    ///
+    /// 1. the mail's own thread;
+    /// 2. the address it came from — a dead mailbox answering for itself;
+    /// 3. an address it names — "jane@acme.com is no longer monitored";
+    /// 4. failing those, the company's domain — but only when exactly one
+    ///    person there was mailed in the three days before it arrived, since a
+    ///    `noreply@` at a big company could be about anyone mailed there.
+    ///
+    /// Only someone mailed before it arrived (a few minutes' slack for clocks)
+    /// counts. Nil when it can't be pinned on one person.
+    static func matchDeadAddressNotice(sender: String?, text: String?, threadID: String?, at: Date,
+                                       mailed: [Mailed]) -> String? {
+        let before = mailed.filter { $0.sentAt <= at.addingTimeInterval(5 * 60) }
+        if let threadID, let hit = before.first(where: { $0.threadID == threadID }) { return hit.contactID }
+        let from = senderAddress(sender)
+        if let from, let hit = before.last(where: { $0.address == from }) { return hit.contactID }
+        // From someone mailed, but only after it came: it's about them, and
+        // says nothing about this send — never a colleague's.
+        if let from, mailed.contains(where: { $0.address == from }) { return nil }
+        let named = Set(failedAddresses(header: nil, snippet: text))
+        let namedHits = Set(before.filter { named.contains($0.address) }.map(\.contactID))
+        if namedHits.count == 1 { return namedHits.first }
+        guard let domain = from.flatMap({ $0.split(separator: "@").last.map(String.init) }) else { return nil }
+        let recent = Set(before.filter {
+            $0.address.hasSuffix("@" + domain) && $0.sentAt >= at.addingTimeInterval(-3 * 24 * 3600)
+        }.map(\.contactID))
+        return recent.count == 1 ? recent.first : nil
     }
 }
 
@@ -400,7 +513,11 @@ nonisolated extension BounceParsing {
 
 /// Why a mail came back, as the notice put it.
 nonisolated enum BounceReason: Equatable {
-    case addressNotFound, domainNotFound, mailboxFull, rejected, other
+    case addressNotFound, domainNotFound, mailboxFull, rejected
+    /// Their side answered that the address is no longer in service, or the
+    /// person has left.
+    case noLongerThere
+    case other
 
     var label: String {
         switch self {
@@ -408,6 +525,7 @@ nonisolated enum BounceReason: Equatable {
         case .domainNotFound: "Domain doesn't exist"
         case .mailboxFull: "Mailbox full"
         case .rejected: "Rejected by their server"
+        case .noLongerThere: "No longer in service"
         case .other: "Couldn't be delivered"
         }
     }
@@ -418,6 +536,7 @@ nonisolated enum BounceReason: Equatable {
         case .domainNotFound: "globe.badge.chevron.backward"
         case .mailboxFull: "tray.full"
         case .rejected: "hand.raised"
+        case .noLongerThere: "person.crop.circle.badge.minus"
         case .other: "exclamationmark.triangle"
         }
     }

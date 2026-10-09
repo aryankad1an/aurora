@@ -11,9 +11,15 @@ import SwiftUI
 struct MailSummaryView: View {
     let contact: Contact
     let company: String
+    /// The send this is, so it can be checked for a bounce on its own.
+    var sendID: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(JobStore.self) private var jobStore
+    @Environment(ReplySync.self) private var replySync
+    @State private var isChecking = false
+    @State private var checked: ReplySync.BounceCheck?
 
     /// "Sent 17 Sep 2026 at 3:55 PM".
     private var sentStamp: String {
@@ -44,6 +50,7 @@ struct MailSummaryView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if contact.hasReplied { reply }
                     letter
+                    if !contact.hasReplied, sendID != nil { delivery }
                 }
                 .padding(.horizontal, Theme.Space.gutter)
                 .padding(.top, 8)
@@ -126,6 +133,56 @@ struct MailSummaryView: View {
         .panel(radius: Theme.Radius.hero)
     }
 
+    // MARK: - Delivery
+
+    /// Whether it got there: a bounce already found, or what checking now finds.
+    private var delivery: some View {
+        let bounce = replySync.bounces[contact.id]
+        let state = DeliveryState(bounce: bounce, checked: checked)
+        return VStack(alignment: .leading, spacing: 10) {
+            Label(state.title, systemImage: state.systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(state.tint)
+                .contentTransition(.symbolEffect(.replace))
+            Text(state.detail)
+                .font(.caption)
+                .foregroundStyle(.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Task { await check() }
+            } label: {
+                HStack(spacing: 6) {
+                    if isChecking {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "arrow.uturn.backward.circle")
+                    }
+                    Text(isChecking ? "Checking…" : "Check for Bounce")
+                }
+                .font(.subheadline.weight(.semibold))
+            }
+            .secondaryButton()
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+            .disabled(isChecking)
+            .padding(.top, 2)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .panelAccented(bounce != nil ? .statusInvalid : nil, radius: Theme.Radius.hero)
+        .animation(Theme.Motion.snappy, value: checked)
+    }
+
+    private func check() async {
+        guard let sendID else { return }
+        Haptics.tap(0.5)
+        isChecking = true
+        let result = await jobStore.checkBounce(sendID: sendID, using: replySync)
+        isChecking = false
+        withAnimation(Theme.Motion.snappy) { checked = result }
+        if case .bounced = result { Haptics.thud() }
+    }
+
     // MARK: - The answer
 
     /// Only the opening lines of a reply are stored — enough to recognise it and
@@ -184,6 +241,46 @@ struct MailSummaryView: View {
               let web = URL(string: "https://mail.google.com/mail/") else { return }
         openURL(app) { opened in
             if !opened { openURL(web) }
+        }
+    }
+}
+
+/// What the delivery card says.
+private struct DeliveryState {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let tint: Color
+
+    init(bounce: Bounce?, checked: ReplySync.BounceCheck?) {
+        if let bounce {
+            title = "Bounced · \(bounce.reason.label)"
+            detail = bounce.reason.explanation + " It's in Activity's Bounced lane."
+            systemImage = "arrow.uturn.backward.circle.fill"
+            tint = .statusInvalid
+            return
+        }
+        switch checked {
+        case .replied:
+            title = "Delivered"
+            detail = "They answered it, so it reached them. Check for Replies records the answer."
+            systemImage = "checkmark.circle.fill"
+            tint = .statusDone
+        case .clear:
+            title = "No bounce found"
+            detail = "Nothing in your mailbox says this mail failed — checked just now. Most bounces arrive within minutes; some servers take a day."
+            systemImage = "checkmark.circle.fill"
+            tint = .statusDone
+        case .failed(let reason):
+            title = "Couldn't check"
+            detail = reason
+            systemImage = "exclamationmark.circle.fill"
+            tint = .kraft
+        case .bounced, nil:
+            title = "No bounce seen yet"
+            detail = "Gmail's failure notices are read on every sync. Check this one now to look through its thread and your whole mailbox for it."
+            systemImage = "envelope.badge"
+            tint = .inkMuted
         }
     }
 }

@@ -94,7 +94,7 @@ struct SendQueueBar: View {
                     .stroke(Color.ink.opacity(0.15), lineWidth: 2.5)
                 Circle()
                     .trim(from: 0, to: max(queue.progress, 0.02))
-                    .stroke(Color.accentColor,
+                    .stroke(Color.clay,
                             style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
@@ -132,6 +132,7 @@ struct SendQueueBar: View {
     private var title: String {
         switch mode {
         case .sending:
+            if queue.cooldown != nil { return "Waiting on Gmail" }
             return queue.isStopping ? "Pausing…" : "Sending mail"
         case .result(let outcome):
             if outcome.isPaused { return "\(outcome.sent) sent · paused" }
@@ -156,19 +157,28 @@ struct SendQueueBar: View {
         switch mode {
         case .sending:
             if queue.isStopping { return "Finishing the mail already on its way" }
+            if let cooldown = queue.cooldown {
+                return "Gmail asked to slow down · trying again at "
+                    + cooldown.until.formatted(date: .omitted, time: .standard)
+            }
             return "\(queue.completed) of \(queue.total) · \(queue.running?.title ?? "")"
         case .result(let outcome):
             if let reason = outcome.stoppedBecause { return reason }
-            if outcome.isPaused { return "Tap to open the queue and resume" }
+            if outcome.isPaused { return "Tap to open it in Activity and resume" }
             guard !outcome.failed.isEmpty else {
-                return (queue.batch(outcome.batchID)?.title).map { "\($0) · tap to open the queue" } ?? "Tap to open the queue"
+                return (queue.batch(outcome.batchID)?.title).map { "\($0) · tap to open it in Activity" } ?? "Tap to open it in Activity"
             }
-            return "Couldn't reach \(outcome.failed.prefix(2).joined(separator: ", "))"
+            // Why they failed, which is what decides what to do next — a list
+            // of names ("Couldn't reach Priya, Rahul") read as a network fault
+            // whatever the cause was.
+            if let why = queue.batch(outcome.batchID)?.failureSummary { return why }
+            return "Couldn't send to \(outcome.failed.prefix(2).joined(separator: ", "))"
                 + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
         case .due(let batch):
             return "\(batch.title) · tap Review to see it and send"
         case .paused(let batches):
-            return batches.count == 1 ? "\(batches[0].title) · tap to open the queue" : "\(batches.count) batches · tap to open the queue"
+            if batches.count == 1, let reason = batches[0].pauseReason { return reason }
+            return batches.count == 1 ? "\(batches[0].title) · tap to open it in Activity" : "\(batches.count) batches · tap to open it in Activity"
         case .scheduled(let batch):
             let day = batch.scheduledFor.map { Calendar.current.isDateInToday($0) ? "today" : $0.formatted(.dateTime.weekday(.wide)) } ?? ""
             return "\(batch.pending) mail\(batch.pending == 1 ? "" : "s") · \(batch.title) · \(day)"

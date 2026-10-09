@@ -9,9 +9,12 @@ struct LoginView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Image(systemName: "paperplane.circle.fill")
-                .font(.system(size: 72))
-                .foregroundStyle(.tint)
+            // The theme's mark, in a disc of its accent.
+            Image(systemName: ThemeStore.shared.current.mark)
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 76, height: 76)
+                .background(Color.clay, in: Circle())
                 // The one piece of idle motion in the app, and only here: the
                 // sign-in screen has nothing else on it, and a mark that breathes
                 // says the app is running before anything has been tapped.

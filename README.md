@@ -31,6 +31,8 @@ sent and read through the Gmail API under Google OAuth.
 - [Getting started](#getting-started)
 - [How it works](#how-it-works)
   - [Sending](#sending)
+  - [Live Activity](#live-activity)
+  - [Rate limits](#rate-limits)
   - [Reply tracking](#reply-tracking)
   - [Bounces](#bounces)
   - [Greetings](#greetings)
@@ -49,11 +51,13 @@ sent and read through the Gmail API under Google OAuth.
 | **Templates** | Subject and body with placeholders (`{Receiver-Name}`, `{Receiver-Company}`, `{Sender-College}`, `{Resume-Link}`, …) filled from the contact and your profile. The editor flags misspelled placeholders and ones that would come out blank. A template that names one company in plain text is labelled with it, and compose warns before it goes to anyone else. |
 | **Greetings** | "Hi {Receiver-Name}," greets people by a name the app is sure of: the contact's name field, the name they signed a reply with, what your own mail calls their address, or a reading of the address itself. When it isn't sure, the mail opens with a plain "Hi,". See [Greetings](#greetings). |
 | **Compose** | One screen per batch: who it's going to, a row of templates, and a swipeable deck of the actual mails. Any mail can be edited by hand or moved to another template. Batches have no size limit. |
-| **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. |
+| **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. When Gmail rate-limits a send, the queue waits and tries the same mail again instead of failing it. |
+| **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending · mail 4 of 6", "Waiting on Gmail · retry in 0:26"), a progress bar with sent, failed and to-go counts, and who the mail is going to. |
 | **Reply tracking** | Each send records its Gmail thread. The app reads those threads to find replies, skipping auto-replies and bounces. |
-| **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. |
-| **Activity** | Every mail sent, grouped by day, filterable by replied/waiting and by search. A Bounced lane lists bounced addresses, with a button to mark each (or all) invalid. |
-| **Quick Actions** | The reply rate, plus three lists to send from: people still waiting on a reply, people who replied, and people not contacted yet. |
+| **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. Answers saying the address is no longer in service, or the person has left, count too. Any sent mail can be checked on its own from Activity. |
+| **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
+| **Themes** | Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and Gilded. Each changes the colours, the chart that moves behind every screen, the launch screen and the app icon. |
+| **Send animation** | Sending launches paper planes, one per mail (up to three), that climb on glowing trails, loop and fly off the top of the screen. |
 | **Invalid contacts** | A contact whose address bounces or who has left can be marked invalid, and isn't mailed or suggested again until marked valid. Shared across users, since a dead address is dead for everyone. |
 
 ## Getting started
@@ -67,7 +71,9 @@ Cloud OAuth client for iOS.
    - `googleClientID`, `googleRedirectScheme` (the reversed client ID)
 3. Apply the [database schema](#database-schema) to your Supabase project.
 4. Run on a simulator or device. Scheduled sends ask for notification
-   permission the first time you schedule something.
+   permission the first time you schedule something. The `AuroraLive` widget
+   extension (`com.realaryan.JTracker.LiveActivity`) is signed with the same
+   team; on a first device build, let automatic signing register its app ID.
 
 ### Database schema
 
@@ -125,7 +131,7 @@ The app still runs if some of these haven't been applied yet:
   and a greeting typed into the contact form is dropped while the rest of the
   edit saves.
 - Without the reply-tracking columns, sends are recorded without Gmail ids and
-  no replies are found. The Quick Actions status line says so.
+  no replies are found. The status line on Activity says so.
 
 The mail queue needs no schema change; it's stored on the phone.
 
@@ -136,7 +142,7 @@ reply tracking, bounce detection, the queue's Sent-mail lookups and the
 greeting lookups use.
 
 - If you connected Gmail before reply tracking existed, disconnect and reconnect
-  it in Profile. Older tokens don't have the read scope, and reads fail with a
+  it in Settings. Older tokens don't have the read scope, and reads fail with a
   403 until you do.
 - `gmail.readonly` is a restricted scope. It works for listed test users while
   the consent screen is in Testing. Publishing requires Google's verification
@@ -183,12 +189,13 @@ Sends are written to the `mail_sends` history every 5 mails. Anything not yet
 written when the app closes is written the next time it opens.
 
 The shelf above the tab bar shows what the queue is doing (sending, paused,
-due, scheduled, or the last result). Tapping it opens the queue, where each
-batch can be paused, resumed, rescheduled, retried or removed. Each batch lists
-the saved copies of its templates (flagged if the template has been edited or
-deleted in Templates since), each person's row says which one their mail is
-written from, and any mail can be opened to read exactly what was or will be
-sent. The queue is also under Activity → ⋯ → Mail Queue.
+due, scheduled, or the last result). Tapping it opens Activity's Queued lane,
+where every batch is listed by what it's doing. There each batch can be
+paused, resumed, rescheduled, retried or removed (Activity → ⋯ → Clear Queue
+empties it). Each batch lists the saved copies of its templates (flagged if the
+template has been edited or deleted in Templates since), each person's row says
+which one their mail is written from, and any mail can be opened to read
+exactly what was or will be sent.
 
 #### Interruptions
 
@@ -232,6 +239,54 @@ passed. Nothing is sent without that tap. "Not Now" leaves it on the shelf.
 If you don't open the app, the batch waits. Sending at an exact time with the
 phone locked would need a server holding your Gmail token, which this app
 doesn't have.
+
+### Live Activity
+
+<p align="center">
+  <img src="docs/screenshots/live-activity-lock.png" alt="Live Activity on the Lock Screen" width="420"><br>
+  <img src="docs/screenshots/live-activity-expanded.png" alt="Expanded Dynamic Island" width="420"><br>
+  <img src="docs/screenshots/live-activity-compact.png" alt="Compact Dynamic Island" width="420">
+</p>
+
+While the queue is sending, a Live Activity shows the run outside the app. It
+starts with a run, follows it from batch to batch, and ends showing how the run
+finished (a clean run stays on the Lock Screen for 15 minutes).
+
+- **Lock Screen and Notification Center:** the status line in the theme's
+  colour ("Sending · mail 4 of 6", "Waiting on Gmail · retry in 0:26",
+  "Paused · carries on at 7:00 PM", "Finished · 1 failed"), the batch's name,
+  a count ("3/6"), a progress bar with sent, failed and to-go counts, and a card
+  saying who the mail is going to: their name, company and address. While Gmail
+  has the run waiting, the card shows who goes next instead.
+- **Dynamic Island, expanded:** the status, the batch, the bar, and who it's
+  to (or who's next).
+- **Dynamic Island, compact:** the theme's paper plane and the count, or an
+  hourglass and the countdown while waiting.
+
+Tapping it opens Activity's Queued lane. It's drawn by the `AuroraLive` widget
+extension from `SendActivityAttributes` (in `Shared/`, compiled into both
+targets), and `SendLiveActivity` in the app starts, updates and ends it as the
+queue changes. The extension can't read the app's theme, so the theme's colours
+and mark travel with the activity. iOS asks once whether to allow Live
+Activities from Aurora; they can be turned off in Settings › Aurora.
+
+### Rate limits
+
+When Gmail answers a send with a rate limit (HTTP 429, or a 403 whose reason is
+`rateLimitExceeded`, `userRateLimitExceeded`, `dailyLimitExceeded` or similar),
+or is briefly unavailable (5xx), nothing was sent. The mail goes back first in
+line and the run waits:
+
+- for the time Gmail gave (a `Retry-After` header, or the "Retry after
+  <time>" its message ends with), or
+- if it gave none, for 30 s, then 1, 2, 4 and 8 minutes on each limit in a row.
+  A send that goes through resets the steps.
+
+The wait counts down on the batch, the shelf and the Live Activity, and Pause
+still stops it. A wait longer than 15 minutes (a daily sending limit,
+typically) isn't sat out: the batch pauses and carries on by itself at that
+time (an hour later if Gmail didn't say), with a notification in case the app
+is closed by then.
 
 ### Reply tracking
 
@@ -290,6 +345,28 @@ Servers that send prose alone fall back to reading the text: the address from
 `X-Failed-Recipients` or the prose, the reason from its wording and any status
 code in it. All of this lives in `BounceParsing`, which has its own tests.
 
+Some dead addresses never produce a failure notice. Instead the recipient's
+side answers: their auto-responder, a colleague or the company's `noreply@`
+says the address is "no longer in service", the mailbox "is no longer
+monitored", or the person "has left the company". These read like replies, and
+often arrive outside the mail's thread. `BounceParsing.isDeadAddressNotice`
+recognises them (an out-of-office that says mail "isn't monitored" until
+someone is back is not one), and they count as bounces with the reason "No
+longer in service":
+
+- in the mail's thread, such a message is a bounce rather than a reply (a real
+  reply after it still wins);
+- outside the thread, each sync searches the mailbox for these phrases and
+  pins each message on one person mailed before it arrived: by its thread, by
+  the address it came from, by an address it names, or by the company's domain
+  when exactly one person there was mailed in the three days before;
+- replies recorded before these were told apart are taken back in
+  `mail_sends` and kept as bounces instead.
+
+Check for Bounce on a single sent mail (its menu in Activity, or its page)
+does the same for that one mail straight away: its thread first, then failure
+notices anywhere in the mailbox that name its address.
+
 Bounces are saved per account in `Documents/bounces-<account>.json`, so they
 survive a relaunch. A bounce leaves the list when the contact is marked
 invalid, when their address is changed, when they reply after it, or when you
@@ -333,6 +410,7 @@ accuracy are in [`scripts/names`](scripts/names/README.md).
 | Backend | Supabase (Postgres) through `SupabaseAPI` |
 | Mail | Gmail API via `GmailAuthStore`: OAuth with PKCE, send, and read-only mailbox queries |
 | Greetings | `RecipientName` and `NameClassifier`, with the model in `Aurora/Resources/NameModel.txt` |
+| Live Activity | The `AuroraLive` widget extension, drawn from `SendActivityAttributes` in `Shared/`; `SendLiveActivity` in the app starts, updates and ends it |
 | On the phone | Keychain for the Google refresh token; JSON files in Documents for the mail queue, bounces, found names and a few cached lists (`JSONFile`) |
 
 `MailQueue` and `ReplySync` don't reference the auth or data stores. `RootView`
@@ -399,8 +477,9 @@ notice. The Python scripts below have their own `unittest` suites.
 | Path | What it does |
 |---|---|
 | [`scripts/names/`](scripts/names/README.md) | Builds and evaluates the greeting classifier: pinned public name data, the Python reference implementation, and a Swift parity test. |
-| [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings. Backs up before every change. |
+| [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. Backs up before every change. |
 | `scripts/app_icon/make_icon.swift` | Draws the app icon, one rising curve from rose to amber with a glow behind it, and its tinted variant. Usage is at the top of the file. |
+| `scripts/app_icons/make_theme_icons.swift` | Draws the app icon for each theme. |
 
 ## Project layout
 
@@ -412,11 +491,14 @@ Aurora/
 ├─ Views/                      SwiftUI screens
 ├─ Support/                    Design system, palette, keychain, JSON files, haptics
 ├─ Resources/NameModel.txt     Name data for the greeting classifier
-└─ Assets.xcassets/            App icon and colours
+└─ Assets.xcassets/            App icons and colours
+AuroraLive/                    Widget extension: the mail queue's Live Activity
+Shared/                        Code compiled into both the app and the extension
 Tests/                         Standalone Swift test programs
 scripts/names/                 Greeting classifier: data build, reference, evaluation (Python)
 scripts/company_verification/  Catalog verification pipeline (Python)
 scripts/app_icon/              Draws the app icon (Swift, Core Graphics)
+scripts/app_icons/             Draws each theme's app icon (Swift, Core Graphics)
 docs/screenshots/              Screenshots used in this README and SCREENSHOTS.md
 ```
 

@@ -16,6 +16,11 @@ import SwiftUI
 /// They share a `GlassEffectContainer`, which is what makes that fusing a real
 /// liquid merge — the surfaces neck and join — rather than two discs overlapping.
 ///
+/// The theme sets the scene: its chart moves behind the curve, its mark floats
+/// in the lens, its colours run through all of it, and its tagline sits under
+/// the wordmark — so the first thing the app shows is already the look you
+/// picked.
+///
 /// Everything continuous stops under Reduce Motion; the curve and the droplets
 /// still follow progress, just without drifting.
 struct SplashView: View {
@@ -34,11 +39,13 @@ struct SplashView: View {
     private static let wordmarkDelay: Duration = .milliseconds(260)
 
     var body: some View {
+        let theme = ThemeStore.shared.current
         ZStack {
-            Color.paper.ignoresSafeArea()
+            ChartGround(intensity: 0.6)
+                .ignoresSafeArea()
 
-            GraphGlassScene(progress: shownProgress, isAnimated: !reduceMotion,
-                            isRevealed: phase != .waiting)
+            GraphGlassScene(progress: shownProgress, mark: theme.mark,
+                            isAnimated: !reduceMotion, isRevealed: phase != .waiting)
 
             VStack(spacing: 8) {
                 Spacer()
@@ -51,7 +58,7 @@ struct SplashView: View {
                     .blur(radius: phase == .settled ? 0 : 8)
                     .opacity(phase == .settled ? 1 : 0)
                     .offset(y: phase == .settled ? 0 : 12)
-                Text("Charting your outreach")
+                Text(theme.tagline)
                     .font(.subheadline)
                     .foregroundStyle(.inkMuted)
                     .opacity(phase == .settled ? 1 : 0)
@@ -86,6 +93,8 @@ struct SplashView: View {
 /// the curve extends and the droplets glide in rather than jumping.
 private struct GraphGlassScene: View, Animatable {
     var progress: Double
+    /// The theme's glyph, floating in the lens.
+    let mark: String
     let isAnimated: Bool
     let isRevealed: Bool
 
@@ -111,7 +120,6 @@ private struct GraphGlassScene: View, Animatable {
                 let drawnTo = 0.04 + 0.96 * progress
 
                 ZStack {
-                    grid(size)
                     chart.area(upTo: drawnTo)
                         .fill(LinearGradient(colors: [Color.clay.opacity(0.22), Color.clay.opacity(0)],
                                              startPoint: .top, endPoint: .bottom))
@@ -144,24 +152,6 @@ private struct GraphGlassScene: View, Animatable {
     }
 
     // MARK: Graph
-
-    private func grid(_ size: CGSize) -> some View {
-        Path { path in
-            let rows = 7
-            for row in 1..<rows {
-                let y = size.height * CGFloat(row) / CGFloat(rows)
-                path.move(to: CGPoint(x: 0, y: y))
-                path.addLine(to: CGPoint(x: size.width, y: y))
-            }
-            let columns = 6
-            for column in 1..<columns {
-                let x = size.width * CGFloat(column) / CGFloat(columns)
-                path.move(to: CGPoint(x: x, y: 0))
-                path.addLine(to: CGPoint(x: x, y: size.height))
-            }
-        }
-        .stroke(Color.hairline, style: StrokeStyle(lineWidth: 0.75, dash: [1, 4]))
-    }
 
     /// Markers along the drawn part of the curve, each popping in as the line
     /// reaches it.
@@ -223,9 +213,10 @@ private struct GraphGlassScene: View, Animatable {
         }
     }
 
-    /// The mark: a glass tile, clay-tinted, with the paperplane floating in it.
+    /// The mark: a glass tile, tinted with the accent, with the theme's glyph
+    /// floating in it.
     private func lens(time: Double) -> some View {
-        Image(systemName: "paperplane.fill")
+        Image(systemName: mark)
             .font(.system(size: 40, weight: .medium))
             .foregroundStyle(Color.clay)
             .rotationEffect(.degrees(-14 + 3 * sin(time * 1.3)))

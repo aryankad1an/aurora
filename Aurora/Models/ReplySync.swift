@@ -37,7 +37,11 @@ final class ReplySync {
         /// Requests that came back with an answer, whatever the answer was.
         var read = 0
 
-        var changedAnything: Bool { recovered > 0 || replies > 0 }
+        /// Replies recorded before "no longer in service" answers were known
+        /// for what they are, taken back and turned into bounces.
+        var corrected = 0
+
+        var changedAnything: Bool { recovered > 0 || replies > 0 || corrected > 0 }
         /// Everything that was asked failed: nothing was checked at all.
         var readNothing: Bool { failed > 0 && read == 0 }
     }
@@ -187,6 +191,18 @@ final class ReplySync {
 
         var sends = sends
         do {
+            // Replies that were really "this address is no longer in service".
+            let corrected = await correctMisreadReplies(in: sends, emailByContact: emailByContact)
+            outcome.corrected = corrected.count
+            sends = sends.map { send in
+                guard corrected.contains(send.id) else { return send }
+                var cleared = send
+                cleared.repliedAt = nil
+                cleared.replyFrom = nil
+                cleared.replySnippet = nil
+                return cleared
+            }
+
             let recovered = try await recoverThreadIDs(in: sends, emailByContact: emailByContact)
             outcome.recovered = recovered.count
             outcome.failed += recovered.failed
@@ -218,6 +234,12 @@ final class ReplySync {
             outcome.bounced += scanned.found
             outcome.failed += scanned.failed
             outcome.read += scanned.read
+
+            // "No longer in service" answers from their side, wherever they are.
+            let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact)
+            outcome.bounced += dead.found
+            outcome.failed += dead.failed
+            outcome.read += dead.read
             // Contacts already ruled out are dealt with.
             for id in excludingContactIDs { bounces[id] = nil }
             saveBounces()
@@ -237,6 +259,116 @@ final class ReplySync {
             if !error.isCancellation { errorMessage = error.localizedDescription }
         }
         return outcome
+    }
+
+    // MARK: - One mail
+
+    /// What looking for one mail's bounce found.
+    enum BounceCheck: Equatable {
+        /// It bounced; the reason, in words. Now in the Bounced lane.
+        case bounced(reason: String)
+        /// Someone answered it, so it was delivered.
+        case replied
+        /// No failure notice for it anywhere in the mailbox.
+        case clear
+        case failed(String)
+    }
+
+    /// Look for one mail's bounce now, rather than waiting for the next sync:
+    /// its own thread first, then failure notices anywhere in the mailbox
+    /// (Spam and Trash included) that name its address. A bounce found is kept
+    /// like any other — and one dismissed before comes back, since this was
+    /// asked about by name.
+    ///
+    /// "No longer in service" answers from their side count too, in the
+    /// thread or anywhere else: from the address, naming it, or from its
+    /// company's domain when they were the one mailed there.
+    ///
+    /// - Parameters:
+    ///   - sends, emailByContact: everyone mailed, so an answer from the
+    ///     company's domain is only pinned on this person when it can't be
+    ///     about anyone else.
+    func checkBounce(of send: MailSend, address: String,
+                     sends: [MailSend], emailByContact: [String: String]) async -> BounceCheck {
+        guard let reader else { return .failed(GmailAuthError.notConnected.localizedDescription) }
+        let address = address.lowercased()
+        // Recorded as their reply before such answers were told apart.
+        if send.hasReplied, BounceParsing.isDeadAddressNotice(subject: nil, text: send.replySnippet) {
+            return keep(Bounce(contactID: send.contactID, address: address, at: send.repliedAt ?? .now,
+                               snippet: send.replySnippet, status: nil, diagnostic: nil))
+        }
+        do {
+            if let threadID = send.gmailThreadID {
+                switch try await Self.firstResponse(inThread: threadID, after: send.sentAt, reader: reader) {
+                case .reply:
+                    return .replied
+                case .bounce(let at, let messageID, let snippet):
+                    let read = Self.isSafePathComponent(messageID)
+                        ? try? await Self.readNotice(id: messageID, lookingUpOriginal: false, reader: reader)
+                        : nil
+                    if read != nil { seenBounceMessages.insert(messageID) }
+                    let failures = read.map { $0.notice.failures(snippet: $0.snippet ?? snippet) } ?? []
+                    // A notice that reads as a delay, or a success, isn't one.
+                    if read == nil || !failures.isEmpty || read?.notice.isNotice == false {
+                        let failure = failures.first { $0.address == address } ?? failures.first
+                        return keep(Bounce(contactID: send.contactID, address: address, at: at,
+                                           snippet: read?.snippet ?? snippet,
+                                           status: failure?.status, diagnostic: failure?.diagnostic))
+                    }
+                case .silent:
+                    break
+                }
+            }
+
+            // Notices that never joined the thread, found by the address in them.
+            guard Self.isSearchable(address) else { return .clear }
+            let ids = try await Self.listBounceNotices(matching: "\"\(address)\"", limit: 20, reader: reader)
+            for id in ids where Self.isSafePathComponent(id) {
+                guard let notice = try? await Self.readNotice(id: id, lookingUpOriginal: true, reader: reader) else { continue }
+                seenBounceMessages.insert(id)
+                let failures = notice.notice.failures(snippet: notice.snippet)
+                let isThisMail = notice.originalGmailID != nil && notice.originalGmailID == send.gmailMessageID
+                guard let failure = failures.first(where: { $0.address == address }) ?? (isThisMail ? failures.first : nil) else {
+                    continue
+                }
+                // A notice from before this mail went says nothing about it.
+                if !isThisMail, let sentAt = send.sentAt, notice.at < sentAt.addingTimeInterval(-5 * 60) { continue }
+                return keep(Bounce(contactID: send.contactID, address: address, at: notice.at, snippet: notice.snippet,
+                                   status: failure.status, diagnostic: failure.diagnostic))
+            }
+
+            // "No longer in service" answers from them, naming them, or from
+            // their company.
+            let domain = address.split(separator: "@").last.map(String.init) ?? address
+            let answers = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery,
+                                                           matching: "{from:\(address) \"\(address)\" from:\(domain)}",
+                                                           limit: 20, reader: reader)
+            let mailed = Self.mailed(sends, emailByContact: emailByContact)
+            for answer in try await readHeaders(ids: answers.filter(Self.isSafePathComponent)) {
+                seenBounceMessages.insert(answer.id)
+                guard !BounceParsing.isBounceSender(answer.from),
+                      BounceParsing.isDeadAddressNotice(subject: answer.subject, text: answer.snippet),
+                      BounceParsing.matchDeadAddressNotice(sender: answer.from, text: answer.snippet,
+                                                           threadID: answer.threadID, at: answer.at,
+                                                           mailed: mailed) == send.contactID else { continue }
+                return keep(Bounce(contactID: send.contactID, address: address, at: answer.at,
+                                   snippet: answer.snippet, status: nil, diagnostic: nil))
+            }
+            saveBounces()
+            return .clear
+        } catch let error as GmailAuthError where error.needsReconnect {
+            needsReconnect = true
+            return .failed(error.localizedDescription)
+        } catch {
+            return .failed(error.isCancellation ? "The check was cancelled." : error.localizedDescription)
+        }
+    }
+
+    private func keep(_ bounce: Bounce) -> BounceCheck {
+        dismissedBounces[bounce.contactID] = nil
+        _ = record(bounce)
+        saveBounces()
+        return .bounced(reason: bounce.reason.label)
     }
 
     // MARK: - Pass 1: recover thread ids for older sends
@@ -643,6 +775,156 @@ final class ReplySync {
         return (found, failed, read)
     }
 
+    // MARK: - Pass 4: "no longer in service"
+
+    /// Everyone mailed, for matching an answer to the person it's about.
+    private static func mailed(_ sends: [MailSend], emailByContact: [String: String]) -> [BounceParsing.Mailed] {
+        sends.compactMap { send -> BounceParsing.Mailed? in
+            guard let at = send.sentAt, let address = emailByContact[send.contactID]?.lowercased() else { return nil }
+            return BounceParsing.Mailed(contactID: send.contactID, address: address, sentAt: at, threadID: send.gmailThreadID)
+        }
+        .sorted { $0.sentAt < $1.sentAt }
+    }
+
+    /// Answers from the recipient's side saying the address is dead — "no
+    /// longer in service", "no longer with the company", "this mailbox isn't
+    /// monitored" — wherever they landed: in the mail's thread or not, from
+    /// the dead mailbox itself, a colleague, or the company's `noreply@`. Each
+    /// is matched to the person it's about (`BounceParsing.matchDeadAddressNotice`)
+    /// and kept as their bounce. Read once each, like failure notices.
+    private func scanDeadAddressNotices(sends: [MailSend],
+                                        emailByContact: [String: String]) async throws -> (found: Int, failed: Int, read: Int) {
+        guard let reader else { throw GmailAuthError.notConnected }
+        let mailed = Self.mailed(sends, emailByContact: emailByContact)
+        guard !mailed.isEmpty else { return (0, 0, 0) }
+
+        let ids: [String]
+        do {
+            ids = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery, limit: 100, reader: reader)
+        } catch let error as GmailAuthError where error.endsRun {
+            throw error
+        } catch {
+            return (0, 1, 0)
+        }
+        let unread = ids.filter { !seenBounceMessages.contains($0) && Self.isSafePathComponent($0) }
+        guard !unread.isEmpty else { return (0, 0, 1) }
+
+        progress = Progress(label: "Looking for addresses no longer in service", done: 0, total: unread.count)
+        let answers = try await readHeaders(ids: unread)
+        var found = 0, read = 1
+        for answer in answers {
+            read += 1
+            seenBounceMessages.insert(answer.id)
+            if keepDeadAddressNotice(answer, mailed: mailed, emailByContact: emailByContact) != nil { found += 1 }
+        }
+        return (found, unread.count - answers.count, read)
+    }
+
+    /// Keep `answer` as a bounce if it says an address is dead and can be
+    /// pinned on one person mailed. The contact it was kept for, if any.
+    @discardableResult
+    private func keepDeadAddressNotice(_ answer: HeaderMessage, mailed: [BounceParsing.Mailed],
+                                       emailByContact: [String: String]) -> String? {
+        // The daemon's notices are read whole elsewhere.
+        guard !BounceParsing.isBounceSender(answer.from),
+              BounceParsing.isDeadAddressNotice(subject: answer.subject, text: answer.snippet),
+              let contactID = BounceParsing.matchDeadAddressNotice(sender: answer.from, text: answer.snippet,
+                                                                   threadID: answer.threadID, at: answer.at,
+                                                                   mailed: mailed),
+              let address = emailByContact[contactID]?.lowercased() else { return nil }
+        return record(Bounce(contactID: contactID, address: address, at: answer.at, snippet: answer.snippet,
+                             status: nil, diagnostic: nil)) ? contactID : nil
+    }
+
+    /// Replies recorded before "no longer in service" answers were told apart:
+    /// each is taken back in the send history and kept as a bounce instead.
+    /// The ids of the sends corrected — ones whose write failed are left as
+    /// they are, to try again next sync.
+    private func correctMisreadReplies(in sends: [MailSend], emailByContact: [String: String]) async -> Set<String> {
+        var corrected: Set<String> = []
+        for send in sends where send.hasReplied {
+            guard BounceParsing.isDeadAddressNotice(subject: nil, text: send.replySnippet),
+                  let at = send.repliedAt,
+                  let address = emailByContact[send.contactID]?.lowercased() else { continue }
+            do {
+                try await SupabaseAPI.clearReply(sendID: send.id)
+            } catch {
+                continue
+            }
+            corrected.insert(send.id)
+            dismissedBounces[send.contactID] = nil
+            _ = record(Bounce(contactID: send.contactID, address: address, at: at, snippet: send.replySnippet,
+                              status: nil, diagnostic: nil))
+        }
+        if !corrected.isEmpty { saveBounces() }
+        return corrected
+    }
+
+    /// The parts of a message these checks read: who it's from, its subject,
+    /// its opening lines, its thread and when it came.
+    nonisolated struct HeaderMessage {
+        let id: String
+        let threadID: String?
+        let from: String?
+        let subject: String?
+        let snippet: String?
+        let at: Date
+    }
+
+    /// Read messages' headers and opening lines, a few at a time. One that
+    /// couldn't be read is left out, to be tried next time.
+    private func readHeaders(ids: [String]) async throws -> [HeaderMessage] {
+        guard let reader else { throw GmailAuthError.notConnected }
+        var result: [HeaderMessage] = []
+        for chunk in stride(from: 0, to: ids.count, by: Self.concurrency).map({
+            Array(ids[$0..<min($0 + Self.concurrency, ids.count)])
+        }) {
+            try Task.checkCancellation()
+            let read = try await withThrowingTaskGroup(of: HeaderMessage?.self) { group in
+                for id in chunk {
+                    group.addTask {
+                        do {
+                            return try await Self.readHeaderMessage(id: id, reader: reader)
+                        } catch let error as GmailAuthError where error.endsRun {
+                            throw error
+                        } catch {
+                            return nil
+                        }
+                    }
+                }
+                var messages: [HeaderMessage] = []
+                for try await message in group { if let message { messages.append(message) } }
+                return messages
+            }
+            result += read
+            progress.done += chunk.count
+        }
+        return result
+    }
+
+    nonisolated private static func readHeaderMessage(id: String,
+                                                      reader: (String, [URLQueryItem]) async throws -> Data) async throws -> HeaderMessage {
+        struct Raw: Decodable {
+            let id: String
+            let threadId: String?
+            let snippet: String?
+            let internalDate: String?
+            let payload: GmailThread.Message.Payload?
+        }
+        let message = try JSONDecoder().decode(Raw.self, from: try await reader("messages/\(id)", [
+            URLQueryItem(name: "format", value: "metadata"),
+            URLQueryItem(name: "metadataHeaders", value: "From"),
+            URLQueryItem(name: "metadataHeaders", value: "Subject"),
+            URLQueryItem(name: "fields", value: "id,threadId,snippet,internalDate,payload/headers")
+        ]))
+        func header(_ name: String) -> String? {
+            message.payload?.headers?.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value
+        }
+        let at = message.internalDate.flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast
+        return HeaderMessage(id: message.id, threadID: message.threadId, from: header("From"),
+                             subject: header("Subject"), snippet: message.snippet?.htmlUnescaped, at: at)
+    }
+
     /// Read notices whole, a few at a time. A notice that couldn't be read is
     /// left out of the answer, to be tried again on the next sync.
     ///
@@ -681,7 +963,9 @@ final class ReplySync {
     /// The ids of recent failure notices, newest first — Spam and Trash
     /// included, where a notice filtered or deleted by hand would otherwise
     /// never be seen.
-    nonisolated private static func listBounceNotices(reader: (String, [URLQueryItem]) async throws -> Data) async throws -> [String] {
+    nonisolated private static func listBounceNotices(base: String = BounceParsing.noticeQuery,
+                                                      matching terms: String? = nil, limit: Int = bounceListLimit,
+                                                      reader: (String, [URLQueryItem]) async throws -> Data) async throws -> [String] {
         struct Listing: Decodable {
             struct Item: Decodable { let id: String }
             let messages: [Item]?
@@ -690,15 +974,16 @@ final class ReplySync {
         var ids: [String] = []
         var pageToken: String?
         repeat {
-            var query = [URLQueryItem(name: "q", value: BounceParsing.noticeQuery),
+            let search = [base, terms].compactMap { $0 }.joined(separator: " ")
+            var query = [URLQueryItem(name: "q", value: search),
                          URLQueryItem(name: "includeSpamTrash", value: "true"),
                          URLQueryItem(name: "maxResults", value: "100")]
             if let pageToken { query.append(URLQueryItem(name: "pageToken", value: pageToken)) }
             let listing = try JSONDecoder().decode(Listing.self, from: try await reader("messages", query))
             ids += listing.messages?.map(\.id) ?? []
             pageToken = listing.nextPageToken
-        } while pageToken != nil && ids.count < bounceListLimit
-        return ids
+        } while pageToken != nil && ids.count < limit
+        return Array(ids.prefix(limit))
     }
 
     /// One notice, whole: `format=raw` is the only form that keeps the report
@@ -794,6 +1079,12 @@ final class ReplySync {
                 if !message.isDelay { bounce = message }
                 continue
             }
+            // "This address is no longer in service", from their side: reads
+            // like a reply, but it's a bounce.
+            if message.isDeadAddressNotice {
+                if bounce == nil { bounce = message }
+                continue
+            }
             if message.isAutomated { continue }
             guard let from = message.from, !from.isEmpty else { continue }
             return .reply(at: message.date,
@@ -858,6 +1149,9 @@ nonisolated private struct GmailThread: Decodable {
         /// failure rather than a delay, a strong hint the address is dead.
         var isBounce: Bool { BounceParsing.isBounceSender(from) }
         var isDelay: Bool { BounceParsing.isDelay(subject: header("Subject"), snippet: snippet) }
+        var isDeadAddressNotice: Bool {
+            BounceParsing.isDeadAddressNotice(subject: header("Subject"), text: snippet?.htmlUnescaped)
+        }
 
         func header(_ name: String) -> String? {
             payload?.headers?.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value

@@ -18,9 +18,19 @@ struct JSONFile<Value: Codable> {
             // failures are worth surfacing.
             if (error as? CocoaError)?.code != .fileReadNoSuchFile {
                 print("JSONFile: failed to load \(name): \(error)")
+                setAside()
             }
             return nil
         }
+    }
+
+    /// Move a file that exists but can't be read out of the way, rather than
+    /// let the next save write over it. Its owner starts empty either way; this
+    /// is the difference between a queue of mail lost and one kept to recover.
+    private func setAside() {
+        let stamp = Date.now.formatted(.iso8601).replacingOccurrences(of: ":", with: "-")
+        let aside = URL.documentsDirectory.appending(path: "\(name).unreadable-\(stamp)")
+        try? FileManager.default.moveItem(at: url, to: aside)
     }
 
     func save(_ value: Value) {

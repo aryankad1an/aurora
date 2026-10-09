@@ -81,6 +81,14 @@
       "create": "Titan Email",
       "id": "ef95108f-4506-443c-8af9-0474af3fd97b",
       "why": "titan.email is Titan, an email-hosting company; its own staff mail from it (customers use their own domains)"
+    },
+    "cholamsrisk.murugappa.com": {
+      "create": "Chola MS Risk Services",
+      "why": "Chola MS Risk Services' own mail host on the Murugappa Group domain (CDC sheet import, 2026-10-08)"
+    },
+    "c3ihub.iitk.ac.in": {
+      "create": "C3iHub (IIT Kanpur)",
+      "why": "IIT Kanpur's cybersecurity innovation hub, a separate employer from the institute (CDC sheet import, 2026-10-08)"
     }
   },
   "merges": [

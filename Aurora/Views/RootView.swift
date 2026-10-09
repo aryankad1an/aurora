@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The app's root: a bottom tab bar (Home, Companies, Activity, Templates,
-/// Profile). Owns the shared stores and injects them into the environment.
+/// Settings). Owns the shared stores and injects them into the environment.
 struct RootView: View {
     /// Applied once, before the first bar is drawn. The Taptic Engine is primed
     /// at the same time so the first knock of a session isn't the late one.
@@ -47,7 +47,7 @@ struct RootView: View {
     /// request per outstanding thread.
     private static let resyncAfter: TimeInterval = 15 * 60
 
-    private enum Tab: Hashable { case home, companies, activity, templates, profile }
+    private enum Tab: Hashable { case home, companies, activity, templates, settings }
 
     var body: some View {
         Group {
@@ -64,9 +64,11 @@ struct RootView: View {
         // The window's own background is black; paper behind everything means no
         // transition, scale or blur anywhere can ever reveal it.
         .background(Color.paper.ignoresSafeArea())
-        // One appearance: the palette is black, so every piece of system chrome
-        // (sheets, alerts, keyboards, glass) is told to match it.
+        // One appearance: every theme's palette is dark, so every piece of
+        // system chrome (sheets, alerts, keyboards, glass) is told to match it.
         .preferredColorScheme(.dark)
+        // System controls take the theme's accent, and change with it.
+        .tint(Color.clay)
         .environment(jobStore)
         .environment(profileStore)
         .environment(templateStore)
@@ -94,6 +96,8 @@ struct RootView: View {
                 }
             }
         }
+        // A theme change spreads across the screen from the tapped card.
+        .overlay { ThemeWashOverlay() }
         .animation(Theme.Motion.liquid, value: jobStore.isSaving)
         .animation(Theme.Motion.liquid, value: templateStore.isSaving)
         // A failed write is the one thing on this screen the user has to act on,
@@ -240,8 +244,8 @@ struct RootView: View {
                                                        body: body, fromName: fromName)
                 return message.map { MailQueue.Delivery(messageID: $0.id, threadID: $0.threadID) }
             } catch let error as GmailAuthError where error.needsReconnect {
-                // The shelf says "Reconnect Gmail in Profile"; make sure Profile
-                // is offering it.
+                // The shelf says "Reconnect Gmail in Settings"; make sure
+                // Settings is offering it.
                 replySync.noteReconnectNeeded()
                 throw error
             }
@@ -279,14 +283,19 @@ struct RootView: View {
                 // has been seen once the queue is open.
                 SendQueueBar {
                     mailQueue.acknowledge()
-                    mailQueue.isShowingQueue = true
+                    mailQueue.isOpenRequested = true
                 }
             }
-            .sheet(isPresented: $mailQueue.isShowingQueue) {
-                MailQueueView()
+            .dueBatchSummary()
+            // The queue lives in Activity: the shelf, the Live Activity and a
+            // notification all open it there.
+            .onChange(of: mailQueue.isOpenRequested) { _, requested in
+                if requested { selectedTab = .activity }
             }
-            // While the queue is up, it shows the summary itself.
-            .dueBatchSummary(isEnabled: !mailQueue.isShowingQueue)
+            .onOpenURL { url in
+                guard url.scheme == "aurora", url.host() == "activity" else { return }
+                mailQueue.isOpenRequested = true
+            }
             .onChange(of: notifications.openedBatchID) { openTappedBatch() }
             // The shelf appearing pushes the tab bar up — a real object arriving on
             // screen, and the one event here the user didn't just tap for.
@@ -315,9 +324,9 @@ struct RootView: View {
                 .tabItem { Label("Templates", systemImage: "doc.plaintext") }
                 .tag(Tab.templates)
 
-            ProfileView()
-                .tabItem { Label("Profile", systemImage: "person") }
-                .tag(Tab.profile)
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(Tab.settings)
         }
         .sensoryFeedback(.selection, trigger: selectedTab)
     }

@@ -101,13 +101,73 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
         request.httpBody = try JSONSerialization.data(withJSONObject: ["raw": raw])
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            // Deliberately not routed through `error(status:…)`: a 403 here is a
-            // quota or policy refusal, not the missing read scope, and offering
-            // "reconnect to read your mail" would send the user somewhere useless.
-            throw GmailAuthError.server(String(data: data, encoding: .utf8) ?? "Send failed.")
+        let http = response as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
+        guard status == 200 else {
+            throw Self.sendError(status: status, data: data,
+                                 retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
         }
         return try? JSONDecoder().decode(SentMessage.self, from: data)
+    }
+
+    /// Gmail's refusal of a send, sorted by who it's about.
+    ///
+    /// Only a 400 is about *this* mail (an address Gmail won't take, a header
+    /// it can't parse); the queue marks that one failed and carries on.
+    /// Everything else is about the account — a sending limit reached, the API
+    /// switched off, a session gone, Gmail itself down — and every mail after it
+    /// would be refused the same way. Those end the run, so the rest wait
+    /// instead of being marked failed one after another.
+    ///
+    /// A rate limit is neither: Gmail is asking for the sends to slow down, so
+    /// it comes back as `rateLimited`, with when to try again if Gmail said, and
+    /// the queue waits rather than giving up (`MailQueue.drain`). So does Gmail
+    /// being briefly unavailable (5xx), which clears the same way.
+    ///
+    /// Whatever the case, the reason is Google's own sentence, pulled out of the
+    /// JSON it arrives in. Kept raw, a failure used to read as just "{".
+    static func sendError(status: Int, data: Data, retryAfter: String? = nil) -> GmailAuthError {
+        let google = GoogleError(data: data)
+        let message = google?.message ?? "HTTP \(status)"
+        if status == 429 || google?.isRateLimit == true {
+            return .rateLimited(message, retryAt: retryDate(header: retryAfter, message: message))
+        }
+        switch status {
+        case 400:
+            return .server(message)
+        case 401:
+            return .sessionExpired
+        case 403 where google?.isScopeProblem == true:
+            return .insufficientScope
+        case 403:
+            return .refused("Gmail stopped sending from your account: \(message)")
+        case 500...599:
+            return .rateLimited("Gmail is briefly unavailable (\(message)).",
+                                retryAt: retryDate(header: retryAfter, message: message))
+        default:
+            return .refused("Gmail couldn't take the mail (\(message)). Resume to try again.")
+        }
+    }
+
+    /// When Gmail said to try again: the `Retry-After` header (seconds, or an
+    /// HTTP date), else the "Retry after <time>" its rate-limit message ends
+    /// with. Nil when it said neither.
+    nonisolated static func retryDate(header: String?, message: String, now: Date = .now) -> Date? {
+        if let header = header?.trimmingCharacters(in: .whitespaces), !header.isEmpty {
+            if let seconds = Double(header) { return now.addingTimeInterval(seconds) }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(identifier: "GMT")
+            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+            if let date = formatter.date(from: header) { return date }
+        }
+        guard let match = message.firstMatch(of: /(?i)retry after\s+(\S+)/) else { return nil }
+        let text = String(match.1).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: text) { return date }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: text)
     }
 
     /// Run an authorized GET against the Gmail API and hand back the raw body.
@@ -155,13 +215,11 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
     /// Google says so with a 403 that reads like a bug — it isn't, it just needs
     /// reconnecting, which is the one thing the message should say.
     private static func error(status: Int, data: Data, fallback: String) -> GmailAuthError {
-        let body = String(data: data, encoding: .utf8) ?? fallback
-        if status == 401 || status == 403,
-           body.contains("insufficient") || body.contains("Insufficient")
-               || body.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") {
+        let google = GoogleError(data: data)
+        if status == 401 || status == 403, google?.isScopeProblem == true {
             return .insufficientScope
         }
-        return .server(body)
+        return .server(google?.message ?? fallback)
     }
 
     /// Trade the stored refresh token for a short-lived access token, reusing
@@ -320,6 +378,50 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
     }
 }
 
+/// The JSON Google wraps every API error in:
+/// `{"error": {"code": 429, "message": "…", "status": "…", "errors": [{"reason": "…"}]}}`.
+/// The token endpoint uses a flatter `{"error": "…", "error_description": "…"}`.
+nonisolated struct GoogleError {
+    let message: String
+    let reasons: [String]
+
+    init?(data: Data) {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty else { return nil }
+            message = String(text.prefix(200))
+            reasons = []
+            return
+        }
+        if let error = object["error"] as? [String: Any] {
+            let details = error["errors"] as? [[String: Any]] ?? []
+            message = (error["message"] as? String) ?? (details.first?["message"] as? String) ?? "Unknown error."
+            reasons = details.compactMap { $0["reason"] as? String } + [error["status"] as? String].compactMap { $0 }
+        } else if let code = object["error"] as? String {
+            message = (object["error_description"] as? String) ?? code
+            reasons = [code]
+        } else {
+            return nil
+        }
+    }
+
+    /// Gmail asking for fewer requests: a per-user or per-second rate, or the
+    /// account's daily sending allowance.
+    var isRateLimit: Bool {
+        let limits: Set = ["rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded",
+                           "quotaExceeded", "RESOURCE_EXHAUSTED"]
+        return reasons.contains(where: limits.contains)
+            || message.localizedCaseInsensitiveContains("limit exceeded")
+            || message.localizedCaseInsensitiveContains("rate limit")
+    }
+
+    /// The token lacks a scope the request needs — fixed only by signing in again.
+    var isScopeProblem: Bool {
+        reasons.contains { $0 == "insufficientPermissions" || $0 == "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }
+            || message.localizedCaseInsensitiveContains("insufficient")
+    }
+}
+
 enum GmailAuthError: LocalizedError {
     case cancelled
     case invalidResponse
@@ -329,17 +431,27 @@ enum GmailAuthError: LocalizedError {
     /// revoked, or it expired — an app whose OAuth consent screen is in Testing
     /// gets tokens that last seven days. Only signing in again fixes it.
     case sessionExpired
+    /// Gmail refused the account rather than a mail: a sending limit, the API
+    /// disabled, the account blocked from sending, or Gmail down. Every later
+    /// send would be refused too.
+    case refused(String)
+    /// Gmail asked for the sends to slow down (or was briefly unavailable).
+    /// Nothing is wrong with the mail or the account: waiting fixes it.
+    /// `retryAt` is when Gmail said to try again, when it said.
+    case rateLimited(String, retryAt: Date?)
     case server(String)
 
     var errorDescription: String? {
         switch self {
         case .cancelled: return "Sign-in was cancelled."
         case .invalidResponse: return "Unexpected response from Google."
-        case .notConnected: return "Gmail isn't signed in on this device. Reconnect Gmail in Profile."
+        case .notConnected: return "Gmail isn't signed in on this device. Reconnect Gmail in Settings."
         case .insufficientScope:
-            return "Reply tracking needs permission to read your mail. Reconnect Gmail in Profile to grant it."
+            return "Reply tracking needs permission to read your mail. Reconnect Gmail in Settings to grant it."
         case .sessionExpired:
-            return "Your Gmail sign-in has expired. Reconnect Gmail in Profile."
+            return "Your Gmail sign-in has expired. Reconnect Gmail in Settings."
+        case .refused(let message): return message
+        case .rateLimited(let message, _): return "Gmail asked to slow down: \(message)"
         case .server(let message): return message
         }
     }
@@ -359,7 +471,7 @@ enum GmailAuthError: LocalizedError {
     /// (a send batch, a reply sync) should stop rather than fail one by one.
     var endsRun: Bool {
         switch self {
-        case .notConnected, .insufficientScope, .sessionExpired: true
+        case .notConnected, .insufficientScope, .sessionExpired, .refused, .rateLimited: true
         default: false
         }
     }
@@ -447,7 +559,7 @@ private actor TokenVault {
             // A dead refresh token is the common case here, and Google's raw
             // JSON for it means nothing to a person; it needs a reconnect.
             if body.contains("invalid_grant") { throw GmailAuthError.sessionExpired }
-            throw GmailAuthError.server(body.isEmpty ? "Couldn't refresh Google session." : body)
+            throw GmailAuthError.server(GoogleError(data: data)?.message ?? "Couldn't refresh Google session.")
         }
         return try JSONDecoder().decode(Refreshed.self, from: data)
     }

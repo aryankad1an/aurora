@@ -270,7 +270,7 @@ struct TemplateEditorView: View {
                                 .font(.caption.weight(.medium))
                                 .padding(.horizontal, 10)
                                 .frame(height: 30)
-                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                .background(Color.clay.opacity(0.14), in: Capsule())
                                 .foregroundStyle(.tint)
                         }
                         .buttonStyle(BouncyPress(scale: 0.9))
@@ -363,7 +363,7 @@ struct TemplateEditorView: View {
 
             Text(gmail.isConnected
                  ? "Goes to your own inbox — the only way to see how it really lands."
-                 : "Connect Gmail in Profile to send a test.")
+                 : "Connect Gmail in Settings to send a test.")
                 .font(.caption2)
                 .foregroundStyle(.inkMuted)
                 .multilineTextAlignment(.center)
@@ -420,12 +420,12 @@ struct TemplateEditorView: View {
     private var legend: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) {
-                legendItem(color: .accentColor, text: "Filled in")
+                legendItem(color: .clay, text: "Filled in")
                 legendItem(color: .danger, text: "Blank or not a placeholder")
                 Spacer(minLength: 0)
             }
             VStack(alignment: .leading, spacing: 5) {
-                legendItem(color: .accentColor, text: "Filled in")
+                legendItem(color: .clay, text: "Filled in")
                 legendItem(color: .danger, text: "Blank or not a placeholder")
             }
         }
@@ -472,7 +472,7 @@ struct TemplateEditorView: View {
                     out += marker("⟨\(placeholder.blankLabel) missing⟩")
                 } else {
                     var filled = AttributedString(value)
-                    filled.backgroundColor = .accentColor.opacity(0.18)
+                    filled.backgroundColor = Color.clay.opacity(0.18)
                     out += filled
                 }
             } else {

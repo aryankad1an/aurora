@@ -1,21 +1,28 @@
 import SwiftUI
 
-/// The Activity tab: every mail you've sent, hung off a time axis and grouped by
-/// day, newest first.
+/// The Activity tab: every mail, from the moment it's queued to the answer.
 ///
-/// Lanes (All · Replied · Waiting) and search narrow the feed; the strip above
-/// says when Gmail was last read for replies and asks it again on demand. The
-/// Bounced lane is different in kind: not sent mail but mail that came back,
-/// each with a button to mark the address invalid.
+/// Four lanes, in the order a mail moves through them:
+///
+/// - **Queued** — the mail queue: sending, paused, ready, scheduled and just
+///   finished, with every control the queue has (the shelf and the Live
+///   Activity open this lane);
+/// - **Sent** — every mail sent, hung off a time axis and grouped by day;
+/// - **Replied** — the ones answered, in the order the answers came;
+/// - **Bounced** — mail that came back, to fix or rule out.
+///
+/// Search narrows every lane; the strip above says when Gmail was last read
+/// for replies and asks it again on demand. Any sent mail can be checked for a
+/// bounce on its own, from its menu or its page.
 struct ActivityView: View {
     @Environment(JobStore.self) private var jobStore
     /// Activity is where a user goes *looking* for an answer, so it owns a way to
     /// ask Gmail for one rather than waiting on the launch/foreground sync.
     @Environment(ReplySync.self) private var replySync
 
-    enum Lane: Hashable { case all, replied, waiting, bounced }
+    enum Lane: Hashable { case queued, sent, replied, bounced }
 
-    @State private var lane: Lane = .all
+    @State private var lane: Lane = .sent
     @State private var searchText = ""
     @State private var summaryItem: ActivityEntry?
     /// A Mark Invalid from the Bounced lane, held until it's confirmed.
@@ -23,6 +30,13 @@ struct ActivityView: View {
     /// A bounced contact opened from the lane, to fix or rule out.
     @State private var openBounce: BouncedContact?
     @Environment(MailQueue.self) private var mailQueue
+    /// A batch opened from a queue lane.
+    @State private var openBatch: UUID?
+    /// A batch with mail still to go, waiting on a confirm to be removed.
+    @State private var removingBatch: MailBatch?
+    @State private var clearingQueue = false
+    /// What a Check for Bounce found, to say in an alert.
+    @State private var bounceCheck: BounceCheckResult?
     /// How many entries are built. The feed is attached 50 at a time: the next
     /// page when the end of the current one scrolls into view.
     @State private var limit = 50
@@ -30,7 +44,7 @@ struct ActivityView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if jobStore.activity.isEmpty {
+                if jobStore.activity.isEmpty && mailQueue.batches.isEmpty {
                     emptyState
                 } else {
                     content
@@ -48,13 +62,12 @@ struct ActivityView: View {
                     Task { await checkForReplies() }
                 }
             ) {
-                // What hasn't gone yet lives beside what has.
-                Button("Mail Queue", systemImage: "tray.and.arrow.up") { mailQueue.isShowingQueue = true }
+                QueueClearItems { clearingQueue = true }
                 Divider()
                 Picker(selection: $lane.animation(Theme.Motion.bouncy)) {
-                    Label("All", systemImage: "tray.full").tag(Lane.all)
+                    Label("Queued", systemImage: "tray").tag(Lane.queued)
+                    Label("Sent", systemImage: "tray.full").tag(Lane.sent)
                     Label("Replied", systemImage: "arrowshape.turn.up.left").tag(Lane.replied)
-                    Label("Waiting", systemImage: "clock").tag(Lane.waiting)
                     Label("Bounced", systemImage: "exclamationmark.triangle").tag(Lane.bounced)
                 } label: {
                     Label("Show", systemImage: "line.3.horizontal.decrease")
@@ -62,7 +75,27 @@ struct ActivityView: View {
                 .pickerStyle(.inline)
             }
             .sheet(item: $summaryItem) { item in
-                MailSummaryView(contact: item.contact, company: item.company)
+                MailSummaryView(contact: item.contact, company: item.company, sendID: item.id)
+            }
+            .navigationDestination(item: $openBatch) { id in
+                BatchDetailView(batchID: id)
+            }
+            .queueAlerts(removing: $removingBatch, clearingAll: $clearingQueue)
+            .alert(bounceCheck?.title ?? "", isPresented: Binding(get: { bounceCheck != nil },
+                                                                 set: { if !$0 { bounceCheck = nil } })) {
+                if bounceCheck?.bounced == true {
+                    Button("Show Bounced") { withAnimation(Theme.Motion.bouncy) { lane = .bounced } }
+                }
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(bounceCheck?.message ?? "")
+            }
+            // The shelf, the Live Activity and notifications open the queue here.
+            .task(id: mailQueue.isOpenRequested) {
+                guard mailQueue.isOpenRequested else { return }
+                openBatch = nil
+                withAnimation(Theme.Motion.bouncy) { lane = .queued }
+                mailQueue.isOpenRequested = false
             }
             .validityAlert($pendingValidity) { change in
                 Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }
@@ -95,15 +128,22 @@ struct ActivityView: View {
                 .padding(.horizontal, 4)
                 .cardRow(top: 6, bottom: 6)
 
+            // The system's segmented control: a Liquid Glass thumb that
+            // slides between the lanes.
             SegmentedSelector(segments: [
-                (.all, "All"),
+                (.queued, queuedCount > 0 ? "Queued \(queuedCount)" : "Queued"),
+                (.sent, "Sent"),
                 (.replied, "Replied"),
-                (.waiting, "Waiting"),
                 (.bounced, bouncedCount > 0 ? "Bounced \(bouncedCount)" : "Bounced")
             ], selection: $lane)
                 .cardRow(top: 4, bottom: 10)
 
-            if lane == .bounced {
+            switch lane {
+            case .queued:
+                QueueLaneSections(query: query,
+                                  onOpen: { openBatch = $0 },
+                                  onRemove: { batch in mailQueue.remove(batch) { removingBatch = $0 } })
+            case .bounced:
                 BouncedLane(bounced: bounced.filter { query.isEmpty || $0.contact.matches(query) || $0.company.localizedCaseInsensitiveContains(query) },
                             total: bounced.count,
                             onOpen: { openBounce = $0 },
@@ -112,10 +152,11 @@ struct ActivityView: View {
                                 Haptics.tap(0.5)
                                 withAnimation(Theme.Motion.snappy) { replySync.dismissBounce(item.contact.id) }
                             })
-            } else {
+            case .sent, .replied:
                 ActivityFeed(entries: entries, limit: limit,
                              isReplyOrdered: lane == .replied,
                              onOpen: { summaryItem = $0 },
+                             onCheckBounce: { entry in Task { await checkBounce(entry) } },
                              onReachEnd: { limit += 50 })
             }
         }
@@ -134,11 +175,7 @@ struct ActivityView: View {
     /// runs on when they arrived.
     private static func feed(_ entries: [ActivityEntry], lane: Lane, query: String) -> [ActivityEntry] {
         let matching = entries.filter { entry in
-            switch lane {
-            case .all, .bounced: break
-            case .replied: guard entry.contact.hasReplied else { return false }
-            case .waiting: guard !entry.contact.hasReplied else { return false }
-            }
+            if lane == .replied, !entry.contact.hasReplied { return false }
             guard !query.isEmpty else { return true }
             return entry.company.localizedCaseInsensitiveContains(query)
                 || entry.contact.matches(query)
@@ -152,6 +189,17 @@ struct ActivityView: View {
 
     private var bounced: [BouncedContact] { jobStore.bouncedContacts(from: replySync) }
     private var bouncedCount: Int { bounced.count }
+
+    /// Batches in the queue with mail still to go, for the lane's count.
+    private var queuedCount: Int { mailQueue.batches.count(where: \.hasWork) }
+
+    /// Look for one mail's bounce now, and say what was found.
+    private func checkBounce(_ entry: ActivityEntry) async {
+        Haptics.tap(0.5)
+        let result = await jobStore.checkBounce(sendID: entry.id, using: replySync)
+        bounceCheck = BounceCheckResult(result, name: entry.contact.displayName)
+        if case .bounced = result { Haptics.thud() }
+    }
 
     /// Ask Gmail what came back, then reload.
     private func checkForReplies() async {
@@ -189,7 +237,7 @@ private struct BouncedLane: View {
                 .cardRow()
         } else {
             BounceSummaryCard(count: bounced.isEmpty ? total : bounced.count,
-                              message: "Gmail couldn't deliver to these. Open one to see why and fix a typo'd address; marking one invalid stops it being mailed again, by anyone.") {
+                              message: "Gmail couldn't deliver these. Fix a typo, or mark them invalid so no one mails them again.") {
                 onMark(bounced)
             }
             .cardRow(top: 0, bottom: 8)
@@ -233,6 +281,7 @@ private struct ActivityFeed: View {
     let limit: Int
     let isReplyOrdered: Bool
     let onOpen: (ActivityEntry) -> Void
+    let onCheckBounce: (ActivityEntry) -> Void
     let onReachEnd: () -> Void
 
     var body: some View {
@@ -247,6 +296,10 @@ private struct ActivityFeed: View {
                 ForEach(group.entries) { entry in
                     FeedRow(entry: entry, isReplyOrdered: isReplyOrdered) { onOpen(entry) }
                         .cardRow(top: 0, bottom: 0)
+                        .contextMenu {
+                            Button("Open Mail", systemImage: "envelope.open") { onOpen(entry) }
+                            Button("Check for Bounce", systemImage: "arrow.uturn.backward.circle") { onCheckBounce(entry) }
+                        }
                 }
             }
             if entries.count > limit {
@@ -412,4 +465,29 @@ private struct FeedRow: View {
     ActivityView()
         .environment(JobStore())
         .environment(ReplySync())
+}
+
+/// What a Check for Bounce found, said as an alert.
+struct BounceCheckResult {
+    let title: String
+    let message: String
+    var bounced = false
+
+    init(_ check: ReplySync.BounceCheck, name: String) {
+        switch check {
+        case .bounced(let reason):
+            title = "It bounced"
+            message = "The mail to \(name) came back: \(reason). It's in the Bounced lane, to fix the address or mark it invalid."
+            bounced = true
+        case .replied:
+            title = "Delivered"
+            message = "\(name) answered it, so it reached them. Check for Replies records the answer."
+        case .clear:
+            title = "No bounce found"
+            message = "Nothing in your mailbox says the mail to \(name) failed. Most bounces arrive within minutes; some servers take a day."
+        case .failed(let reason):
+            title = "Couldn't check"
+            message = reason
+        }
+    }
 }
