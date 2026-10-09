@@ -405,6 +405,32 @@ enum SupabaseAPI {
                         body: ["is_valid": isValid])
     }
 
+    /// Contacts by id, wherever they're filed, a hundred to a request.
+    static func fetchContacts(ids: [String]) async throws -> [Contact] {
+        var contacts: [Contact] = []
+        for start in stride(from: 0, to: ids.count, by: 100) {
+            let chunk = ids[start..<min(start + 100, ids.count)]
+            let request = makeRequest(path: "recruiters", query: [
+                URLQueryItem(name: "select", value: "*"),
+                URLQueryItem(name: "id", value: "in.(\(chunk.joined(separator: ",")))")
+            ])
+            contacts += try decoder.decode([Contact].self, from: try await send(request))
+        }
+        return contacts
+    }
+
+    /// Give a contact a name found for them, but only if their name is still
+    /// `replacing` (empty, or the mailbox copied over): a name someone typed in
+    /// the meantime is never overwritten.
+    static func fillContactName(id: String, name: String, replacing current: String) async throws {
+        try await write(method: "PATCH", path: "recruiters", query: [
+            URLQueryItem(name: "id", value: "eq.\(id)"),
+            current.isEmpty
+                ? URLQueryItem(name: "or", value: "(name.is.null,name.eq.)")
+                : URLQueryItem(name: "name", value: "eq.\(current)")
+        ], body: ["name": name])
+    }
+
     /// Delete several contacts in one request.
     static func deleteContacts(ids: [String]) async throws {
         guard !ids.isEmpty else { return }

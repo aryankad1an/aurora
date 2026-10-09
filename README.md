@@ -309,6 +309,21 @@ After a recent sync, the next one only reads threads that received new mail
 since then (with a 15-minute overlap). Pulling to refresh in Activity always
 does a full check.
 
+The same check names the people you've mailed who have no name on file (an
+empty name field, or the mailbox copied over). Its last step looks each such
+address up in your mail (`MailboxNames`), and the name they signed a reply
+with, or a header like `Aryan Kadian <kdaryan@acme.com>`, is saved to their
+contact as "Aryan Kadian". The name is tidied first: surname-first entries
+are turned round, and notes, honorifics and a trailing "| Acme" are dropped.
+Display names that name a role or repeat the mailbox don't count. The write
+only lands if the name field is still what it was, so a name typed in the
+meantime is never overwritten. An address with nothing found is tried again
+after a month.
+
+While a check runs, Activity shows the whole of it, wrapped rather than cut
+off: the step ("Step 2 of 6 · Checking for replies"), how far that step has
+got ("12 of 80 mails (15%)"), and a bar for the run as a whole.
+
 ### Bounces
 
 A bounce is found two ways during the same sync:

@@ -95,6 +95,35 @@ enum RecipientName {
         signedName(in: entry, for: email) != nil
     }
 
+    /// The full name in a header entry that names the person at `email`
+    /// ("Aryan Kadian <kdaryan@acme.com>" gives "Aryan Kadian"), tidied for a
+    /// contact's name field: a surname-first entry turned round, notes in
+    /// brackets, honorifics and anything after a separator ("| Acme") dropped,
+    /// and machine casing fixed. Nil when the entry doesn't name a person, by
+    /// the same rules as a greeting (see `isPersonEntry`).
+    static func fullName(in entry: String, for email: String) -> String? {
+        guard signedName(in: entry, for: email) != nil, let open = entry.lastIndex(of: "<") else { return nil }
+        var text = entry[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'")).sanitizedLineSeparators
+        text = text.replacingOccurrences(of: "\\([^)]*\\)|\\[[^]]*\\]", with: " ", options: .regularExpression)
+        if let separator = text.range(of: "\\s[-–—]\\s|\\|", options: .regularExpression) {
+            text = String(text[..<separator.lowerBound])
+        }
+        let commaParts = text.split(separator: ",", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        if commaParts.count == 2, !commaParts[1].isEmpty, commaParts[0].split(separator: " ").count == 1 {
+            text = commaParts[1] + " " + commaParts[0]
+        } else {
+            text = commaParts.first ?? ""
+        }
+        let words = text.split(whereSeparator: \.isWhitespace)
+            .map { letters(in: String($0)) }
+            .filter { !$0.isEmpty && !honorifics.contains($0.lowercased()) }
+        guard !words.isEmpty else { return nil }
+        // Initials keep their capitals ("NS Acharya"); other words are recased
+        // only if machine-cased ("ARYAN KADIAN").
+        let name = words.map { $0.count <= 2 && $0 == $0.uppercased() ? $0 : recased($0) }.joined(separator: " ")
+        return isMailboxCopy(name, of: email) ? nil : name
+    }
+
     // MARK: - From their own reply
 
     /// The given name in a `From:` header ("Anjali Kumari <anjali@acme.com>"),

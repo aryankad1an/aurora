@@ -202,20 +202,69 @@ final class JobStore {
     /// The reload is conditional because a sync that turns up nothing new has
     /// nothing to show, and refetching the whole catalog would flash every screen
     /// for no reason.
+    ///
+    /// The same check names the people mailed who have no name on file: the
+    /// name they signed a reply with, or what the account's own mail calls
+    /// them ("Aryan Kadian <kdaryan@acme.com>"), is saved to their contact.
     func syncReplies(using sync: ReplySync, forceFullCheck: Bool = false) async {
         let invalidIDs = Set(knownCompanies.flatMap(\.invalidContacts).map(\.id))
+        let unnamed = await mailedContactsWithoutNames()
         let outcome = await sync.run(sends: sends,
                                      emailByContact: emailByContact,
                                      excludingContactIDs: invalidIDs,
-                                     forceFullCheck: forceFullCheck)
-        guard outcome.changedAnything else { return }
+                                     forceFullCheck: forceFullCheck,
+                                     lookingUpNames: unnamed.map(\.email))
         // Deliberately `reloadSendsOnly()`: re-fetching the entire companies catalog
         // is unnecessary when only per-user sent/reply records have changed.
-        do {
-            try await reloadSendsOnly()
-        } catch {
-            report(error)
+        if outcome.changedAnything {
+            do {
+                try await reloadSendsOnly()
+            } catch {
+                report(error)
+            }
         }
+        // Run after the reload, so a reply found just now can name them too.
+        if await nameFromMail(unnamed) > 0 {
+            do {
+                try await reloadAll()
+            } catch {
+                report(error)
+            }
+        }
+    }
+
+    /// The contacts this account has mailed whose name field gives no name:
+    /// empty, or the mailbox copied over. Fetched by id, since a mailed
+    /// contact's company may not be loaded.
+    private func mailedContactsWithoutNames() async -> [Contact] {
+        let ids = Array(Set(sends.map(\.contactID))).sorted()
+        guard !ids.isEmpty, let contacts = try? await SupabaseAPI.fetchContacts(ids: ids) else { return [] }
+        return contacts.filter { contact in
+            let name = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return contact.isMailable && (name.isEmpty || RecipientName.isMailboxCopy(name, of: contact.email))
+        }
+    }
+
+    /// Save a name to each of `contacts` that their own reply or this account's
+    /// mail gives them. Returns how many were named.
+    private func nameFromMail(_ contacts: [Contact]) async -> Int {
+        var replyFrom: [Contact.ID: String] = [:]
+        for send in sends where send.replyFrom != nil && replyFrom[send.contactID] == nil {
+            replyFrom[send.contactID] = send.replyFrom
+        }
+        var named = 0
+        for contact in contacts {
+            let entries = [replyFrom[contact.id], MailboxNames.shared.entry(for: contact.email)].compactMap { $0 }
+            guard let name = entries.lazy.compactMap({ RecipientName.fullName(in: $0, for: contact.email) }).first
+            else { continue }
+            do {
+                try await SupabaseAPI.fillContactName(id: contact.id, name: name, replacing: contact.name)
+                named += 1
+            } catch {
+                continue  // tried again on the next check
+            }
+        }
+        return named
     }
 
     /// Look for one sent mail's bounce now (`ReplySync.checkBounce`).

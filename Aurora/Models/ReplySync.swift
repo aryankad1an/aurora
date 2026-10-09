@@ -41,18 +41,58 @@ final class ReplySync {
         /// for what they are, taken back and turned into bounces.
         var corrected = 0
 
+        /// Contacts a name was found for in the account's mail.
+        var namesFound = 0
+
         var changedAnything: Bool { recovered > 0 || replies > 0 || corrected > 0 }
         /// Everything that was asked failed: nothing was checked at all.
         var readNothing: Bool { failed > 0 && read == 0 }
     }
 
-    /// Progress, for the UI. `total` is 0 while idle.
+    /// Progress, for the UI. `total` is 0 while idle, and while a step is
+    /// still finding out how much it has to do.
     struct Progress {
         var label = ""
         var done = 0
         var total = 0
+        /// Which step of the run this is, counting from 1, and how many there are.
+        var step = 0
+        var steps = 0
+        /// What `done` and `total` count: "mails", "notices", "addresses".
+        var unit = ""
 
         var fraction: Double { total == 0 ? 0 : Double(done) / Double(total) }
+
+        /// How far through the whole run: each step an equal share.
+        var overall: Double {
+            guard steps > 0, step > 0 else { return 0 }
+            return min(1, (Double(step - 1) + fraction) / Double(steps))
+        }
+
+        /// Everything there is to say about where the run is, in full:
+        /// "Step 2 of 6 · Checking for replies · 12 of 80 mails (15%)".
+        var summary: String {
+            var parts: [String] = []
+            if steps > 0 { parts.append("Step \(step) of \(steps)") }
+            if !label.isEmpty { parts.append(label) }
+            if total > 0 {
+                let unitText = unit.isEmpty ? "" : " \(unit)"
+                parts.append("\(min(done, total)) of \(total)\(unitText) (\(Int((fraction * 100).rounded()))%)")
+            }
+            return parts.joined(separator: " · ")
+        }
+    }
+
+    /// Start step `step` of this run, before it knows how much it has to do.
+    private func beginStep(_ step: Int, _ label: String) {
+        progress = Progress(label: label, step: step, steps: progress.steps)
+    }
+
+    /// The current step has `total` things to read.
+    private func count(_ total: Int, _ unit: String) {
+        progress.done = 0
+        progress.total = total
+        progress.unit = unit
     }
 
     private(set) var isSyncing = false
@@ -167,10 +207,13 @@ final class ReplySync {
     ///   - emailByContact: recipient address per contact id, needed to search Sent.
     ///   - excludingContactIDs: contacts already known to be invalid/bounced, to skip checking.
     @discardableResult
+    ///   - lookingUpNames: addresses to look for a name for in the account's
+    ///     mail (`MailboxNames`), as the run's last step.
     func run(sends: [MailSend],
              emailByContact: [String: String],
              excludingContactIDs: Set<String> = [],
-             forceFullCheck: Bool = false) async -> Outcome {
+             forceFullCheck: Bool = false,
+             lookingUpNames names: [String] = []) async -> Outcome {
         guard !isSyncing, reader != nil else { return Outcome() }
         isSyncing = true
         errorMessage = nil
@@ -190,6 +233,8 @@ final class ReplySync {
         }
 
         var sends = sends
+        let lookups = MailboxNames.shared.pending(names)
+        progress = Progress(steps: lookups.isEmpty ? 5 : 6)
         do {
             // Replies that were really "this address is no longer in service".
             let corrected = await correctMisreadReplies(in: sends, emailByContact: emailByContact)
@@ -203,6 +248,7 @@ final class ReplySync {
                 return cleared
             }
 
+            beginStep(1, "Matching sent mail")
             let recovered = try await recoverThreadIDs(in: sends, emailByContact: emailByContact)
             outcome.recovered = recovered.count
             outcome.failed += recovered.failed
@@ -214,6 +260,7 @@ final class ReplySync {
                 return send.attaching(message: message)
             }
 
+            beginStep(2, "Checking for replies")
             let checked = try await checkForReplies(in: sends,
                                                     excludingContactIDs: excludingContactIDs,
                                                     alwaysChecking: Set(recovered.threadIDs.keys),
@@ -221,6 +268,7 @@ final class ReplySync {
             outcome.replies = checked.replies
             outcome.failed += checked.failed
             outcome.read += checked.read
+            beginStep(3, "Reading bounce notices")
             let confirmed = try await confirmThreadBounces(checked.bounces, emailByContact: emailByContact)
             outcome.bounced += confirmed.found
             outcome.failed += confirmed.failed
@@ -230,16 +278,29 @@ final class ReplySync {
             for contactID in checked.repliedContacts { bounces[contactID] = nil }
 
             // Failure notices that never joined the mail's thread.
+            beginStep(4, "Looking for bounced mail")
             let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact)
             outcome.bounced += scanned.found
             outcome.failed += scanned.failed
             outcome.read += scanned.read
 
             // "No longer in service" answers from their side, wherever they are.
+            beginStep(5, "Looking for addresses no longer in service")
             let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact)
             outcome.bounced += dead.found
             outcome.failed += dead.failed
             outcome.read += dead.read
+
+            // Names for the people mailed that have none, from the account's own
+            // mail: "Aryan Kadian <kdaryan@acme.com>" in anything from, to or
+            // copying them.
+            if !lookups.isEmpty {
+                beginStep(6, "Finding names in your mail")
+                count(lookups.count, "addresses")
+                outcome.namesFound = await MailboxNames.shared.lookUp(lookups, accepting: RecipientName.isPersonEntry) {
+                    [weak self] looked in self?.progress.done += looked
+                }
+            }
             // Contacts already ruled out are dealt with.
             for id in excludingContactIDs { bounces[id] = nil }
             saveBounces()
@@ -395,7 +456,7 @@ final class ReplySync {
         }
         guard !targets.isEmpty else { return Recovered() }
 
-        progress = Progress(label: "Matching sent mail", done: 0, total: targets.count)
+        count(targets.count, "mails")
         var result = Recovered()
 
         for chunk in stride(from: 0, to: targets.count, by: Self.concurrency).map({
@@ -580,7 +641,7 @@ final class ReplySync {
         result.checkedContacts = Set(targets.map(\.contactID))
         guard !targets.isEmpty else { return result }
 
-        progress = Progress(label: "Checking for replies", done: 0, total: targets.count)
+        count(targets.count, "mails")
 
         for chunk in stride(from: 0, to: targets.count, by: Self.concurrency).map({
             Array(targets[$0..<min($0 + Self.concurrency, targets.count)])
@@ -667,7 +728,7 @@ final class ReplySync {
                                       emailByContact: [String: String]) async throws -> (found: Int, failed: Int, read: Int) {
         let fresh = found.filter { !seenBounceMessages.contains($0.messageID) && Self.isSafePathComponent($0.messageID) }
         guard !fresh.isEmpty else { return (0, 0, 0) }
-        progress = Progress(label: "Reading bounce notices", done: 0, total: fresh.count)
+        count(fresh.count, "notices")
         let notices = try await readNotices(ids: fresh.map(\.messageID), lookingUpOriginals: false)
         var result = (found: 0, failed: 0, read: 0)
         for bounce in fresh {
@@ -736,7 +797,7 @@ final class ReplySync {
         let unread = ids.filter { !seenBounceMessages.contains($0) && Self.isSafePathComponent($0) }
         guard !unread.isEmpty else { return (0, 0, 1) }
 
-        progress = Progress(label: "Looking for bounced mail", done: 0, total: unread.count)
+        count(unread.count, "notices")
         let notices = try await readNotices(ids: unread, lookingUpOriginals: true)
         var found = 0, read = 1
         let failed = unread.count - notices.count
@@ -809,7 +870,7 @@ final class ReplySync {
         let unread = ids.filter { !seenBounceMessages.contains($0) && Self.isSafePathComponent($0) }
         guard !unread.isEmpty else { return (0, 0, 1) }
 
-        progress = Progress(label: "Looking for addresses no longer in service", done: 0, total: unread.count)
+        count(unread.count, "messages")
         let answers = try await readHeaders(ids: unread)
         var found = 0, read = 1
         for answer in answers {

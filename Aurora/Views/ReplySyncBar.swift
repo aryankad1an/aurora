@@ -31,7 +31,10 @@ struct ReplySyncBar: View {
     }
 
     private func label(now: Date) -> String {
-        if sync.isSyncing { return sync.progress.label.isEmpty ? "Checking Gmail…" : sync.progress.label }
+        if sync.isSyncing {
+            let summary = sync.progress.summary
+            return summary.isEmpty ? "Starting the Gmail check" : summary
+        }
         guard let last = sync.lastSyncedAt else { return "Replies not checked yet" }
         guard now.timeIntervalSince(last) >= 60 else { return "Checked just now" }
         let failed = sync.lastOutcome?.failed ?? 0
@@ -41,13 +44,13 @@ struct ReplySyncBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if sync.isSyncing && sync.progress.total > 0 {
-                ProgressView(value: sync.progress.fraction)
+            if sync.isSyncing && sync.progress.steps > 0 {
+                ProgressView(value: sync.progress.overall)
                     .tint(.clay)
                     .transition(LiquidMaterialize(scale: 0.9, anchor: .top))
             }
 
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let problem {
                     Label {
                         Text(problem.message)
@@ -66,10 +69,13 @@ struct ReplySyncBar: View {
                     // Re-read once a minute, so "Checked 4 minutes ago" doesn't
                     // sit on screen saying "just now" for the rest of the hour.
                     TimelineView(.periodic(from: .now, by: 60)) { context in
+                        // Wraps rather than truncates: every step, count and
+                        // percentage of a running check stays readable.
                         Text(label(now: context.date))
                             .font(.caption)
                             .foregroundStyle(.inkMuted)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .contentTransition(.numericText())
                     }
                 }
 
@@ -80,7 +86,7 @@ struct ReplySyncBar: View {
                         Haptics.press()
                         onCheck()
                     } label: {
-                        Text(sync.isSyncing ? "Checking…" : "Check Now")
+                        Text(sync.isSyncing ? "Checking" : "Check Now")
                             .font(.caption.weight(.semibold))
                     }
                     .secondaryButton()

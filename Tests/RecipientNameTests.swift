@@ -97,6 +97,24 @@ struct RecipientNameTests {
         expect(signed("<rahul.verma@acme.com>", "rahul.verma@acme.com"), "Rahul", "no display name: the address decides")
         expect(signed("Arijit Sen <arijit.sen@acme.com>", "arijit.sen@acme.com"), "Arijit", "a signed name matching first.last")
 
+        print("A full name from a header, for the name field")
+        func full(_ entry: String, _ email: String = "kdaryan@acme.com") -> String {
+            RecipientName.fullName(in: entry, for: email) ?? ""
+        }
+        expect(full("Aryan Kadian <kdaryan@acme.com>"), "Aryan Kadian", "as written")
+        expect(full("\"Kadian, Aryan\" <KDaryan@acme.com>"), "Aryan Kadian", "surname first, quoted, any case")
+        expect(full("ARYAN KADIAN <kdaryan@acme.com>"), "Aryan Kadian", "machine capitals recased")
+        expect(full("Aryan Kadian | Acme <kdaryan@acme.com>"), "Aryan Kadian", "a company after a bar dropped")
+        expect(full("Aryan Kadian - Acme <kdaryan@acme.com>"), "Aryan Kadian", "a company after a dash dropped")
+        expect(full("Aryan Kadian - Talent <kdaryan@acme.com>"), "", "a role word anywhere: not trusted")
+        expect(full("Dr. Aryan Kadian (he/him) <kdaryan@acme.com>"), "Aryan Kadian", "honorific and note dropped")
+        expect(full("NS Acharya <kdaryan@acme.com>"), "NS Acharya", "initials keep their capitals")
+        expect(full("Mary-Anne O'Brien <kdaryan@acme.com>"), "Mary-Anne O'Brien", "hyphens and apostrophes kept")
+        expect(full("Acme Recruiting <kdaryan@acme.com>"), "", "a role")
+        expect(full("kdaryan <kdaryan@acme.com>"), "", "the mailbox repeated")
+        expect(full("Aryan Kadian <aryan@gmail.com>"), "", "another address")
+        expect(full("kdaryan@acme.com"), "", "no display name")
+
         print("Who needs a Gmail lookup")
         expect(RecipientName.needsLookup(name: "", email: "akushwah@acme.com", greetingName: nil), true, "no name at all")
         expect(RecipientName.needsLookup(name: "", email: "akushwah@acme.com", greetingName: nil,

@@ -57,6 +57,22 @@ final class MailboxNames {
         generation += 1
     }
 
+    /// The addresses among `emails` that `lookUp` would look up now: not found
+    /// yet, not being looked up, and not missed within the last month.
+    func pending(_ emails: [String], now: Date = .now) -> [String] {
+        guard reader != nil else { return [] }
+        var todo: [String] = []
+        var seen: Set<String> = []
+        for raw in emails {
+            let email = raw.lowercased().trimmingCharacters(in: .whitespaces)
+            guard ReplySync.isSearchable(email), found[email] == nil, !inFlight.contains(email),
+                  now.timeIntervalSince(missed[email] ?? .distantPast) > Self.retryAfter,
+                  seen.insert(email).inserted else { continue }
+            todo.append(email)
+        }
+        return todo
+    }
+
     /// The header entry naming `email`, if one was found.
     func entry(for email: String) -> String? {
         found[email.lowercased().trimmingCharacters(in: .whitespaces)]
@@ -65,18 +81,14 @@ final class MailboxNames {
     /// Look up every address not looked up yet (or missed more than a month
     /// ago). `accepts` says whether a header entry names a person; the first
     /// accepted one is kept. Returns how many names were found.
+    /// `onProgress` hears how many more addresses have been looked up, as
+    /// each handful finishes.
     @discardableResult
-    func lookUp(_ emails: [String], accepting accepts: (String, String) -> Bool) async -> Int {
+    func lookUp(_ emails: [String], accepting accepts: (String, String) -> Bool,
+                onProgress: ((Int) -> Void)? = nil) async -> Int {
         guard let reader else { return 0 }
         let now = Date()
-        var todo: [String] = []
-        for raw in emails {
-            let email = raw.lowercased().trimmingCharacters(in: .whitespaces)
-            guard ReplySync.isSearchable(email), found[email] == nil, !inFlight.contains(email),
-                  now.timeIntervalSince(missed[email] ?? .distantPast) > Self.retryAfter,
-                  !todo.contains(email) else { continue }
-            todo.append(email)
-        }
+        let todo = pending(emails, now: now)
         guard !todo.isEmpty else { return 0 }
         let started = generation
         inFlight.formUnion(todo)
@@ -108,6 +120,7 @@ final class MailboxNames {
                 break  // the Gmail session has ended; nothing more can be looked up
             }
             guard generation == started else { return 0 }  // another account has loaded since
+            onProgress?(chunk.count)
             for (email, entries) in results {
                 guard let entries else { continue }
                 if let entry = entries.first(where: { accepts($0, email) }) {
