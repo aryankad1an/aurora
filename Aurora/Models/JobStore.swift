@@ -594,7 +594,18 @@ final class JobStore {
         insights = Insights.make(activity: activity, catalog: allCompanies)
         rebuildSuggested()
         // Every contact loaded so far teaches greetings the names on its row.
-        RecipientName.learnNames(from: (jobs + allCompanies + detachedCompanies.values).flatMap(\.contacts))
+        RecipientName.learnNames(from: (jobs + allCompanies + detachedCompanies.values).flatMap(\.contacts),
+                                 mailboxEntry: MailboxNames.shared.entry(for:))
+    }
+
+    /// Look up, in the account's own mail, the tracked companies' contacts that
+    /// have nothing better than an address to be greeted by. Each address is
+    /// looked up once; what's found greets them from then on.
+    func lookUpNames() async {
+        let emails = jobs.flatMap(\.contacts).filter(\.needsNameLookup).map(\.email)
+        if await MailboxNames.shared.lookUp(emails, accepting: RecipientName.isPersonEntry) > 0 {
+            rebuildDerived()
+        }
     }
 
     private static func newestFirst(_ a: ActivityEntry, _ b: ActivityEntry) -> Bool {

@@ -182,6 +182,7 @@ struct RootView: View {
         connectMailQueue()
         mailQueue.load(account: email)
         replySync.loadBounces(account: email)
+        MailboxNames.shared.load(account: email)
 
         let started = ContinuousClock.now
         async let profile: Void = load { await profileStore.load(email: email) }
@@ -208,6 +209,11 @@ struct RootView: View {
         // off went out, and any send not yet in the history. Not awaited — a
         // mail cut off moments ago is given a few seconds to show up in Sent.
         Task { await mailQueue.reconcile() }
+
+        // Contacts with only an address to greet them by: what does this
+        // account's own mail call them? Not awaited — it's a few Gmail reads
+        // per address, once.
+        Task { await jobStore.lookUpNames() }
 
         // Full, not delta: the sync state may be left over from another account,
         // and a delta against its timestamp would skip this account's threads.
@@ -248,6 +254,9 @@ struct RootView: View {
             await jobStore.markContactsSent(records)
         }
         replySync.reader = { path, query in
+            try await gmailAuth.gmailGET(path: path, query: query)
+        }
+        MailboxNames.shared.reader = { path, query in
             try await gmailAuth.gmailGET(path: path, query: query)
         }
     }

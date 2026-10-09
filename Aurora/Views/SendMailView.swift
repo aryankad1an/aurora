@@ -143,6 +143,10 @@ struct SendMailView: View {
                           confirmLabel: "Send",
                           isPresented: $confirmingSend) { send() }
             .onAppear(perform: start)
+            // Recipients with only an address to greet them by are looked up in
+            // this account's mail; a name found rewrites the letters not yet
+            // touched by hand.
+            .task { await lookUpNames() }
             // Templates can arrive after the screen does (a cold start, a pull
             // on another device); the first one to land writes the letters, and
             // an edit to one shows in every letter written from it.
@@ -560,6 +564,19 @@ struct SendMailView: View {
                         templateID: template?.id)
         }
         if focus.id == nil { focus.id = letters.first?.id }
+    }
+
+    private func lookUpNames() async {
+        let emails = recipients.map(\.contact).filter(\.needsNameLookup).map(\.email)
+        guard await MailboxNames.shared.lookUp(emails, accepting: RecipientName.isPersonEntry) > 0 else { return }
+        let profile = profileStore.profile
+        batch.letters = batch.letters.map { letter in
+            guard !letter.isEdited else { return letter }
+            return MailPreview(contact: letter.contact, company: letter.company,
+                               context: MailContext.make(contact: letter.contact, company: letter.company,
+                                                         profile: profile),
+                               templateID: letter.templateID)
+        }
     }
 
     /// What a fresh batch is written from: the template written for this very

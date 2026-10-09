@@ -53,19 +53,38 @@ enum RecipientName {
     /// name it can be sure of.
     ///
     /// In order: the `name` field; the name the person signed their own reply
-    /// with (`replyFrom`, the `From:` of a reply from this same address); and
-    /// the address. Each later one is consulted only when the one before yields
-    /// nothing usable — a name that is just the mailbox copied over
-    /// ("Akushwah" for `akushwah@`) knows no more than the address does.
-    static func greeting(name: String, email: String, replyFrom: String? = nil) -> String {
+    /// with (`replyFrom`, the `From:` of a reply from this same address); the
+    /// name their address carries elsewhere in this account's mail
+    /// (`mailboxEntry`, from `MailboxNames`); and the address itself. Each later
+    /// one is consulted only when the ones before yield nothing usable — a name
+    /// that is just the mailbox copied over ("Akushwah" for `akushwah@`) knows
+    /// no more than the address does.
+    static func greeting(name: String, email: String, replyFrom: String? = nil,
+                         mailboxEntry: String? = nil) -> String {
         let mailbox = email.prefix { $0 != "@" }
         if bareLetters(name) != bareLetters(String(mailbox)),
            let fromName = personalName(in: name) {
             return fromName
         }
         if let fromReply = replyFrom.flatMap({ signedName(in: $0, for: email) }) { return fromReply }
+        if let fromMail = mailboxEntry.flatMap({ signedName(in: $0, for: email) }) { return fromMail }
         if let fromEmail = nameFromEmail(email) { return fromEmail }
         return fallback
+    }
+
+    /// Whether a contact has nothing better than its address to be greeted by —
+    /// no greeting of its own, no usable name field — and so is worth looking
+    /// up in the account's mail.
+    static func needsLookup(name: String, email: String, greetingName: String?) -> Bool {
+        guard (greetingName ?? "").trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        let mailbox = email.prefix { $0 != "@" }
+        return bareLetters(name) == bareLetters(String(mailbox)) || personalName(in: name) == nil
+    }
+
+    /// Whether a header entry ("Aryan Kadian <kdaryan@acme.com>") names the
+    /// person at `email`, by the same rules as a signed reply.
+    static func isPersonEntry(_ entry: String, for email: String) -> Bool {
+        signedName(in: entry, for: email) != nil
     }
 
     // MARK: - From their own reply
@@ -101,19 +120,24 @@ enum RecipientName {
     /// contact whose address is all there is (`arijit@`). Rows whose name is
     /// their mailbox copied over, holds an address, or names a role teach
     /// nothing; `NameClassifier.learn` decides what the rest teach.
-    static func learnNames(from contacts: [Contact]) {
+    static func learnNames(from contacts: [Contact], mailboxEntry: (String) -> String? = { _ in nil }) {
         guard let classifier else { return }
         var seen = Set<String>()
         var people: [[String]] = []
         for contact in contacts where seen.insert(contact.id.isEmpty ? contact.email : contact.id).inserted {
             if let words = nameWords(in: contact.name, email: contact.email) {
                 people.append(words)
-            } else if let header = contact.replyFrom, signedName(in: header, for: contact.email) != nil,
-                      let open = header.lastIndex(of: "<"),
-                      let words = nameWords(in: header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
-                                            email: contact.email) {
-                // No usable name on the row, but they signed a reply with one.
-                people.append(words)
+            } else {
+                // No usable name on the row, but they signed a reply with one, or
+                // their address carries one in this account's mail.
+                for header in [contact.replyFrom, mailboxEntry(contact.email)].compactMap({ $0 })
+                where signedName(in: header, for: contact.email) != nil {
+                    guard let open = header.lastIndex(of: "<"),
+                          let words = nameWords(in: header[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \"'")),
+                                                email: contact.email) else { continue }
+                    people.append(words)
+                    break
+                }
             }
         }
         guard people != lastLearned else { return }

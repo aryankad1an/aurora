@@ -11,8 +11,11 @@ Where a greeting comes from, first match wins:
 2. their name field, unless it only copies the mailbox;
 3. the name they signed a reply with (`From: Anjali Kumari <anjali@acme.com>`,
    from the same address; the app already reads reply headers);
-4. the address, read by this classifier with names learned from the catalog;
-5. nothing: "Hi,".
+4. what the account's own mail calls the address (`MailboxNames`: a header
+   such as `Aryan Kadian <kdaryan@acme.com>` in mail from, to or copying it,
+   looked up once per address in Gmail);
+5. the address, read by this classifier with names learned from the catalog;
+6. nothing: "Hi,".
 
 ```bash
 pip install rdata                      # build only
