@@ -51,8 +51,8 @@ sent and read through the Gmail API under Google OAuth.
 | **Templates** | Subject and body with placeholders (`{Receiver-Name}`, `{Receiver-Company}`, `{Sender-College}`, `{Resume-Link}`, …) filled from the contact and your profile. The editor flags misspelled placeholders and ones that would come out blank. A template that names one company in plain text is labelled with it, and compose warns before it goes to anyone else. |
 | **Greetings** | "Hi {Receiver-Name}," greets people by a name that's plainly there: the contact's name field, the name they signed a reply with, what your own mail calls their address, or an address that spells the given name out (`anjali.kumari@`). Nothing is guessed: otherwise the mail opens with a plain "Hi," and the app shows "Name not detected". See [Greetings](#greetings). |
 | **Compose** | One screen per batch: who it's going to, a row of templates, and a swipeable deck of the actual mails. Any mail can be edited by hand or moved to another template. Batches have no size limit. |
-| **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. When Gmail rate-limits a send, the queue waits and tries the same mail again instead of failing it. |
-| **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending · mail 4 of 6", "Waiting on Gmail · retry in 0:26"), a progress bar with sent, failed and to-go counts, and who the mail is going to. |
+| **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. When Gmail rate-limits a send or the connection drops, the queue waits and carries on by itself. Nobody is ever mailed twice: a mail Gmail may already have is looked for in Sent before it can go again, and tests interrupt the queue at every stage to prove it. |
+| **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending mail 4 of 6", "Connection lost · retrying in 0:05"), a progress bar, and who the mail is going to. One activity follows the queue through pauses and retries, and a scheduled batch shows a countdown, then a Send Now button when its time comes. |
 | **Reply tracking** | Each send records its Gmail thread. The app reads those threads to find replies, skipping auto-replies and bounces. |
 | **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. Answers saying the address is no longer in service, or the person has left, count too. Any sent mail can be checked on its own from Activity. |
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
@@ -162,8 +162,13 @@ screen, so opening a batch of 150 or switching its template doesn't render 150
 mails. Blank placeholders, missing subjects and wrong-company templates are
 counted without rendering anything, and the send button says what's wrong.
 
-Anyone already waiting in the mail queue is left out of a new batch, with a note
-saying how many.
+Anyone already waiting in the mail queue (or sent by it and not yet in the
+history) is left out of a new batch, with a note saying how many.
+
+Tapping another template answers at once: its tile shows a spinner and the
+deck dims for a moment while the letters move onto it, then fades back in on
+the new words. The letters move without animation; animating every visible
+letter's text as it reflowed was what made switching stutter.
 
 #### The queue
 
@@ -200,29 +205,40 @@ exactly what was or will be sent.
 #### Interruptions
 
 A mail is saved as `sending` before the request goes to Gmail and as `sent`
-when Gmail answers. If the app is closed in between, nobody knows whether Gmail
-got it, and guessing wrong either way is bad: a second mail to the same person,
-or a mail that never went.
+when Gmail answers. If the request is cut off in between, nobody knows whether
+Gmail got it, and guessing wrong either way is bad: a second mail to the same
+person, or a mail that never went. So the rule is: **a mail Gmail may have is
+looked for in Sent mail before it can be sent again.**
 
-So on the next launch:
-
-1. Any batch that was mid-send comes back **paused**. It doesn't resume on its
-   own.
-2. Each mail left as `sending` is looked up in Gmail's Sent mail
-   (`in:sent to:<address> after:<time it was handed over>`), after waiting
-   ~20 s so Gmail's search has caught up. If it's there, it's marked sent with
-   its Gmail ids and recorded. If not, it goes back in line.
-3. If the lookup fails because you're offline, the mail stays `sending` and is
-   looked up again before anything else happens to it. If it can't be looked up
-   at all, it's marked failed and not resent.
-
-Losing the network in the middle of a request is treated the same way: the
-batch pauses and that mail is checked on resume instead of being counted as
-failed.
+- **The connection drops mid-request, or Gmail fails with a 5xx:** the mail
+  stays `sending`, the batch pauses, and it carries on by itself after 5 s
+  (then 10, 20, 40, 60 s, 2 and 5 minutes on each failure in a row; a mail
+  going out resets the steps). After 12 in a row it waits for Resume.
+- **The app is closed mid-send:** the batch comes back paused and carries on by
+  itself a few seconds after the app opens.
+- **Before anything else happens to a `sending` mail**, it's looked up in
+  Gmail's Sent mail (`in:sent to:<address> after:<time it was handed over>`),
+  after waiting ~20 s so Gmail's search has caught up, and, if it was cut off
+  in the last 10 minutes and isn't there, once more 15 s later. If it's there,
+  it's marked sent with its Gmail ids and recorded. If not, it goes back in
+  line. If Sent can't be searched for it at all, it's marked failed and never
+  resent, and Retry Failed leaves it alone too.
+- **Only a refusal that proves Gmail took nothing** (a 400, a 429 rate limit,
+  a refused or expired session) puts a mail back in line unchecked.
+- **No one in two batches:** a new batch leaves out anyone another batch is
+  mailing, has mailed but not yet written to the history, or who appears twice
+  in it.
 
 Pause (on the shelf or in the queue) lets the mail already in flight finish.
 It doesn't cancel the request, because a request cancelled on the phone may
-still have been delivered by Gmail.
+still have been delivered by Gmail. A paused batch never carries on by itself.
+
+`Tests/MailQueueTests.swift` runs the real queue against a fake Gmail and
+interrupts it at every one of these points (dropped before and after Gmail took
+the mail, 5xx with and without it, rate limits, a 400 then Retry, Pause and
+Resume, the app killed before and after Gmail took the mail and opened again,
+with and without Sent search lag, overlapping batches), checking each person is
+mailed exactly once. Nothing is sent anywhere.
 
 #### Scheduling
 
@@ -236,9 +252,16 @@ who it's going to, roughly how long it will take) with a Send button. The same
 summary appears if you open the app, or already have it open, once the time has
 passed. Nothing is sent without that tap. "Not Now" leaves it on the shelf.
 
-If you don't open the app, the batch waits. Sending at an exact time with the
-phone locked would need a server holding your Gmail token, which this app
-doesn't have.
+From seven hours before its time (iOS ends a Live Activity after eight), the
+batch is also on the Lock Screen and in the Dynamic Island with a countdown.
+When the time comes the activity turns into "Ready to send" with a **Send
+Now** button by itself, even with the app asleep, and tapping it opens the app
+and starts the batch with no further question.
+
+If you don't open the app or tap it, the batch waits. iOS doesn't let an app's
+code run at a set time, and a Live Activity can't send mail on its own, so
+sending at an exact time with the phone locked would need a server holding your
+Gmail token, which this app doesn't have.
 
 ### Live Activity
 
@@ -248,20 +271,24 @@ doesn't have.
   <img src="docs/screenshots/live-activity-compact.png" alt="Compact Dynamic Island" width="420">
 </p>
 
-While the queue is sending, a Live Activity shows the run outside the app. It
-starts with a run, follows it from batch to batch, and ends showing how the run
-finished (a clean run stays on the Lock Screen for 15 minutes).
+While the queue is sending, a Live Activity shows the run outside the app.
+There is only ever one: it starts with a run (or a scheduled batch), follows
+it from batch to batch, and stays through pauses and retries, so resuming
+updates it rather than starting another. One a previous launch left up is
+taken over. It ends showing how the run finished (a clean run stays on the
+Lock Screen for 15 minutes).
 
-- **Lock Screen and Notification Center:** the status line in the theme's
-  colour ("Sending · mail 4 of 6", "Waiting on Gmail · retry in 0:26",
-  "Paused · carries on at 7:00 PM", "Finished · 1 failed"), the batch's name,
-  a count ("3/6"), a progress bar with sent, failed and to-go counts, and a card
-  saying who the mail is going to: their name, company and address. While Gmail
-  has the run waiting, the card shows who goes next instead.
-- **Dynamic Island, expanded:** the status, the batch, the bar, and who it's
-  to (or who's next).
-- **Dynamic Island, compact:** the theme's paper plane and the count, or an
-  hourglass and the countdown while waiting.
+- **Lock Screen and Notification Center:** the status in the theme's colour
+  ("Sending mail 4 of 6", "Connection lost · retrying in 0:05", "Paused",
+  "All 6 sent", "Scheduled for 7:00 PM", "Ready to send"), the batch's name
+  under a tray icon, so it doesn't read as a status, a count ("3/6 done"), a
+  progress bar with sent, failed and to-go counts, and a card saying who the
+  mail is going to: their name, company and address. While the run waits, the
+  card shows who goes next instead.
+- **Dynamic Island, expanded:** the status, the batch, the count, who it's to
+  and the bar, with margins all round.
+- **Dynamic Island, compact:** the phase's glyph and the count, or the
+  countdown while waiting, or a scheduled batch's time.
 
 Tapping it opens Activity's Queued lane. It's drawn by the `AuroraLive` widget
 extension from `SendActivityAttributes` (in `Shared/`, compiled into both
@@ -274,8 +301,10 @@ Activities from Aurora; they can be turned off in Settings › Aurora.
 
 When Gmail answers a send with a rate limit (HTTP 429, or a 403 whose reason is
 `rateLimitExceeded`, `userRateLimitExceeded`, `dailyLimitExceeded` or similar),
-or is briefly unavailable (5xx), nothing was sent. The mail goes back first in
-line and the run waits:
+nothing was sent: the mail goes back first in line. When Gmail is briefly
+unavailable (5xx) it may have taken the mail before failing, so the mail stays
+`sending` and is looked for in Sent first (see Interruptions). Either way the
+run waits:
 
 - for the time Gmail gave (a `Retry-After` header, or the "Retry after
   <time>" its message ends with), or
@@ -305,9 +334,14 @@ Matching by thread instead of by sender address matters: replies often come
 from a colleague or an applicant-tracking system, which keep the thread but not
 the address.
 
-After a recent sync, the next one only reads threads that received new mail
-since then (with a 15-minute overlap). Pulling to refresh in Activity always
-does a full check.
+Each account's checks are kept to new mail by a checkpoint saved on the phone
+(`ReplyCheckpoint`, in `reply-checkpoint-<account>.json`): when a check has read
+everything it tried, the time it began is stored, and the next check (on
+launch, on returning to the app, or pulling to refresh) reads only the threads
+with inbound mail since then, and searches for failure notices only since then,
+with a 15-minute overlap. A check where any read failed leaves the checkpoint
+where it was, so those threads are read again. An account's first check, and
+the one after reconnecting Gmail in Settings, read everything.
 
 The same check names the people you've mailed who have no name on file (an
 empty name field, or the mailbox copied over). Its last step looks each such
@@ -485,8 +519,8 @@ Conventions the code follows:
 ## Testing
 
 `Tests/` holds self-contained Swift programs that run without Xcode. Most carry
-their own copies of the logic under test; the bounce, greeting and name-lookup
-tests compile against the app's own files.
+their own copies of the logic under test; the bounce, greeting, name-lookup,
+mail-queue and reply-checkpoint tests compile against the app's own files.
 
 ```bash
 swiftc Aurora/Models/BounceParsing.swift Tests/BounceParsingTests.swift -o /tmp/bt && /tmp/bt
@@ -494,6 +528,12 @@ swiftc Aurora/Models/RecipientName.swift Aurora/Models/MailTemplate.swift \
   Tests/RecipientNameTests.swift -o /tmp/rn && /tmp/rn
 swiftc Aurora/Models/MailboxNames.swift Aurora/Models/RecipientName.swift \
   Tests/MailboxNamesTests.swift -o /tmp/mn && /tmp/mn
+swiftc -parse-as-library -default-isolation MainActor \
+  Aurora/Models/MailQueue.swift Aurora/Models/MailBatch.swift \
+  Aurora/Models/MailTemplate.swift Aurora/Models/GmailAuthError.swift \
+  Aurora/Support/JSONFile.swift Tests/MailQueueTests.swift -o /tmp/mq && /tmp/mq
+swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift Aurora/Support/JSONFile.swift \
+  Tests/ReplyCheckpointTests.swift -o /tmp/rc && /tmp/rc
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift

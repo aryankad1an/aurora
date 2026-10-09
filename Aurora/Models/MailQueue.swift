@@ -1,6 +1,8 @@
 import Foundation
 import Observation
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Sends mail in the background, one at a time, spaced out — and keeps every
 /// batch on disk until it's done, so none is lost to the app closing.
@@ -18,8 +20,14 @@ import UIKit
 /// Gmail and as `sent` once Gmail answers. A mail found still `sending` when the
 /// app opens was cut off mid-request: Gmail may or may not have it. Rather than
 /// guess — a guess either way is a person mailed twice or one never mailed — its
-/// Sent mail is searched (`verifier`), and the answer decides. Batches found
-/// half-sent come back paused, for the user to resume.
+/// Sent mail is searched (`verifier`), and the answer decides. The same goes for
+/// any send that fails in a way that leaves Gmail's answer unknown (a dropped
+/// connection, a 5xx): the mail stays `sending` and is looked for in Sent before
+/// it can go again. Only a refusal that proves Gmail took nothing puts a mail
+/// back in line unchecked. Batches found half-sent carry on by themselves after
+/// a few seconds, as do batches stopped by a dropped connection
+/// (`Timing.retry`); `Tests/MailQueueTests.swift` interrupts runs at every stage
+/// against a fake Gmail and checks no one is ever mailed twice.
 ///
 /// **Scheduling.** A scheduled batch waits for its time. iOS won't run the app
 /// at a given moment, so a notification is left with the system instead
@@ -58,22 +66,40 @@ final class MailQueue {
         var isPaused = false
     }
 
-    /// Gap between sends. Fast enough to clear a large batch in a few minutes,
-    /// slow enough not to look automated: Gmail's API allows roughly two sends a
-    /// second, but the limit that matters is the spam heuristic, not the quota.
-    private static let spacing = Duration.milliseconds(1200)
-    /// Random slack either side of `spacing`, so the send pattern isn't perfectly
-    /// periodic the way only a machine's would be.
-    private static let jitter = 400
+    /// How the queue paces itself. Tests run with `Timing.immediate`.
+    struct Timing {
+        /// Gap between sends. Fast enough to clear a large batch in a few
+        /// minutes, slow enough not to look automated: Gmail's API allows roughly
+        /// two sends a second, but the limit that matters is the spam heuristic,
+        /// not the quota.
+        var spacing = Duration.milliseconds(1200)
+        /// Random slack either side of `spacing`, in milliseconds, so the send
+        /// pattern isn't perfectly periodic the way only a machine's would be.
+        var jitter = 400
+        /// Gmail's search can take a few seconds to list a mail it has just
+        /// accepted. A mail cut off more recently than this is given the time
+        /// before its Sent mail is searched, so "not there" means not sent.
+        var searchSettle: TimeInterval = 20
+        /// When Sent doesn't have a mail cut off in the last `recheckWithin`,
+        /// it's looked for once more after this long before it can go again.
+        var recheck: TimeInterval = 15
+        var recheckWithin: TimeInterval = 10 * 60
+        /// How long the queue waits before carrying on by itself after a
+        /// dropped connection, a Gmail failure or the app closing mid-send:
+        /// the first, second… time in a row. The last repeats until
+        /// `maxRetries`, after which the batch waits for Resume.
+        var retry: [TimeInterval] = [5, 10, 20, 40, 60, 120, 300]
+        var maxRetries = 12
+
+        static let standard = Timing()
+    }
+
+    var timing = Timing.standard
     /// How many delivered mails are held before they're written to the send
     /// history. An unrecorded send is a contact the app will offer to mail a
     /// second time, so they're written as the run goes — and anything left
     /// unrecorded by a close is written the next time the app opens.
     private static let recordEvery = 5
-    /// Gmail's search can take a few seconds to list a mail it has just
-    /// accepted. A mail cut off more recently than this is given the time before
-    /// its Sent mail is searched, so "not there" means not sent.
-    private static let searchSettle: TimeInterval = 20
     /// How long to wait after Gmail's first, second… rate limit in a row before
     /// trying the same mail again, when Gmail didn't say how long. Each step
     /// doubles; a success resets it.
@@ -132,9 +158,13 @@ final class MailQueue {
     /// Records delivered mails in the send history and says whether the write
     /// landed. Ones that didn't are offered again next time.
     var onRecord: (([Contact.ID: SentMail]) async -> Bool)?
+    /// Told whenever something the Live Activity shows may have changed.
+    var onChange: ((MailQueue) -> Void)?
 
     private var file: JSONFile<[MailBatch]>?
+    #if canImport(UIKit)
     private var assertion = UIBackgroundTaskIdentifier.invalid
+    #endif
     private var wakeTask: Task<Void, Never>?
     private var isReconciling = false
 
@@ -146,10 +176,11 @@ final class MailQueue {
 
     var isRunning: Bool { runningBatchID != nil }
 
-    /// The contacts some batch is still going to mail, so a new batch can leave
+    /// The contacts some batch is still going to mail, is mailing, or has
+    /// mailed without the send history knowing yet — so a new batch leaves
     /// them out rather than write to them twice.
     var waitingContactIDs: Set<Contact.ID> {
-        Set(batches.flatMap { batch in batch.mails.filter(\.status.isWaiting).map(\.id) })
+        Set(batches.flatMap { batch in batch.mails.filter { $0.status.isWaiting || $0.status.isUnrecorded }.map(\.id) })
     }
 
     /// The next scheduled batch still waiting for its time.
@@ -183,18 +214,21 @@ final class MailQueue {
     /// Open this account's queue. Anything left mid-send is paused — it goes on
     /// when the user says, not the moment the app happens to open — while a
     /// scheduled batch that hasn't started keeps waiting for its time.
-    func load(account: String) {
+    func load(account: String, directory: URL = .documentsDirectory) {
         guard !isRunning else { return }
-        SendLiveActivity.shared.reset()
-        let file = JSONFile<[MailBatch]>(name: "mail-queue-\(account).json")
+        let file = JSONFile<[MailBatch]>(name: "mail-queue-\(account).json", directory: directory)
         self.file = file
         var loaded = file.load() ?? []
         loaded.removeAll { $0.isFinished && $0.createdAt < Date.now.addingTimeInterval(-Self.keepFinished) }
         for index in loaded.indices where loaded[index].hasWork && !loaded[index].isPaused {
             let waitingForItsTime = loaded[index].scheduledFor != nil && loaded[index].startedAt == nil
             if !waitingForItsTime {
+                // Carries on by itself in a moment: whatever was cut off is
+                // looked for in Sent mail before anything is sent again.
                 loaded[index].isPaused = true
-                loaded[index].pauseReason = "The app closed while this was sending. Resume to carry on — anything cut off is checked in Sent mail first."
+                loaded[index].resumeAt = .now.addingTimeInterval(timing.retry.first ?? 5)
+                loaded[index].stopNote = "App was closed"
+                loaded[index].pauseReason = "The app closed while this was sending. It carries on by itself — anything cut off is checked in Sent mail first."
             }
         }
         batches = loaded
@@ -225,6 +259,8 @@ final class MailQueue {
         }
         save()
         await recordDeliveries()
+        isReconciling = false
+        startNext()
     }
 
     // MARK: - Queueing
@@ -232,6 +268,11 @@ final class MailQueue {
     /// Add a batch. Sent straight away unless it's scheduled, in which case the
     /// system is left a notification for its time.
     func enqueue(_ batch: MailBatch) {
+        // No one twice: not someone another batch is mailing (or has mailed,
+        // unrecorded), and not the same person twice in this one.
+        var batch = batch
+        var seen = waitingContactIDs
+        batch.mails.removeAll { !seen.insert($0.id).inserted }
         guard !batch.mails.isEmpty else { return }
         batches.append(batch)
         save()
@@ -253,11 +294,13 @@ final class MailQueue {
             batch.isPaused = true
             batch.pauseReason = nil
             batch.resumeAt = nil
+            batch.retries = nil
+            batch.stopNote = nil
         }
         ScheduledMailNotifier.cancelResume(id)
         ScheduledMailNotifier.cancel(id)
         if runningBatchID == id { isStopping = true }
-        SendLiveActivity.shared.sync(with: self)
+        changed()
     }
 
     /// Carry on with a paused batch — or, for a scheduled one, go back to waiting
@@ -308,15 +351,20 @@ final class MailQueue {
         tick()
     }
 
-    /// Put the ones that failed back in line and carry on.
+    /// Put the ones that failed back in line and carry on. Not one that failed
+    /// because whether it went out couldn't be told: that may be in Gmail.
     func retryFailed(_ id: UUID) {
         update(id) { batch in
-            for index in batch.mails.indices where batch.mails[index].status.isFailed {
+            for index in batch.mails.indices where batch.mails[index].status.isFailed
+                && batch.mails[index].status != .failed(reason: Self.unconfirmed) {
                 batch.mails[index].status = .pending
             }
         }
         resume(id)
     }
+
+    /// The failure of a mail that may have gone out but couldn't be checked.
+    static let unconfirmed = "Couldn't confirm whether it went out, so it wasn't sent again."
 
     /// Take a batch out of the queue. Not while it's sending: pause it first.
     func remove(_ id: UUID) {
@@ -407,6 +455,7 @@ final class MailQueue {
     /// when the app comes back to the front, and by a timer while it's open.
     func tick() {
         clock = .now
+        changed()
         wakeTask?.cancel()
         // A batch Gmail's limit stopped carries on by itself once it's time.
         for batch in batches where batch.isPaused && batch.hasWork {
@@ -430,7 +479,8 @@ final class MailQueue {
 
     /// Start the next batch in line, if nothing is sending.
     private func startNext() {
-        guard runningBatchID == nil, let next = batches.first(where: isRunnable) else { return }
+        // Not while cut-off mails are being checked: the run would check them too.
+        guard runningBatchID == nil, !isReconciling, let next = batches.first(where: isRunnable) else { return }
         runningBatchID = next.id
         isStopping = false
         outcome = nil
@@ -447,11 +497,12 @@ final class MailQueue {
         var stoppedBecause: String?
         /// Gmail rate limits in a row, for the backoff.
         var limited = 0
-        SendLiveActivity.shared.sync(with: self)
+        changed()
 
         while let batch = batch(id), !batch.isPaused,
               let mail = batch.mails.first(where: \.status.isWaiting) {
-            // Cut off mid-send last time: find out before sending it again.
+            // Gmail may have this one — cut off mid-send, or a send whose answer
+            // never came: find out before sending it again.
             if case .sending(let since) = mail.status {
                 do {
                     if let delivery = try await verify(mail, since: since) {
@@ -463,17 +514,17 @@ final class MailQueue {
                     update(id) { $0.isPaused = true }
                     stoppedBecause = error.localizedDescription
                     break
-                } catch is URLError {
-                    // Offline: it can be checked later, so wait for that.
-                    update(id) { $0.isPaused = true }
-                    stoppedBecause = "Couldn't check whether the mail to \(mail.displayName) already went out. Resume when you're online."
-                    break
-                } catch {
-                    // It can't be checked at all. Not sending it again is the
-                    // safe way round: a second mail can't be taken back.
-                    setStatus(mail.id, in: id, .failed(reason: "Couldn't confirm whether it went out, so it wasn't sent again."))
+                } catch GmailAuthError.server(let message) {
+                    // Sent mail can't be searched for it at all. Not sending it
+                    // again is the safe way round: a second mail can't be taken back.
+                    setStatus(mail.id, in: id, .failed(reason: Self.unconfirmed + " (\(message))"))
                     failed.append(mail.displayName)
                     continue
+                } catch {
+                    // Offline, or Gmail failing: look again in a moment.
+                    stoppedBecause = retryLater(id, note: error is URLError ? "Offline" : "Couldn't check Sent mail",
+                                                reason: "Couldn't check whether the mail to \(mail.displayName) already went out.")
+                    break
                 }
             }
 
@@ -496,10 +547,20 @@ final class MailQueue {
                                                  threadID: delivery?.threadID, recorded: false))
                 sent += 1
                 limited = 0
-            } catch GmailAuthError.rateLimited(let message, let retryAt) {
-                // Gmail took nothing: this mail goes back first in line, and
-                // the run waits — the time Gmail gave, else a doubling step.
-                setStatus(mail.id, in: id, .pending)
+                if batch.retries != nil || batch.stopNote != nil {
+                    update(id) {
+                        $0.retries = nil
+                        $0.stopNote = nil
+                    }
+                }
+            } catch let error as GmailAuthError where error.waitsOut != nil {
+                // A rate limit took nothing: this mail goes back first in line.
+                // A 5xx may have taken it: it stays `sending`, to be looked for
+                // in Sent before it goes again. Either way the run waits — the
+                // time Gmail gave, else a doubling step.
+                guard let gmailSaid = error.waitsOut else { break }
+                let (message, retryAt) = gmailSaid
+                if case .rateLimited = error { setStatus(mail.id, in: id, .pending) }
                 limited += 1
                 let step = Self.rateLimitBackoff[min(limited, Self.rateLimitBackoff.count) - 1]
                 let until = retryAt ?? .now.addingTimeInterval(TimeInterval(step.components.seconds))
@@ -512,6 +573,7 @@ final class MailQueue {
                     update(id) {
                         $0.isPaused = true
                         $0.resumeAt = resumeAt
+                        $0.stopNote = "Gmail's sending limit"
                     }
                     if let batch = self.batch(id) { ScheduledMailNotifier.scheduleResume(batch, at: resumeAt) }
                     stoppedBecause = "Gmail's sending limit was reached (\(message)). Sending carries on by itself at "
@@ -521,34 +583,43 @@ final class MailQueue {
                     break
                 }
                 cooldown = Cooldown(batchID: id, until: until, reason: message, attempt: limited)
-                SendLiveActivity.shared.sync(with: self)
+                changed()
                 let waited = await waitOut(until, batch: id)
                 cooldown = nil
-                SendLiveActivity.shared.sync(with: self)
+                changed()
                 if !waited { break }
                 continue
             } catch let error as GmailAuthError where error.endsRun {
-                // Every mail after this one would fail the same way. Stop, and
-                // leave the rest — this one included — waiting to be resumed.
+                // Refused before Gmail took anything, and every mail after this
+                // one would be refused the same way. Stop, and leave the rest —
+                // this one included — waiting to be resumed.
                 setStatus(mail.id, in: id, .pending)
                 update(id) { $0.isPaused = true }
                 stoppedBecause = error.localizedDescription
                 break
-            } catch is URLError {
-                // The connection went mid-request, so Gmail may have the mail
-                // or may not. It stays `sending` — checked in Sent mail before
-                // anything else happens to it — and the batch waits.
-                update(id) { $0.isPaused = true }
-                stoppedBecause = "Lost the connection sending to \(mail.displayName). Resume to check whether it went out and carry on."
-                break
-            } catch {
+            } catch let error as GmailAuthError {
+                // Gmail answered and refused this one mail (a 400): it wasn't sent.
                 setStatus(mail.id, in: id, .failed(reason: Self.reason(for: error)))
                 failed.append(mail.displayName)
+            } catch MailQueueError.noTransport {
+                setStatus(mail.id, in: id, .pending)
+                update(id) { $0.isPaused = true }
+                stoppedBecause = MailQueueError.noTransport.localizedDescription
+                break
+            } catch {
+                // The answer never came — a dropped connection, or something
+                // unexpected — so Gmail may have the mail or may not. It stays
+                // `sending`, looked for in Sent before anything else happens to
+                // it, and the run carries on by itself in a moment.
+                stoppedBecause = retryLater(id, note: error is URLError ? "Connection lost" : "Something went wrong",
+                                            reason: "Lost the connection sending to \(mail.displayName).")
+                break
             }
 
             if unrecordedCount >= Self.recordEvery { await recordDeliveries() }
             if let batch = self.batch(id), !batch.isPaused, batch.hasWork {
-                try? await Task.sleep(for: Self.spacing + .milliseconds(Int.random(in: -Self.jitter...Self.jitter)))
+                let jitter = timing.jitter
+                try? await Task.sleep(for: timing.spacing + .milliseconds(jitter > 0 ? Int.random(in: -jitter...jitter) : 0))
             }
         }
 
@@ -567,7 +638,31 @@ final class MailQueue {
         outcome = Outcome(batchID: id, sent: sent, failed: failed,
                           stoppedBecause: stoppedBecause, isPaused: paused)
         startNext()
-        SendLiveActivity.shared.sync(with: self)
+        changed()
+    }
+
+    /// Pause a batch the run couldn't go on with for now, and have it carry on
+    /// by itself after the next step of `Timing.retry` — until `maxRetries` in
+    /// a row, when it waits for Resume instead. Returns why, for the batch.
+    private func retryLater(_ id: UUID, note: String, reason: String) -> String {
+        let attempt = batch(id)?.retries ?? 0
+        guard attempt < timing.maxRetries, let last = timing.retry.last else {
+            update(id) {
+                $0.isPaused = true
+                $0.resumeAt = nil
+                $0.stopNote = note
+            }
+            return reason + " Tried \(attempt) times; resume when you're back online."
+        }
+        let delay = attempt < timing.retry.count ? timing.retry[attempt] : last
+        update(id) {
+            $0.isPaused = true
+            $0.resumeAt = .now.addingTimeInterval(delay)
+            $0.retries = attempt + 1
+            $0.stopNote = note
+        }
+        tick()
+        return reason + " Trying again by itself — anything cut off is checked in Sent mail first."
     }
 
     /// Sit out a rate limit until `until`, a second at a time so Pause still
@@ -591,11 +686,15 @@ final class MailQueue {
     // MARK: - Checking and recording
 
     /// Whether a mail cut off mid-send is in Sent mail. Waits out Gmail's search
-    /// delay first, so a mail accepted a moment ago isn't missed.
+    /// delay first, so a mail accepted a moment ago isn't missed — and, for one
+    /// cut off recently, looks a second time before saying it isn't there.
     private func verify(_ mail: QueuedMail, since: Date) async throws -> Delivery? {
         guard let verifier else { throw MailQueueError.noTransport }
-        let settle = Self.searchSettle - Date.now.timeIntervalSince(since)
+        let settle = timing.searchSettle - Date.now.timeIntervalSince(since)
         if settle > 0 { try await Task.sleep(for: .seconds(settle)) }
+        if let found = try await verifier(mail.recipient, since) { return found }
+        guard Date.now.timeIntervalSince(since) < timing.recheckWithin else { return nil }
+        try await Task.sleep(for: .seconds(timing.recheck))
         return try await verifier(mail.recipient, since)
     }
 
@@ -655,7 +754,6 @@ final class MailQueue {
             guard let index = batch.mails.firstIndex(where: { $0.id == mailID }) else { return }
             batch.mails[index].status = status
         }
-        SendLiveActivity.shared.sync(with: self)
     }
 
     /// Change one batch and save. Looked up by id each time: the list can change
@@ -666,8 +764,15 @@ final class MailQueue {
         save()
     }
 
+    /// Every change to a batch is saved — before anything that depends on it —
+    /// and shown.
     private func save() {
         file?.save(batches)
+        changed()
+    }
+
+    private func changed() {
+        onChange?(self)
     }
 
     // MARK: - Background execution
@@ -680,14 +785,18 @@ final class MailQueue {
     /// The time running out has to be answered by handing the assertion back.
     /// An app that holds one past its expiry isn't suspended, it's terminated.
     private func beginAssertion() {
+        #if canImport(UIKit)
         assertion = UIApplication.shared.beginBackgroundTask(withName: "MailQueue") { [weak self] in
             MainActor.assumeIsolated { self?.endAssertion() }
         }
+        #endif
     }
 
     private func endAssertion() {
+        #if canImport(UIKit)
         guard assertion != .invalid else { return }
         UIApplication.shared.endBackgroundTask(assertion)
         assertion = .invalid
+        #endif
     }
 }

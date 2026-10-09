@@ -4,9 +4,11 @@ import Foundation
 /// Shared by all the stores so the persistence code lives in one place.
 struct JSONFile<Value: Codable> {
     let name: String
+    /// Where it's kept: the app's Documents, or a folder of a test's own.
+    var directory: URL = .documentsDirectory
 
     private var url: URL {
-        URL.documentsDirectory.appending(path: name)
+        directory.appending(path: name)
     }
 
     func load() -> Value? {
@@ -29,7 +31,7 @@ struct JSONFile<Value: Codable> {
     /// is the difference between a queue of mail lost and one kept to recover.
     private func setAside() {
         let stamp = Date.now.formatted(.iso8601).replacingOccurrences(of: ":", with: "-")
-        let aside = URL.documentsDirectory.appending(path: "\(name).unreadable-\(stamp)")
+        let aside = directory.appending(path: "\(name).unreadable-\(stamp)")
         try? FileManager.default.moveItem(at: url, to: aside)
     }
 

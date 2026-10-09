@@ -5,9 +5,10 @@ import Foundation
 /// it) and the widget extension (which draws it on the Lock Screen and in the
 /// Dynamic Island).
 ///
-/// One activity covers a whole run of the queue — batch after batch — rather
-/// than one per batch, so a long send is one thing on the Lock Screen that
-/// keeps counting, not a pile of finished ones.
+/// One activity covers the queue — batch after batch, through pauses and
+/// retries, and a scheduled batch while it waits for its time — rather than one
+/// per batch, so a long send is one thing on the Lock Screen that keeps
+/// counting, not a pile of finished ones.
 nonisolated struct SendActivityAttributes: ActivityAttributes {
     /// The theme's colours when the run started. The extension can't read the
     /// app's theme, so they travel with the activity.
@@ -35,6 +36,9 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
             case paused
             /// Nothing left in this run.
             case done
+            /// A scheduled batch waiting for `startsAt`. Once that has passed
+            /// it's ready, and the activity offers Send Now.
+            case scheduled
         }
 
         var phase: Phase
@@ -50,8 +54,12 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
         var company: String?
         /// When a rate-limit wait ends, or a paused batch carries on by itself.
         var resumesAt: Date?
-        /// One line on why it's waiting or stopped.
+        /// A few words on why it's waiting or stopped: "Connection lost".
         var note: String?
+        /// The batch, for the activity's Send Now link.
+        var batchID: String?
+        /// When a scheduled batch is due.
+        var startsAt: Date?
 
         var done: Int { sent + failed }
         var toGo: Int { max(0, total - done) }

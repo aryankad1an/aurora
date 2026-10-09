@@ -71,6 +71,9 @@ struct SendMailView: View {
     @State private var nameDraft = ""
     /// A template tap that would overwrite hand edits, held until confirmed.
     @State private var pendingTemplate: MailTemplate?
+    /// The template the deck is being moved onto, while it is: its tile shows a
+    /// spinner and the deck dims, so the tap answers at once.
+    @State private var switchingTo: MailTemplate.ID?
     @State private var confirmingSend = false
     /// The company each one-company template was written for (see
     /// `MailTemplate.writtenFor`), worked out once per template list.
@@ -299,7 +302,12 @@ struct SendMailView: View {
                         .foregroundStyle(.ink)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    if isAll {
+                    if switchingTo == template.id {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.clay)
+                            .transition(.opacity)
+                    } else if isAll {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.clay)
                             .transition(.scale.combined(with: .opacity))
@@ -366,6 +374,8 @@ struct SendMailView: View {
                     }
                 }
                 .background(alignment: .topLeading) { deckSizer }
+                .opacity(switchingTo == nil ? 1 : 0.4)
+                .allowsHitTesting(switchingTo == nil)
 
                 if letters.count > 1 && letters.count <= 16 {
                     PageDots(batch: batch, focus: focus)
@@ -654,15 +664,29 @@ struct SendMailView: View {
     /// Put the given letters on `template`, replacing any hand edits. Nothing is
     /// written: each letter says which template it's on, and is written from it
     /// when it's drawn.
+    ///
+    /// The tap is answered first — the tile's spinner and the dimmed deck draw
+    /// on this frame — and the letters move on the next, without animation:
+    /// animating every visible letter's text as it reflows was the stutter.
+    /// The deck fades back in on its new words instead.
     private func write(_ template: MailTemplate, to ids: Set<MailPreview.ID>) {
-        var moved = letters
-        for index in moved.indices where ids.contains(moved[index].id) {
-            moved[index].templateID = template.id
-            moved[index].override = nil
-        }
-        withAnimation(Theme.Motion.snappy) {
-            batch.letters = moved
-            if ids.count == moved.count { templateID = template.id }
+        guard switchingTo == nil else { return }
+        withAnimation(.easeOut(duration: 0.12)) { switchingTo = template.id }
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(40))
+            var moved = letters
+            for index in moved.indices where ids.contains(moved[index].id) {
+                moved[index].templateID = template.id
+                moved[index].override = nil
+            }
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) {
+                batch.letters = moved
+                if ids.count == moved.count { templateID = template.id }
+            }
+            withAnimation(.easeOut(duration: 0.2)) { switchingTo = nil }
         }
     }
 

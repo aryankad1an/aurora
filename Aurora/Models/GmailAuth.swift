@@ -121,8 +121,9 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
     ///
     /// A rate limit is neither: Gmail is asking for the sends to slow down, so
     /// it comes back as `rateLimited`, with when to try again if Gmail said, and
-    /// the queue waits rather than giving up (`MailQueue.drain`). So does Gmail
-    /// being briefly unavailable (5xx), which clears the same way.
+    /// the queue waits rather than giving up (`MailQueue.drain`). Gmail being
+    /// briefly unavailable (5xx) is waited out the same way, as `unavailable`:
+    /// it may have taken the mail before failing, so that's checked first.
     ///
     /// Whatever the case, the reason is Google's own sentence, pulled out of the
     /// JSON it arrives in. Kept raw, a failure used to read as just "{".
@@ -142,7 +143,7 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
         case 403:
             return .refused("Gmail stopped sending from your account: \(message)")
         case 500...599:
-            return .rateLimited("Gmail is briefly unavailable (\(message)).",
+            return .unavailable("Gmail is briefly unavailable (\(message)).",
                                 retryAt: retryDate(header: retryAfter, message: message))
         default:
             return .refused("Gmail couldn't take the mail (\(message)). Resume to try again.")
@@ -419,61 +420,6 @@ nonisolated struct GoogleError {
     var isScopeProblem: Bool {
         reasons.contains { $0 == "insufficientPermissions" || $0 == "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }
             || message.localizedCaseInsensitiveContains("insufficient")
-    }
-}
-
-enum GmailAuthError: LocalizedError {
-    case cancelled
-    case invalidResponse
-    case notConnected
-    case insufficientScope
-    /// Google refused the stored refresh token (`invalid_grant`): it was
-    /// revoked, or it expired — an app whose OAuth consent screen is in Testing
-    /// gets tokens that last seven days. Only signing in again fixes it.
-    case sessionExpired
-    /// Gmail refused the account rather than a mail: a sending limit, the API
-    /// disabled, the account blocked from sending, or Gmail down. Every later
-    /// send would be refused too.
-    case refused(String)
-    /// Gmail asked for the sends to slow down (or was briefly unavailable).
-    /// Nothing is wrong with the mail or the account: waiting fixes it.
-    /// `retryAt` is when Gmail said to try again, when it said.
-    case rateLimited(String, retryAt: Date?)
-    case server(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .cancelled: return "Sign-in was cancelled."
-        case .invalidResponse: return "Unexpected response from Google."
-        case .notConnected: return "Gmail isn't signed in on this device. Reconnect Gmail in Settings."
-        case .insufficientScope:
-            return "Reply tracking needs permission to read your mail. Reconnect Gmail in Settings to grant it."
-        case .sessionExpired:
-            return "Your Gmail sign-in has expired. Reconnect Gmail in Settings."
-        case .refused(let message): return message
-        case .rateLimited(let message, _): return "Gmail asked to slow down: \(message)"
-        case .server(let message): return message
-        }
-    }
-
-    /// Whether the fix is signing in to Gmail again — the UI answers these with
-    /// a Reconnect prompt rather than an error. `notConnected` counts: it only
-    /// reaches the UI when the app still shows an account but its token is gone,
-    /// and Profile then has no Connect button to point at — only Reconnect.
-    var needsReconnect: Bool {
-        switch self {
-        case .notConnected, .insufficientScope, .sessionExpired: true
-        default: false
-        }
-    }
-
-    /// Whether every later request would fail the same way, so a run of them
-    /// (a send batch, a reply sync) should stop rather than fail one by one.
-    var endsRun: Bool {
-        switch self {
-        case .notConnected, .insufficientScope, .sessionExpired, .refused, .rateLimited: true
-        default: false
-        }
     }
 }
 

@@ -219,9 +219,10 @@ struct RootView: View {
         // per address, once.
         Task { await jobStore.lookUpNames() }
 
-        // Full, not delta: the sync state may be left over from another account,
-        // and a delta against its timestamp would skip this account's threads.
-        await jobStore.syncReplies(using: replySync, forceFullCheck: true)
+        // Only mail since this account's last check (its `ReplyCheckpoint`, kept
+        // per account, so another account's can't stand in for it); an
+        // account's first check reads it all.
+        await jobStore.syncReplies(using: replySync)
     }
 
     /// Run one launch load and mark it done: the rule advances a third, and the
@@ -256,6 +257,9 @@ struct RootView: View {
         }
         mailQueue.onRecord = { records in
             await jobStore.markContactsSent(records)
+        }
+        mailQueue.onChange = { queue in
+            SendLiveActivity.shared.sync(with: queue)
         }
         replySync.reader = { path, query in
             try await gmailAuth.gmailGET(path: path, query: query)
@@ -293,8 +297,18 @@ struct RootView: View {
                 if requested { selectedTab = .activity }
             }
             .onOpenURL { url in
-                guard url.scheme == "aurora", url.host() == "activity" else { return }
-                mailQueue.isOpenRequested = true
+                guard url.scheme == "aurora" else { return }
+                // The Live Activity's Send Now on a scheduled batch whose time
+                // has come: aurora://queue/send/<batch id>. Only ever a batch
+                // already scheduled, so a link can't start anything else.
+                let parts = url.pathComponents.filter { $0 != "/" }
+                if url.host() == "queue", parts.count == 2, parts[0] == "send",
+                   let id = UUID(uuidString: parts[1]), mailQueue.batch(id)?.scheduledFor != nil {
+                    mailQueue.sendNow(id)
+                    mailQueue.isOpenRequested = true
+                } else if url.host() == "activity" {
+                    mailQueue.isOpenRequested = true
+                }
             }
             .onChange(of: notifications.openedBatchID) { openTappedBatch() }
             // The shelf appearing pushes the tab bar up — a real object arriving on

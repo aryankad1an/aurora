@@ -128,6 +128,10 @@ final class ReplySync {
     /// after that brings the contact back.
     private var dismissedBounces: [Contact.ID: Date] = [:]
     private var bounceFile: JSONFile<BounceLog>?
+    /// Up to when this account's mail has been read: the next check reads only
+    /// what has come since (see `ReplyCheckpoint`). Saved per account.
+    private(set) var checkpoint = ReplyCheckpoint()
+    private var checkpointFile: JSONFile<ReplyCheckpoint>?
 
     /// Send ids where a Sent message search was attempted but returned nothing.
     /// Kept in memory so subsequent syncs don't re-query Gmail Sent repeatedly
@@ -144,9 +148,6 @@ final class ReplySync {
     nonisolated private static let checkWindow: TimeInterval = 120 * 24 * 60 * 60
     nonisolated private static let recoveryWindow: TimeInterval = 10 * 60
     nonisolated private static let driftWindow: TimeInterval = 24 * 60 * 60
-    /// How recently a sync must have run for the next one to read only threads
-    /// with new inbound mail instead of every open thread.
-    nonisolated private static let deltaWindow: TimeInterval = 7 * 24 * 60 * 60
     nonisolated private static let concurrency = 5
 
     // MARK: - Bounces
@@ -159,6 +160,10 @@ final class ReplySync {
         bounces = Dictionary(log.bounces.map { ($0.contactID, $0) }, uniquingKeysWith: { $0.at > $1.at ? $0 : $1 })
         seenBounceMessages = Set(log.seenMessageIDs)
         dismissedBounces = log.dismissed
+        let checkpointFile = JSONFile<ReplyCheckpoint>(name: "reply-checkpoint-\(account).json")
+        self.checkpointFile = checkpointFile
+        checkpoint = checkpointFile.load() ?? ReplyCheckpoint()
+        lastSyncedAt = checkpoint.checkedThrough
     }
 
     /// "Not a bounce": stop flagging this contact until a newer notice arrives.
@@ -233,6 +238,9 @@ final class ReplySync {
         }
 
         var sends = sends
+        let startedAt = Date.now
+        // Mail before this has been read already, unless asked to read it all.
+        let since = checkpoint.readFrom(fullCheck: forceFullCheck)
         let lookups = MailboxNames.shared.pending(names)
         progress = Progress(steps: lookups.isEmpty ? 5 : 6)
         do {
@@ -264,7 +272,7 @@ final class ReplySync {
             let checked = try await checkForReplies(in: sends,
                                                     excludingContactIDs: excludingContactIDs,
                                                     alwaysChecking: Set(recovered.threadIDs.keys),
-                                                    forceFullCheck: forceFullCheck)
+                                                    since: since)
             outcome.replies = checked.replies
             outcome.failed += checked.failed
             outcome.read += checked.read
@@ -279,14 +287,14 @@ final class ReplySync {
 
             // Failure notices that never joined the mail's thread.
             beginStep(4, "Looking for bounced mail")
-            let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact)
+            let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact, since: since)
             outcome.bounced += scanned.found
             outcome.failed += scanned.failed
             outcome.read += scanned.read
 
             // "No longer in service" answers from their side, wherever they are.
             beginStep(5, "Looking for addresses no longer in service")
-            let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact)
+            let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact, since: since)
             outcome.bounced += dead.found
             outcome.failed += dead.failed
             outcome.read += dead.read
@@ -303,6 +311,10 @@ final class ReplySync {
             }
             // Contacts already ruled out are dealt with.
             for id in excludingContactIDs { bounces[id] = nil }
+            // Everything Gmail had when this check began has now been read —
+            // if every read worked (`ReplyCheckpoint.complete`).
+            checkpoint.complete(startedAt: startedAt, failedReads: outcome.failed)
+            checkpointFile?.save(checkpoint)
             saveBounces()
             // A run where every request failed (offline, Gmail down) read
             // nothing, and stamping it "Checked just now" would say the silence
@@ -609,7 +621,7 @@ final class ReplySync {
     private func checkForReplies(in sends: [MailSend],
                                  excludingContactIDs: Set<String>,
                                  alwaysChecking: Set<String>,
-                                 forceFullCheck: Bool) async throws -> Checked {
+                                 since: Date?) async throws -> Checked {
         guard let reader else { throw GmailAuthError.notConnected }
         let cutoff = Date().addingTimeInterval(-Self.checkWindow)
         let activeSends = sends.filter {
@@ -620,17 +632,13 @@ final class ReplySync {
         }
         guard !activeSends.isEmpty else { return Checked() }
 
-        // Delta check: after a recent sync, and unless the user asked for a full
-        // check, read only threads that have had inbound mail since — with a
-        // quarter-hour overlap so nothing falls between two syncs. If that lookup
-        // fails or overflows, fall back to reading every open thread.
+        // Only threads that have had inbound mail since the last check (`since`,
+        // which already carries the overlap). If that lookup fails or
+        // overflows, or there's no last check, read every open thread.
         var result = Checked()
         let targets: [MailSend]
-        if !forceFullCheck,
-           let lastSync = lastSyncedAt,
-           Date().timeIntervalSince(lastSync) < Self.deltaWindow,
-           let incoming = try? await Self.findIncomingThreadIDs(after: lastSync.addingTimeInterval(-15 * 60),
-                                                                reader: reader) {
+        if let since,
+           let incoming = try? await Self.findIncomingThreadIDs(after: since, reader: reader) {
             result.wasFullCheck = false
             targets = activeSends.filter { send in
                 alwaysChecking.contains(send.id) || send.gmailThreadID.map(incoming.contains) == true
@@ -772,8 +780,8 @@ final class ReplySync {
     /// matched by address instead — and then only against a contact who was
     /// mailed before it arrived: an address that bounced for someone else,
     /// months ago, says nothing about this send.
-    private func scanInbox(sends: [MailSend],
-                           emailByContact: [String: String]) async throws -> (found: Int, failed: Int, read: Int) {
+    private func scanInbox(sends: [MailSend], emailByContact: [String: String],
+                           since: Date?) async throws -> (found: Int, failed: Int, read: Int) {
         guard let reader else { throw GmailAuthError.notConnected }
         var contactsByAddress: [String: [String]] = [:]
         for (contactID, address) in emailByContact {
@@ -788,7 +796,7 @@ final class ReplySync {
 
         let ids: [String]
         do {
-            ids = try await Self.listBounceNotices(reader: reader)
+            ids = try await Self.listBounceNotices(matching: ReplyCheckpoint.searchTerm(after: since), reader: reader)
         } catch let error as GmailAuthError where error.endsRun {
             throw error
         } catch {
@@ -853,15 +861,16 @@ final class ReplySync {
     /// the dead mailbox itself, a colleague, or the company's `noreply@`. Each
     /// is matched to the person it's about (`BounceParsing.matchDeadAddressNotice`)
     /// and kept as their bounce. Read once each, like failure notices.
-    private func scanDeadAddressNotices(sends: [MailSend],
-                                        emailByContact: [String: String]) async throws -> (found: Int, failed: Int, read: Int) {
+    private func scanDeadAddressNotices(sends: [MailSend], emailByContact: [String: String],
+                                        since: Date?) async throws -> (found: Int, failed: Int, read: Int) {
         guard let reader else { throw GmailAuthError.notConnected }
         let mailed = Self.mailed(sends, emailByContact: emailByContact)
         guard !mailed.isEmpty else { return (0, 0, 0) }
 
         let ids: [String]
         do {
-            ids = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery, limit: 100, reader: reader)
+            ids = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery, matching: ReplyCheckpoint.searchTerm(after: since),
+                                                   limit: 100, reader: reader)
         } catch let error as GmailAuthError where error.endsRun {
             throw error
         } catch {

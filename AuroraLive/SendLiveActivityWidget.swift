@@ -3,79 +3,84 @@ import SwiftUI
 import WidgetKit
 
 /// The mail queue on the Lock Screen and in the Dynamic Island: what's
-/// sending, how far it's got, and — when Gmail has asked the run to slow
-/// down — a countdown to when it carries on. Tapping it opens Activity's
-/// Queued lane.
+/// sending and to whom, how far it's got, and — when the run is waiting on
+/// Gmail or on a connection — a countdown to when it carries on. A scheduled
+/// batch shows when it goes; once its time has come, a Send Now button.
+/// Tapping anywhere else opens Activity's Queued lane.
 struct SendLiveActivityWidget: Widget {
     static let openURL = URL(string: "aurora://activity/queued")
 
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: SendActivityAttributes.self) { context in
-            LockScreenView(attributes: context.attributes, state: context.state)
-                .activityBackgroundTint(Color.black.opacity(0.78))
+            LockScreenView(attributes: context.attributes, state: context.state, isStale: context.isStale)
+                .activityBackgroundTint(Color.black.opacity(0.8))
                 .activitySystemActionForegroundColor(.white)
                 .widgetURL(Self.openURL)
         } dynamicIsland: { context in
             let style = Style(context.attributes)
             let state = context.state
+            let ready = Phrase.isReady(state, isStale: context.isStale)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Glyph(phase: state.phase, mark: context.attributes.mark, style: style)
+                    Tile(phase: state.phase, style: style, size: 40)
                         .padding(.leading, 4)
+                        .padding(.top, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Count(state: state, style: style)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(1)
-                        .fixedSize()
+                    Tally(state: state, isStale: context.isStale)
                         .padding(.trailing, 4)
+                        .padding(.top, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    // What's happening over the batch's name, each on its own
-                    // line, so a long name never pushes the count.
-                    VStack(spacing: 1) {
-                        Text(Headline.phase(state))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(style.tint(state.phase))
-                        Text(state.title)
-                            .font(.headline)
-                            .foregroundStyle(.white)
+                    // What's happening, then which batch — each on its own line,
+                    // so a long batch name never pushes the count.
+                    VStack(alignment: .leading, spacing: 3) {
+                        Headline(state: state, style: style, isStale: context.isStale)
+                            .font(.subheadline.weight(.semibold))
+                        BatchName(title: state.title)
                     }
-                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    // The bar, then who it's to: the count above already says
-                    // how many have gone, and the island has room for two
-                    // lines under the bar, not three.
-                    VStack(alignment: .leading, spacing: 8) {
-                        Meter(state: state, style: style)
-                        if state.recipient != nil {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if state.phase == .scheduled {
+                            ScheduledDetail(state: state, style: style, ready: ready, compact: true)
+                        } else if state.recipient != nil {
+                            // Who it's to, then the bar: the count above says
+                            // how many have gone, and the island has room for
+                            // two lines under the headline, not three.
                             Recipient(state: state, style: style, compact: true)
+                            Meter(state: state, style: style)
                         } else {
-                            Detail(state: state, style: style)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Meter(state: state, style: style)
+                                Legend(state: state, style: style)
+                            }
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 4)
+                    .padding(.top, 8)
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
                 }
             } compactLeading: {
-                Glyph(phase: state.phase, mark: context.attributes.mark, style: style, size: 14)
+                Glyph(phase: state.phase, style: style, size: 13)
+                    .padding(.leading, 4)
             } compactTrailing: {
-                if state.phase == .waiting, let until = state.resumesAt, until > .now {
-                    Text(timerInterval: Date.now...until, countsDown: true)
-                        .monospacedDigit()
-                        .foregroundStyle(style.attention)
-                        .frame(maxWidth: 44)
-                } else {
-                    Count(state: state, style: style)
-                }
+                CompactTrailing(state: state, style: style, ready: ready)
+                    .padding(.trailing, 4)
             } minimal: {
-                Gauge(value: state.fraction) {
-                    Glyph(phase: state.phase, mark: context.attributes.mark, style: style, size: 10)
+                if state.phase == .scheduled {
+                    Glyph(phase: state.phase, style: style, size: 12)
+                } else {
+                    Gauge(value: state.fraction) {
+                        Glyph(phase: state.phase, style: style, size: 10)
+                    }
+                    .gaugeStyle(.accessoryCircularCapacity)
+                    .tint(style.accent)
                 }
-                .gaugeStyle(.accessoryCircularCapacity)
-                .tint(style.accent)
             }
+            .contentMargins(.all, 14, for: .expanded)
             .widgetURL(Self.openURL)
             .keylineTint(style.accent)
         }
@@ -96,7 +101,7 @@ private struct Style {
 
     func tint(_ phase: SendActivityAttributes.ContentState.Phase) -> Color {
         switch phase {
-        case .sending, .pausing: accent
+        case .sending, .pausing, .scheduled: accent
         case .waiting, .paused: attention
         case .done: reply
         }
@@ -109,14 +114,82 @@ private extension Color {
     }
 }
 
-private enum Headline {
-    static func phase(_ state: SendActivityAttributes.ContentState) -> String {
-        switch state.phase {
-        case .sending: "Sending"
-        case .waiting: "Waiting on Gmail"
-        case .pausing: "Pausing"
-        case .paused: "Paused"
-        case .done: state.failed == 0 ? "All sent" : "Done"
+private enum Phrase {
+    /// A scheduled batch whose time has come: the activity went stale at it.
+    static func isReady(_ state: SendActivityAttributes.ContentState, isStale: Bool) -> Bool {
+        guard state.phase == .scheduled else { return false }
+        return isStale || (state.startsAt.map { $0 <= .now } ?? true)
+    }
+
+    static func sendNowURL(_ state: SendActivityAttributes.ContentState) -> URL? {
+        state.batchID.flatMap { URL(string: "aurora://queue/send/\($0)") }
+    }
+}
+
+/// What's happening, in full, in the phase's colour: "Sending mail 4 of 11",
+/// "Connection lost · retrying in 0:05", "Scheduled for 7:00 PM".
+private struct Headline: View {
+    let state: SendActivityAttributes.ContentState
+    let style: Style
+    let isStale: Bool
+
+    var body: some View {
+        Group {
+            switch state.phase {
+            case .sending:
+                Text("Sending mail \(min(state.done + 1, state.total)) of \(state.total)")
+            case .waiting:
+                if let until = state.resumesAt, until > .now {
+                    Text("\(state.note ?? "Waiting") · retrying in \(Text(timerInterval: Date.now...until, countsDown: true))")
+                } else {
+                    Text("\(state.note ?? "Waiting") · retrying now")
+                }
+            case .pausing:
+                Text("Pausing after this mail")
+            case .paused:
+                Text(state.note.map { "Paused · \($0)" } ?? "Paused")
+            case .done:
+                Text(state.failed == 0 ? "All \(state.sent) sent" : "Finished · \(state.failed) failed")
+            case .scheduled:
+                if Phrase.isReady(state, isStale: isStale) {
+                    Text("Ready to send")
+                } else if let at = state.startsAt {
+                    Text("Scheduled for \(at, style: .time)")
+                } else {
+                    Text("Scheduled")
+                }
+            }
+        }
+        .monospacedDigit()
+        .foregroundStyle(style.tint(state.phase))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+}
+
+/// The batch's name, marked as one — "Not mailed yet" is the name of the
+/// group it was picked by, not a status.
+private struct BatchName: View {
+    let title: String
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: "tray.full.fill")
+        }
+        .labelStyle(Tight())
+        .font(.caption)
+        .foregroundStyle(.white.opacity(0.62))
+        .lineLimit(1)
+    }
+
+    private struct Tight: LabelStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            HStack(spacing: 4) {
+                configuration.icon.font(.caption2)
+                configuration.title
+            }
         }
     }
 }
@@ -127,76 +200,85 @@ private enum Headline {
 private struct LockScreenView: View {
     let attributes: SendActivityAttributes
     let state: SendActivityAttributes.ContentState
+    let isStale: Bool
 
     var body: some View {
         let style = Style(attributes)
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Glyph(phase: state.phase, mark: attributes.mark, style: style, size: 18)
-                    .frame(width: 40, height: 40)
-                    .background(style.tint(state.phase).opacity(0.2), in: .rect(cornerRadius: 11, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Status(state: state, style: style)
-                    Text(state.title)
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
+        let ready = Phrase.isReady(state, isStale: isStale)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
+                Tile(phase: state.phase, style: style, size: 44)
+                VStack(alignment: .leading, spacing: 3) {
+                    Headline(state: state, style: style, isStale: isStale)
+                        .font(.subheadline.weight(.semibold))
+                    BatchName(title: state.title)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Count(state: state, style: style)
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(1)
-                    .fixedSize()
+                Tally(state: state, isStale: isStale)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Meter(state: state, style: style)
-                Legend(state: state, style: style)
-            }
-
-            if state.recipient != nil {
-                Recipient(state: state, style: style, compact: false)
-            } else if state.phase != .done || state.note != nil {
-                Detail(state: state, style: style)
+            if state.phase == .scheduled {
+                ScheduledDetail(state: state, style: style, ready: ready, compact: false)
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    Meter(state: state, style: style)
+                    Legend(state: state, style: style)
+                }
+                if state.recipient != nil {
+                    Recipient(state: state, style: style, compact: false)
+                }
             }
         }
-        .padding(16)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
     }
 }
 
-/// What's happening, in the phase's colour: "Sending · mail 3 of 11",
-/// "Waiting on Gmail · retry in 0:20", "Paused · carries on at 7:00 PM".
-private struct Status: View {
+/// A scheduled batch: how many mails, to where, and when — or, once it's
+/// time, the button that sends it.
+private struct ScheduledDetail: View {
     let state: SendActivityAttributes.ContentState
     let style: Style
+    let ready: Bool
+    let compact: Bool
 
     var body: some View {
-        Group {
-            switch state.phase {
-            case .sending:
-                Text("Sending · mail \(min(state.done + 1, state.total)) of \(state.total)")
-            case .waiting:
-                if let until = state.resumesAt, until > .now {
-                    Text("Waiting on Gmail · retry in \(Text(timerInterval: Date.now...until, countsDown: true))")
-                } else {
-                    Text("Waiting on Gmail · retrying")
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(state.total) \(state.total == 1 ? "mail" : "mails")\(state.company.map { " · \($0)" } ?? "")")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                if ready {
+                    Text("Its time has come")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                } else if let at = state.startsAt, at > .now {
+                    Text("Goes in \(Text(timerInterval: Date.now...at, countsDown: true))")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.62))
                 }
-            case .pausing:
-                Text("Pausing after this mail")
-            case .paused:
-                if let until = state.resumesAt {
-                    Text("Paused · carries on at \(until, style: .time)")
-                } else {
-                    Text("Paused")
+            }
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if ready, let url = Phrase.sendNowURL(state) {
+                Link(destination: url) {
+                    Label("Send Now", systemImage: "paperplane.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(style.accent, in: Capsule())
                 }
-            case .done:
-                Text(state.failed == 0 ? "All sent" : "Finished · \(state.failed) failed")
             }
         }
-        .font(.caption.weight(.semibold))
-        .monospacedDigit()
-        .foregroundStyle(style.tint(state.phase))
-        .lineLimit(1)
+        .padding(compact ? 0 : 10)
+        .background {
+            if !compact {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.07))
+            }
+        }
     }
 }
 
@@ -212,6 +294,7 @@ private struct Legend: View {
             if state.toGo > 0 { item("\(state.toGo) to go", .white.opacity(0.35)) }
         }
         .font(.caption)
+        .monospacedDigit()
         .foregroundStyle(.white.opacity(0.72))
         .lineLimit(1)
     }
@@ -233,17 +316,17 @@ private struct Recipient: View {
     let compact: Bool
 
     var body: some View {
-        let label = state.phase == .waiting ? "Next" : "To"
+        let label = state.phase == .sending || state.phase == .pausing ? "To" : "Next"
         let who = [state.recipient, state.company].compactMap { $0 }.joined(separator: " · ")
         HStack(spacing: 10) {
             if !compact {
-                Image(systemName: state.phase == .waiting ? "clock.fill" : "envelope.fill")
+                Image(systemName: label == "To" ? "envelope.fill" : "clock.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(style.tint(state.phase))
                     .frame(width: 28, height: 28)
                     .background(.white.opacity(0.1), in: Circle())
             }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("\(Text(label).foregroundStyle(.white.opacity(0.55))) \(who)")
                     .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
                     .foregroundStyle(.white)
@@ -266,10 +349,22 @@ private struct Recipient: View {
     }
 }
 
-/// The mark for what's happening: the theme's own while sending.
+/// The phase's glyph on a tinted rounded square.
+private struct Tile: View {
+    let phase: SendActivityAttributes.ContentState.Phase
+    let style: Style
+    let size: CGFloat
+
+    var body: some View {
+        Glyph(phase: phase, style: style, size: size * 0.42)
+            .frame(width: size, height: size)
+            .background(style.tint(phase).opacity(0.2), in: .rect(cornerRadius: size * 0.28, style: .continuous))
+    }
+}
+
+/// The mark for what's happening.
 private struct Glyph: View {
     let phase: SendActivityAttributes.ContentState.Phase
-    let mark: String
     let style: Style
     var size: CGFloat = 20
 
@@ -282,22 +377,73 @@ private struct Glyph: View {
     private var symbol: String {
         switch phase {
         case .sending: "paperplane.fill"
-        case .waiting: "hourglass"
+        case .waiting: "arrow.clockwise"
         case .pausing, .paused: "pause.fill"
         case .done: "checkmark"
+        case .scheduled: "clock.fill"
         }
     }
 }
 
-/// "3/11", serif figures as the app sets them.
-private struct Count: View {
+/// "3/11" over "sent", serif figures as the app sets them — or, for a
+/// scheduled batch, how many mails.
+private struct Tally: View {
     let state: SendActivityAttributes.ContentState
-    let style: Style
+    let isStale: Bool
 
     var body: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Text(state.phase == .scheduled ? "\(state.total)" : "\(state.done)/\(state.total)")
+                .font(.title3.weight(.semibold))
+                .fontDesign(.serif)
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .contentTransition(.numericText(value: Double(state.done)))
+            Text(state.phase == .scheduled ? (state.total == 1 ? "mail" : "mails") : "done")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+/// The compact island's right side: the count, a countdown while waiting,
+/// or a scheduled batch's time.
+private struct CompactTrailing: View {
+    let state: SendActivityAttributes.ContentState
+    let style: Style
+    let ready: Bool
+
+    var body: some View {
+        Group {
+            switch state.phase {
+            case .waiting:
+                if let until = state.resumesAt, until > .now {
+                    Text(timerInterval: Date.now...until, countsDown: true)
+                        .foregroundStyle(style.attention)
+                        .frame(maxWidth: 44)
+                } else {
+                    count
+                }
+            case .scheduled:
+                if ready {
+                    Text("Send").foregroundStyle(style.accent)
+                } else if let at = state.startsAt {
+                    Text(at, style: .time).foregroundStyle(style.accent)
+                }
+            default:
+                count
+            }
+        }
+        .font(.caption.weight(.semibold))
+        .monospacedDigit()
+        .lineLimit(1)
+    }
+
+    private var count: some View {
         Text("\(state.done)/\(state.total)")
             .fontDesign(.serif)
-            .monospacedDigit()
             .foregroundStyle(.white)
             .contentTransition(.numericText(value: Double(state.done)))
     }
@@ -320,39 +466,5 @@ private struct Meter: View {
             .clipShape(.capsule)
         }
         .frame(height: 6)
-    }
-}
-
-/// The second line: who it's going to, the countdown, or why it stopped.
-private struct Detail: View {
-    let state: SendActivityAttributes.ContentState
-    let style: Style
-
-    var body: some View {
-        Group {
-            switch state.phase {
-            case .sending:
-                Text(state.recipient.map { "To \($0)" } ?? "\(state.total - state.done) to go")
-            case .waiting:
-                if let until = state.resumesAt, until > .now {
-                    Text("Gmail asked to slow down · trying again in \(Text(timerInterval: Date.now...until, countsDown: true))")
-                } else {
-                    Text("Gmail asked to slow down · trying again")
-                }
-            case .pausing:
-                Text("Finishing the mail on its way")
-            case .paused:
-                if let until = state.resumesAt {
-                    Text("Carries on at \(until, style: .time)")
-                } else {
-                    Text(state.note ?? "\(state.total - state.done) to go")
-                }
-            case .done:
-                Text(state.failed == 0 ? "\(state.sent) sent" : "\(state.sent) sent · \(state.failed) failed")
-            }
-        }
-        .font(.subheadline)
-        .foregroundStyle(.white.opacity(0.72))
-        .lineLimit(1)
     }
 }

@@ -32,6 +32,11 @@ struct MailBatch: Codable, Identifiable {
     /// stopped the batch with a known (or a sensible) time to try again.
     /// Cleared by anything the user does to the batch.
     var resumeAt: Date?
+    /// How many times in a row the queue has retried this batch by itself after
+    /// a dropped connection or a Gmail failure. Cleared by a mail going out.
+    var retries: Int?
+    /// Why it stopped, in a few words, for the Live Activity: "Connection lost".
+    var stopNote: String?
     var fromName: String
     var templates: [MailTemplate.ID: TemplateSnapshot]
     var mails: [QueuedMail]
@@ -141,6 +146,12 @@ struct QueuedMail: Codable, Identifiable {
 
         var isFailed: Bool {
             if case .failed = self { return true }
+            return false
+        }
+
+        /// Delivered, but not in the send history yet.
+        var isUnrecorded: Bool {
+            if case .sent(_, _, _, false) = self { return true }
             return false
         }
 

@@ -22,7 +22,7 @@ struct SendChooserView: View {
                         AudienceCard(audience: audience,
                                      picks: audience.picks(in: companies)) { recipients in
                             Haptics.press()
-                            onChoose(SendBatch(title: audience.title, recipients: recipients))
+                            onChoose(SendBatch(title: audience.batchTitle, recipients: recipients))
                         }
                     }
                 }
@@ -126,6 +126,18 @@ enum SendAudience: CaseIterable, Identifiable {
         case .fresh: "Not mailed yet"
         case .quiet: "Quiet for a month"
         case .followUp: "Follow up the silent"
+        case .everyone: "Everyone"
+        }
+    }
+
+    /// What a batch picked by this rule is called — on Compose, the queue and
+    /// the Live Activity. Named for what it is, not for the rule: "Not mailed
+    /// yet" over a batch that's mailing them read like a status.
+    var batchTitle: String {
+        switch self {
+        case .fresh: "First outreach"
+        case .quiet: "Quiet contacts"
+        case .followUp: "Follow-ups"
         case .everyone: "Everyone"
         }
     }

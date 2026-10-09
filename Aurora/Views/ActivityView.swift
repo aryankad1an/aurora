@@ -204,7 +204,7 @@ struct ActivityView: View {
     /// Ask Gmail what came back, then reload.
     private func checkForReplies() async {
         await jobStore.load()
-        await jobStore.syncReplies(using: replySync, forceFullCheck: true)
+        await jobStore.syncReplies(using: replySync)
     }
 
     private var emptyState: some View {
