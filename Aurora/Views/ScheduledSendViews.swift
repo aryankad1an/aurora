@@ -180,7 +180,7 @@ struct DueBatchSheet: View {
                     .foregroundStyle(.clay)
                     .symbolEffect(.bounce, options: .nonRepeating)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(batch.title)
+                    Text(batch.companiesLabel)
                         .font(.display(20))
                         .foregroundStyle(.ink)
                         .lineLimit(2)

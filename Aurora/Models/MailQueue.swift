@@ -401,6 +401,15 @@ final class MailQueue {
         dropEmptyBatches()
     }
 
+    /// Take one company's part out of a finished batch: what was sent to them
+    /// is written to the history first, as `remove` does for a whole batch.
+    func remove(company: String, from id: UUID) {
+        guard runningBatchID != id, let batch = batch(id), batch.isFinished else { return }
+        recordBeforeForgetting([batch.part(for: company)])
+        update(id) { $0.mails.removeAll { $0.company == company } }
+        dropEmptyBatches()
+    }
+
     /// Every failed mail, out of every batch not sending right now.
     func clearFailed() {
         for batch in batches where batch.failed > 0 && runningBatchID != batch.id {

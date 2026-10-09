@@ -29,29 +29,40 @@ struct ReplyCheckpointTests {
         var checkpoint = ReplyCheckpoint()
         expect(checkpoint.readFrom(fullCheck: false), nil, "an account's first check reads every thread")
         expect(checkpoint.noticesReadFrom(fullCheck: false), nil, "…and searches every notice")
-        checkpoint.complete(startedAt: noon, failedThreadIDs: [], failedNotices: 0)
+        checkpoint.complete(startedAt: noon, openThreadIDs: ["t1", "t2"], failedThreadIDs: [], failedNotices: 0)
         expect(checkpoint.checkedThrough, noon, "a clean check moves the checkpoint to when it began")
         expect(checkpoint.readFrom(fullCheck: false), noon.addingTimeInterval(-overlap),
                "the next reads from then, less the overlap")
+        expect(checkpoint.coveredThreadIDs, ["t1", "t2"], "…and knows which threads it covered")
         expect(checkpoint.noticesReadFrom(fullCheck: false), noon.addingTimeInterval(-overlap), "notices too")
         expect(checkpoint.readFrom(fullCheck: true), nil, "asked to, it reads everything")
 
         print("A few reads failing doesn't send the next check back to the start")
         let hour = noon.addingTimeInterval(3600)
         var failed = checkpoint
-        failed.complete(startedAt: hour, failedThreadIDs: ["t1", "t2"], failedNotices: 0)
+        failed.complete(startedAt: hour, openThreadIDs: ["t1", "t2"], failedThreadIDs: ["t1", "t2"], failedNotices: 0)
         expect(failed.checkedThrough, hour, "threads move on even when some couldn't be read")
         expect(failed.retryThreadIDs, ["t1", "t2"], "…keeping those to read again next time")
-        failed.complete(startedAt: hour.addingTimeInterval(3600), failedThreadIDs: [], failedNotices: 0)
+        failed.complete(startedAt: hour.addingTimeInterval(3600), openThreadIDs: ["t1", "t2"], failedThreadIDs: [], failedNotices: 0)
         expect(failed.retryThreadIDs, [], "read cleanly, they're dropped")
         var noticeFailed = checkpoint
-        noticeFailed.complete(startedAt: hour, failedThreadIDs: [], failedNotices: 3)
+        noticeFailed.complete(startedAt: hour, openThreadIDs: ["t1", "t2"], failedThreadIDs: [], failedNotices: 3)
         expect(noticeFailed.checkedThrough, hour, "an unread notice doesn't hold threads back")
         expect(noticeFailed.noticesCheckedThrough, noon, "…but notices are searched from where they were")
         var earlier = checkpoint
-        earlier.complete(startedAt: noon.addingTimeInterval(-3600), failedThreadIDs: ["t9"], failedNotices: 0)
+        earlier.complete(startedAt: noon.addingTimeInterval(-3600), openThreadIDs: ["t1", "t2"], failedThreadIDs: ["t9"], failedNotices: 0)
         expect(earlier.checkedThrough, noon, "it never moves back")
         expect(earlier.retryThreadIDs, [], "…nor does an older check's retry list replace a newer one's")
+
+        print("Notices for sends new to this phone")
+        var notices = ReplyCheckpoint()
+        notices.complete(startedAt: hour, openThreadIDs: ["t1"], failedThreadIDs: [], failedNotices: 0)
+        expect(notices.noticesReadFrom(fullCheck: false), hour.addingTimeInterval(-overlap), "normally, from the last check")
+        let yesterday = hour.addingTimeInterval(-86_400)
+        expect(notices.noticesReadFrom(fullCheck: false, newSends: [yesterday]), yesterday.addingTimeInterval(-overlap),
+               "a send new to this phone pulls the search back to when it was sent")
+        expect(notices.noticesReadFrom(fullCheck: false, newSends: [hour.addingTimeInterval(60)]),
+               hour.addingTimeInterval(-overlap), "…but one sent since doesn't push it forward")
 
         print("A checkpoint saved before retries existed")
         let old = #"{"checkedThrough":781692800}"#.data(using: .utf8)!
@@ -59,6 +70,7 @@ struct ReplyCheckpointTests {
         expect(upgraded?.checkedThrough, Date(timeIntervalSinceReferenceDate: 781692800), "keeps its time")
         expect(upgraded?.noticesCheckedThrough, Date(timeIntervalSinceReferenceDate: 781692800), "…for notices too")
         expect(upgraded?.retryThreadIDs, [], "…with nothing to retry")
+        expect(upgraded?.readFrom(fullCheck: false), nil, "…but searches the whole window, not knowing what it covered")
 
         print("Searching Gmail")
         expect(ReplyCheckpoint.searchTerm(after: nil), nil, "no checkpoint, no limit")

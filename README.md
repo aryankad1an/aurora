@@ -195,7 +195,11 @@ written when the app closes is written the next time it opens.
 
 The shelf above the tab bar shows what the queue is doing (sending, paused,
 due, scheduled, or the last result). Tapping it opens Activity's Queued lane,
-where every batch is listed by what it's doing. There each batch can be
+where every batch is listed by what it's doing, under the companies it mails
+("Northwind Labs and 3 more"), not the rule that picked them. Under Finished,
+a batch that went to several companies is listed once per company, each opening
+to just that company's mails, and removing one entry removes only that company's
+record. Each batch can be
 paused, resumed, rescheduled, retried or removed (Activity → ⋯ → Clear Queue
 empties it). Each batch lists the saved copies of its templates (flagged if the
 template has been edited or deleted in Templates since), each person's row says
@@ -341,13 +345,30 @@ Matching by thread instead of by sender address matters: replies often come
 from a colleague or an applicant-tracking system, which keep the thread but not
 the address.
 
-A check never reads every sent mail. It first searches Gmail once for mail
-from anyone else since the last check (`after:<time> -from:me`, paged, up to
-5,000 messages), and reads only the open threads that search turns up. Every
-check works this way: on launch, on returning to the app, after reconnecting
-Gmail, and when you pull to refresh. An account's first check searches the
-last 120 days, the window sends are checked for. Only when that search fails
-or runs past 5,000 messages does a check read every open thread.
+A check doesn't read every sent mail. It first searches Gmail once for mail
+from anyone else since the last check (`after:<time> -from:me`, Spam and Trash
+included, paged, up to 5,000 messages), and reads only the open threads that
+search turns up. Every check works this way: on launch, on returning to the
+app, after reconnecting Gmail, and when you pull to refresh. An account's first
+check, and the first after a reinstall, searches the last 120 days, the window
+sends are checked for. Only when that search fails or runs past 5,000 messages
+does a check read every open thread. **Check Everything** in the Status sheet
+does a hard check: every open thread read in full, and notices searched across
+the whole window.
+
+Nothing is missed when the phone's picture changes between checks. The
+checkpoint remembers which open threads it covered. A thread it didn't (a mail
+sent from another device, a contact marked valid again) is read in full,
+whatever the search says, and the notice searches reach back to when it was
+sent. A failure notice that names no send the phone knows yet is left unread,
+so a send learnt of later can still claim it. Signing out and in keeps each
+account's checkpoint apart, and a checkpoint saved by an older version, which
+doesn't know what it covered, makes the next check search the whole window.
+`Tests/ReplyCheckCoverageTests.swift` checks this against a model mailbox: named
+cases (late sends, a contact invalid then valid, reinstall, another account,
+an old checkpoint, failed searches and reads) and 2,000 random histories mixing
+all of them. One clean check afterwards always has every reply, while reading
+about an eighth of the threads a read-everything check would.
 
 "Since the last check" is a checkpoint saved on the phone per account
 (`ReplyCheckpoint`, in `reply-checkpoint-<account>.json`): the time the last
@@ -394,6 +415,10 @@ out. Anything that couldn't be read is listed under its step with the reason
 ("3 couldn't be read: Connection dropped"), and a check that stopped says why.
 Only the latest check is kept (`ReplyCheckLog`): once a new one finishes, it
 replaces the one before.
+
+<p align="center">
+  <img src="docs/screenshots/status.png" alt="The Status timeline during a check" width="300">
+</p>
 
 Gmail lets each user spend about 250 quota units a second, and reading a
 thread costs 10. Read five at a time as fast as they'd go, a full check of
@@ -568,8 +593,8 @@ Conventions the code follows:
 
 `Tests/` holds self-contained Swift programs that run without Xcode. Most carry
 their own copies of the logic under test; the bounce, greeting, name-lookup,
-mail-queue, reply-checkpoint and Gmail read-policy tests compile against the
-app's own files.
+mail-queue, reply-checkpoint, reply-coverage and Gmail read-policy tests
+compile against the app's own files.
 
 ```bash
 swiftc Aurora/Models/BounceParsing.swift Tests/BounceParsingTests.swift -o /tmp/bt && /tmp/bt
@@ -586,6 +611,8 @@ swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift Aurora/Models/Reply
   Tests/ReplyCheckpointTests.swift -o /tmp/rc && /tmp/rc
 swiftc -parse-as-library Aurora/Models/GmailReadPolicy.swift \
   Tests/GmailReadPolicyTests.swift -o /tmp/gr && /tmp/gr
+swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift \
+  Tests/ReplyCheckCoverageTests.swift -o /tmp/cc && /tmp/cc
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift

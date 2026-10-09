@@ -271,7 +271,13 @@ final class ReplySync {
         let startedAt = Date.now
         // Mail before this has been read already, unless asked to read it all.
         let since = checkpoint.readFrom(fullCheck: forceFullCheck)
-        let noticesSince = checkpoint.noticesReadFrom(fullCheck: forceFullCheck)
+        // Open sends the last check didn't cover are new to this phone (sent
+        // from another device, a contact valid again): their notices may have
+        // come before it, so the notice searches reach back to them.
+        let covered = checkpoint.coveredThreadIDs ?? []
+        let newSends = openSends(sends, excluding: excludingContactIDs)
+            .filter { !covered.contains($0.gmailThreadID ?? "") }.compactMap(\.sentAt)
+        let noticesSince = checkpoint.noticesReadFrom(fullCheck: forceFullCheck, newSends: newSends)
         let lookups = MailboxNames.shared.pending(names)
         progress = Progress(steps: lookups.isEmpty ? 5 : 6)
         var record = ReplyCheckRecord(startedAt: startedAt, readFrom: since)
@@ -335,7 +341,7 @@ final class ReplySync {
                                                     excludingContactIDs: excludingContactIDs,
                                                     alwaysChecking: Set(recovered.threadIDs.keys),
                                                     retrying: forceFullCheck ? [] : checkpoint.retryThreadIDs,
-                                                    since: since)
+                                                    since: since, readAll: forceFullCheck)
             outcome.replies = checked.replies
             outcome.failed += checked.failed
             outcome.read += checked.read
@@ -406,8 +412,8 @@ final class ReplySync {
                     failedThreads.insert(thread)
                 }
             }
-            checkpoint.complete(startedAt: startedAt, failedThreadIDs: failedThreads,
-                                failedNotices: scanned.failed + dead.failed)
+            checkpoint.complete(startedAt: startedAt, openThreadIDs: checked.openThreadIDs,
+                                failedThreadIDs: failedThreads, failedNotices: scanned.failed + dead.failed)
             checkpointFile?.save(checkpoint)
             saveBounces()
             // A run where every request failed (offline, Gmail down) read
@@ -747,6 +753,8 @@ final class ReplySync {
         /// Threads that couldn't be read (or whose reply couldn't be saved),
         /// for the next check to read again.
         var failedThreadIDs: Set<String> = []
+        /// Every open thread this check covered, read or not.
+        var openThreadIDs: Set<String> = []
     }
 
     private enum CheckResult {
@@ -756,6 +764,18 @@ final class ReplySync {
         /// Deleted in Gmail: nothing to read, and nothing wrong.
         case gone(threadID: String)
         case failed(threadID: String, reason: String)
+    }
+
+    /// The sends still waiting on an answer: linked to a thread, unanswered,
+    /// to a contact still valid, and sent within the window checked.
+    private func openSends(_ sends: [MailSend], excluding excludingContactIDs: Set<String>) -> [MailSend] {
+        let cutoff = Date().addingTimeInterval(-Self.checkWindow)
+        return sends.filter {
+            $0.gmailThreadID != nil && !goneThreadIDs.contains($0.gmailThreadID ?? "") &&
+            !$0.hasReplied &&
+            !excludingContactIDs.contains($0.contactID) &&
+            ($0.sentAt ?? .distantPast) > cutoff
+        }
     }
 
     /// Threads that received mail from someone else since `date`, so a check
@@ -770,7 +790,10 @@ final class ReplySync {
         var threads = Set<String>()
         var pageToken: String?
         for _ in 0..<10 {
+            // Spam and Trash too: a reply filtered there is still a reply, and
+            // reading the whole thread would have found it.
             var query = [URLQueryItem(name: "q", value: "after:\(Int(date.timeIntervalSince1970)) -from:me"),
+                         URLQueryItem(name: "includeSpamTrash", value: "true"),
                          URLQueryItem(name: "maxResults", value: "500")]
             if let pageToken { query.append(URLQueryItem(name: "pageToken", value: pageToken)) }
             let listing = try JSONDecoder().decode(Listing.self, from: try await reader("messages", query))
@@ -787,15 +810,10 @@ final class ReplySync {
                                  excludingContactIDs: Set<String>,
                                  alwaysChecking: Set<String>,
                                  retrying: Set<String>,
-                                 since: Date?) async throws -> Checked {
+                                 since: Date?, readAll: Bool) async throws -> Checked {
         guard let reader else { throw GmailAuthError.notConnected }
         let cutoff = Date().addingTimeInterval(-Self.checkWindow)
-        let activeSends = sends.filter {
-            $0.gmailThreadID != nil && !goneThreadIDs.contains($0.gmailThreadID ?? "") &&
-            !$0.hasReplied &&
-            !excludingContactIDs.contains($0.contactID) &&
-            ($0.sentAt ?? .distantPast) > cutoff
-        }
+        let activeSends = openSends(sends, excluding: excludingContactIDs)
         guard !activeSends.isEmpty else { return Checked() }
 
         // Only threads that have had mail from anyone else since the last check
@@ -803,18 +821,21 @@ final class ReplySync {
         // first check, in the 120 days sends are checked for. One search, then
         // a read per thread that has something new, instead of a read per open
         // thread. If the search fails or overflows, read every open thread.
+        // Plus the ones the last check couldn't read, the ones only just
+        // linked, and any open thread the last check didn't know about
+        // (`ReplyCheckpoint.threadsToRead`).
         var result = Checked()
-        let targets: [MailSend]
-        if let incoming = try? await Self.findIncomingThreadIDs(after: since ?? cutoff, reader: reader) {
-            result.wasFullCheck = false
-            // Plus the ones the last check couldn't read.
-            targets = activeSends.filter { send in
-                alwaysChecking.contains(send.id)
-                    || send.gmailThreadID.map { incoming.contains($0) || retrying.contains($0) } == true
-            }
-        } else {
-            targets = activeSends
-        }
+        let open = Set(activeSends.compactMap(\.gmailThreadID))
+        result.openThreadIDs = open
+        // A hard check reads every open thread, without asking the search.
+        let incoming = readAll ? nil : try? await Self.findIncomingThreadIDs(after: since ?? cutoff, reader: reader)
+        result.wasFullCheck = incoming == nil
+        let always = Set(activeSends.filter { alwaysChecking.contains($0.id) }.compactMap(\.gmailThreadID))
+        var plan = checkpoint
+        plan.retryThreadIDs = retrying
+        let wanted = plan.threadsToRead(open: open, incoming: incoming, searchedFromCheckpoint: since != nil,
+                                        always: always)
+        let targets = activeSends.filter { $0.gmailThreadID.map(wanted.contains) == true }
         result.checkedContacts = Set(targets.map(\.contactID))
         result.threads = targets.count
         guard !targets.isEmpty else { return result }
@@ -995,15 +1016,19 @@ final class ReplySync {
         for id in unread {
             guard let notice = notices[id] else { continue }
             read += 1
-            seenBounceMessages.insert(id)
             let failures = notice.notice.failures(snippet: notice.snippet)
-            guard !failures.isEmpty else { continue }
+            // Not a failure: nothing to find in it, ever.
+            guard !failures.isEmpty else {
+                seenBounceMessages.insert(id)
+                continue
+            }
 
             // The exact send, by the Message-ID the notice quoted. Our sends go
             // to one person each, so any failure in it is theirs.
             if let original = notice.originalGmailID,
                let contactID = contactByGmailID[original],
                let address = emailByContact[contactID]?.lowercased() {
+                seenBounceMessages.insert(id)
                 let failure = failures.first { $0.address == address } ?? failures[0]
                 if record(Bounce(contactID: contactID, address: address, at: notice.at, snippet: notice.snippet,
                                  status: failure.status, diagnostic: failure.diagnostic)) {
@@ -1017,12 +1042,16 @@ final class ReplySync {
                     // Mailed before the notice came (a few minutes' slack for clocks).
                     let mailedBefore = sentAtByContact[contactID]?.contains { $0 <= notice.at.addingTimeInterval(5 * 60) } ?? false
                     guard mailedBefore else { continue }
+                    seenBounceMessages.insert(id)
                     if record(Bounce(contactID: contactID, address: failure.address, at: notice.at, snippet: notice.snippet,
                                      status: failure.status, diagnostic: failure.diagnostic)) {
                         found += 1
                     }
                 }
             }
+            // A failure that matches no send this phone knows of yet is left
+            // unseen: a send learnt of later (from another device) can still
+            // claim it when a search reaches back to it.
         }
         return (found, failed, read)
     }
@@ -1067,7 +1096,13 @@ final class ReplySync {
         var found = 0, read = 1
         for answer in answers {
             read += 1
-            seenBounceMessages.insert(answer.id)
+            let isNotice = !BounceParsing.isBounceSender(answer.from)
+                && BounceParsing.isDeadAddressNotice(subject: answer.subject, text: answer.snippet)
+            let matched = isNotice && BounceParsing.matchDeadAddressNotice(
+                sender: answer.from, text: answer.snippet, threadID: answer.threadID, at: answer.at, mailed: mailed) != nil
+            // Seen once it's settled: not a notice, or pinned on someone. One
+            // that names no one known yet stays unseen, as above.
+            if !isNotice || matched { seenBounceMessages.insert(answer.id) }
             if keepDeadAddressNotice(answer, mailed: mailed, emailByContact: emailByContact) != nil { found += 1 }
         }
         return (found, unread.count - answers.count, read)

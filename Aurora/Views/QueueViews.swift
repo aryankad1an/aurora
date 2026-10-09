@@ -159,9 +159,16 @@ extension Date {
 ///
 /// Rows only: Activity owns the list, the navigation, the search and the
 /// confirmations (`queueAlerts`).
+/// A batch opened from the Queued lane — or, from Finished, one company's
+/// part of it.
+struct QueueRoute: Hashable {
+    let batchID: UUID
+    var company: String?
+}
+
 struct QueueLaneSections: View {
     let query: String
-    let onOpen: (UUID) -> Void
+    let onOpen: (QueueRoute) -> Void
     let onRemove: (MailBatch) -> Void
 
     @Environment(MailQueue.self) private var queue
@@ -182,28 +189,55 @@ struct QueueLaneSections: View {
 
         ForEach(QueueGroup.allCases) { group in
             if let items = grouped[group] {
+                // Finished batches are listed one entry per company, each
+                // named for it; the rest, one card per batch.
+                let entries = group == .finished ? items.flatMap { Self.companyEntries($0) } : items.map { Entry(batch: $0) }
                 Section {
-                    ForEach(items) { batch in
-                        BatchCard(batch: batch, onRemove: { onRemove(batch) })
+                    ForEach(entries) { entry in
+                        BatchCard(batch: entry.shown, onRemove: { remove(entry) })
                             .contentShape(.rect)
                             .onTapGesture {
                                 Haptics.tap(0.5)
-                                onOpen(batch.id)
+                                onOpen(QueueRoute(batchID: entry.batch.id, company: entry.company))
                             }
                             .cardRow(top: 4, bottom: 4)
                             .swipeActions(edge: .trailing) {
-                                if queue.runningBatchID != batch.id {
-                                    Button("Remove", systemImage: "trash") { onRemove(batch) }
+                                if queue.runningBatchID != entry.batch.id {
+                                    Button("Remove", systemImage: "trash") { remove(entry) }
                                         .tint(.danger)
                                 }
                             }
                     }
                 } header: {
-                    header(group, count: items.count)
+                    header(group, count: entries.count)
                 }
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
             }
+        }
+    }
+
+    /// One card in the lane: a whole batch, or one company's part of it.
+    struct Entry: Identifiable {
+        let batch: MailBatch
+        var company: String?
+        var id: String { batch.id.uuidString + "|" + (company ?? "") }
+        /// What the card shows: the part, named for its company, or the batch.
+        var shown: MailBatch { company.map { batch.part(for: $0) } ?? batch }
+    }
+
+    static func companyEntries(_ batch: MailBatch) -> [Entry] {
+        let companies = batch.companiesInOrder
+        guard companies.count > 1 else { return [Entry(batch: batch, company: companies.first)] }
+        return companies.map { Entry(batch: batch, company: $0) }
+    }
+
+    private func remove(_ entry: Entry) {
+        if let company = entry.company, entry.batch.companiesInOrder.count > 1 {
+            Haptics.thud()
+            withAnimation(Theme.Motion.snappy) { queue.remove(company: company, from: entry.batch.id) }
+        } else {
+            onRemove(entry.batch)
         }
     }
 
@@ -628,7 +662,7 @@ private struct BatchCard: View {
                     PhaseTile(phase: phase, tint: batch.tint(in: phase))
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(batch.title)
+                    Text(batch.companiesLabel)
                         .font(.headline)
                         .foregroundStyle(.ink)
                         .lineLimit(1)
@@ -688,6 +722,9 @@ private struct BatchCard: View {
 /// the list shows who and where it's got to, never the text.
 struct BatchDetailView: View {
     let batchID: UUID
+    /// Set when opened from one company's entry under Finished: only that
+    /// company's mails.
+    var company: String?
 
     @Environment(MailQueue.self) private var queue
     @Environment(\.dismiss) private var dismiss
@@ -700,8 +737,9 @@ struct BatchDetailView: View {
 
     var body: some View {
         Group {
-            if let batch = queue.batch(batchID) {
-                content(batch)
+            if let whole = queue.batch(batchID),
+               company == nil || whole.mails.contains(where: { $0.company == company }) {
+                content(company.map { whole.part(for: $0) } ?? whole)
             } else {
                 ContentUnavailableView("Removed from the queue", systemImage: "tray")
             }
@@ -773,7 +811,7 @@ struct BatchDetailView: View {
         }
         .cardList()
         .animation(Theme.Motion.snappy, value: batch.mails.map(\.id))
-        .navigationTitle(batch.title)
+        .navigationTitle(batch.companiesLabel)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -806,7 +844,12 @@ struct BatchDetailView: View {
                                 : "Mail already sent stays sent; only this record of the batch goes.",
                             confirmLabel: "Remove",
                             isPresented: $confirmingRemove) {
-            queue.remove(batchID)
+            // From one company's entry under Finished: just that company.
+            if let company, (queue.batch(batchID)?.companiesInOrder.count ?? 0) > 1 {
+                queue.remove(company: company, from: batchID)
+            } else {
+                queue.remove(batchID)
+            }
             dismiss()
         }
         .sheet(item: $previewing) { mail in

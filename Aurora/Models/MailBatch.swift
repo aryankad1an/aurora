@@ -94,6 +94,21 @@ struct MailBatch: Codable, Identifiable {
         return ordered.count == 1 ? first : "\(first) and \(ordered.count - 1) more"
     }
 
+    /// The companies in it, in the order they're mailed.
+    var companiesInOrder: [String] {
+        var seen = Set<String>()
+        return mails.map(\.company).filter { seen.insert($0).inserted }
+    }
+
+    /// Just the part of the batch to `company`, named for it: how a finished
+    /// batch is listed, one entry per company.
+    func part(for company: String) -> MailBatch {
+        var part = self
+        part.title = company.isEmpty ? title : company
+        part.mails = mails.filter { $0.company == company }
+        return part
+    }
+
     /// The company the mail going out now (or next) is to; once none is
     /// left, `companiesLabel`.
     var liveCompany: String {

@@ -33,7 +33,7 @@ struct ActivityView: View {
     @State private var showsCheckHistory = false
     @Environment(MailQueue.self) private var mailQueue
     /// A batch opened from a queue lane.
-    @State private var openBatch: UUID?
+    @State private var openBatch: QueueRoute?
     /// A batch with mail still to go, waiting on a confirm to be removed.
     @State private var removingBatch: MailBatch?
     @State private var clearingQueue = false
@@ -79,8 +79,8 @@ struct ActivityView: View {
             .sheet(item: $summaryItem) { item in
                 MailSummaryView(contact: item.contact, company: item.company, sendID: item.id)
             }
-            .navigationDestination(item: $openBatch) { id in
-                BatchDetailView(batchID: id)
+            .navigationDestination(item: $openBatch) { route in
+                BatchDetailView(batchID: route.batchID, company: route.company)
             }
             .queueAlerts(removing: $removingBatch, clearingAll: $clearingQueue)
             .alert(bounceCheck?.title ?? "", isPresented: Binding(get: { bounceCheck != nil },
@@ -103,8 +103,10 @@ struct ActivityView: View {
                 Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }
             }
             .sheet(isPresented: $showsCheckHistory) {
-                ReplyCheckHistoryView(sync: replySync)
-                    .presentationDetents([.medium, .large])
+                ReplyCheckHistoryView(sync: replySync) {
+                    Task { await jobStore.syncReplies(using: replySync, forceFullCheck: true) }
+                }
+                .presentationDetents([.medium, .large])
             }
             .sheet(item: $openBounce) { item in
                 ContactDetailView(contact: item.contact, company: item.company) { isValid in

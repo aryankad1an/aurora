@@ -7,6 +7,9 @@ import SwiftUI
 /// latest; the one before it is gone once a new one finishes.
 struct ReplyCheckHistoryView: View {
     let sync: ReplySync
+    /// A hard check: every open thread read in full, and notices searched
+    /// across the whole window, not only what's new since the last check.
+    var onCheckEverything: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     private var record: ReplyCheckRecord? { sync.checkLog.records.first }
@@ -41,6 +44,16 @@ struct ReplyCheckHistoryView: View {
             .navigationSubtitle(subtitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if let onCheckEverything {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Check Everything") {
+                            Haptics.press()
+                            onCheckEverything()
+                        }
+                        .disabled(sync.isSyncing)
+                        .accessibilityHint("Reads every open thread again, not only ones with new mail")
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
                         Haptics.tap(0.5)
