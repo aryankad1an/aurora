@@ -258,6 +258,10 @@ When the time comes the activity turns into "Ready to send" with a **Send
 Now** button by itself, even with the app asleep, and tapping it opens the app
 and starts the batch with no further question.
 
+<p align="center">
+  <img src="docs/screenshots/live-activity-scheduled.png" alt="A scheduled batch on the Lock Screen, ready to send" width="420">
+</p>
+
 If you don't open the app or tap it, the batch waits. iOS doesn't let an app's
 code run at a set time, and a Live Activity can't send mail on its own, so
 sending at an exact time with the phone locked would need a server holding your

@@ -22,14 +22,16 @@ struct SendLiveActivityWidget: Widget {
             let ready = Phrase.isReady(state, isStale: context.isStale)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Tile(phase: state.phase, style: style, size: 40)
-                        .padding(.leading, 4)
-                        .padding(.top, 4)
+                    // Inset from the island's rounded corner, which would
+                    // otherwise clip the tile's.
+                    Tile(phase: state.phase, style: style, size: 38)
+                        .padding(.leading, 10)
+                        .padding(.top, 8)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Tally(state: state, isStale: context.isStale)
-                        .padding(.trailing, 4)
-                        .padding(.top, 4)
+                        .padding(.trailing, 10)
+                        .padding(.top, 8)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     // What's happening, then which batch — each on its own line,
@@ -60,8 +62,10 @@ struct SendLiveActivityWidget: Widget {
                         }
                     }
                     .padding(.top, 8)
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 6)
+                    // Clear of the island's bottom corners, which clip the
+                    // bar's ends otherwise.
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
                 }
             } compactLeading: {
                 Glyph(phase: state.phase, style: style, size: 13)
