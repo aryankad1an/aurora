@@ -133,7 +133,12 @@ struct SendQueueBar: View {
         switch mode {
         case .sending:
             if queue.cooldown != nil { return "Waiting on Gmail" }
-            return queue.isStopping ? "Pausing…" : "Sending mail"
+            if queue.isStopping { return "Pausing…" }
+            switch queue.step {
+            case .checkingBounces, .awaitingBounces: return "Checking for bounces"
+            case .checkingSent: return "Checking Sent mail"
+            default: return "Sending mail"
+            }
         case .result(let outcome):
             if outcome.isPaused { return "\(outcome.sent) sent · paused" }
             if outcome.failed.isEmpty {
@@ -160,6 +165,19 @@ struct SendQueueBar: View {
             if let cooldown = queue.cooldown {
                 return "Gmail asked to slow down · trying again at "
                     + cooldown.until.formatted(date: .omitted, time: .standard)
+            }
+            let done = queue.completed, total = queue.total
+            switch queue.step {
+            case .checkingBounces, .awaitingBounces:
+                // The title says what's happening; this, where the batch is.
+                return done == total ? "All \(total) sent · anything bounced shows in Activity"
+                    : "\(done) of \(total) sent · the rest go after this"
+            case .checkingSent(let name, _):
+                return "\(done) of \(total) · \(name) may already have it, so it's checked first"
+            case let step?:
+                return "\(done) of \(total) · \(step.summary)"
+            case nil:
+                break
             }
             return "\(queue.completed) of \(queue.total) · \(queue.running?.liveCompany ?? "")"
         case .result(let outcome):

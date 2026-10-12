@@ -120,10 +120,16 @@ final class SendLiveActivity {
             cooldown != nil ? .waiting : queue.isStopping ? .pausing : .sending
         // The mail on its way — or, while waiting, the one that goes next.
         let current = batch.current
+        // A step worth saying instead of "Sending mail 4 of 11". Not the
+        // second's gap between mails, which would only make it flicker.
+        let step: String? = switch queue.step {
+        case .checkingSent, .awaitingBounces, .checkingBounces: queue.step?.summary
+        default: nil
+        }
         return .init(phase: phase, title: batch.liveCompany, sent: batch.sent, failed: batch.failed,
                      total: batch.mails.count, recipient: current?.displayName,
                      recipientEmail: current?.recipient, company: current?.company,
-                     resumesAt: cooldown?.until, note: cooldown.map { _ in "Gmail asked to slow down" },
+                     resumesAt: cooldown?.until, note: cooldown.map { _ in "Gmail asked to slow down" } ?? step,
                      batchID: batch.id.uuidString)
     }
 

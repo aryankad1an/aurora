@@ -244,6 +244,34 @@ Resume, the app killed before and after Gmail took the mail and opened again,
 with and without Sent search lag, overlapping batches), checking each person is
 mailed exactly once. Nothing is sent anywhere.
 
+The queue says what the run is doing at each moment (`MailQueue.Step`):
+sending to someone, the second's gap before the next mail, checking Sent mail
+for a mail that was cut off (and the wait for Gmail's search to catch up
+first), checking for bounces, or waiting on Gmail. The batch card, the shelf
+and the Live Activity all show it.
+
+#### In the background
+
+A run keeps going after the app leaves the screen or the phone locks, through
+a `BGContinuedProcessingTask` (`SendBackgroundTask`). iOS only grants one while
+the app is on screen, so it's asked for when a run starts with the app in
+front: Send or Resume tapped, or the app opened mid-run. One task covers the
+queue until it has nothing left to do soon, including a batch about to retry
+by itself after a dropped connection. iOS shows its own progress for it.
+
+It only buys time. Sending works exactly as it does on screen, so the rules
+above about never mailing anyone twice hold in the background too. iOS expires
+a task whose progress stops moving for about half a minute, so progress ticks
+on its own between mails without ever counting a mail that hasn't gone. When
+iOS ends the time early, or Stop is tapped in its UI (the app can't tell the
+two apart), the running batch is paused with a note saying so. Resume carries
+on from there, checking anything that was cut off in Sent mail first. If iOS
+won't grant a task, the queue falls back to the few seconds
+`beginBackgroundTask` gives and carries on when the app is opened again.
+
+The simulator doesn't support `BGTaskScheduler`, so this can only be tried on
+a phone.
+
 #### Scheduling
 
 The clock button next to Send schedules the batch instead: in an hour,
@@ -449,10 +477,12 @@ A bounce is found two ways during the same sync:
   the next check carries on from there.
 
 Bounces are also looked for while a batch sends: after every 50 mails, and
-once more a minute after the run ends. These quiet checks only run the inbox
-searches (failure notices and "no longer here" answers) from when the run
-began. They don't show progress or add to the Status timeline, and they don't
-move the checkpoint. They skip their turn while a full check is running.
+once more a minute after the run's last mail (cut short if another batch is
+ready to go). Sending waits for the check, and the queue says it's checking.
+These checks only run the inbox searches (failure notices and "no longer here"
+answers) from when the run began. They aren't added to the Status timeline and
+they don't move the checkpoint, since they read only part of what a full check
+reads. They skip their turn while a full check is running.
 
 Either way, the notice is read whole (`format=raw`), not just its preview.
 Most notices carry a machine-readable report (RFC 3464) that gives each failed

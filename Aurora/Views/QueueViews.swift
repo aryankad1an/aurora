@@ -103,6 +103,20 @@ extension MailQueue {
     }
 }
 
+extension MailQueue.Step {
+    /// The step as a line of text, counting down any wait in it.
+    var text: Text {
+        switch self {
+        case .checkingSent(let name, let until?) where until > .now:
+            Text("Checking Sent mail for \(name) in \(Text(timerInterval: Date.now...until, countsDown: true)), once Gmail's search has caught up")
+        case .awaitingBounces(let until) where until > .now:
+            Text("All sent · checking for bounces in \(Text(timerInterval: Date.now...until, countsDown: true))")
+        default:
+            Text(summary)
+        }
+    }
+}
+
 extension MailBatch {
     /// One line under the batch's name: where it's got to, in a few words.
     func status(in phase: BatchPhase) -> String {
@@ -666,9 +680,19 @@ private struct BatchCard: View {
                         .font(.headline)
                         .foregroundStyle(.ink)
                         .lineLimit(1)
-                    Text(cooldown == nil ? batch.status(in: phase)
-                         : "Waiting on Gmail · \(batch.sent + batch.failed) of \(batch.mails.count) done")
+                    Group {
+                        if cooldown != nil {
+                            Text("Waiting on Gmail · \(batch.sent + batch.failed) of \(batch.mails.count) done")
+                        } else if phase == .sending, let step = queue.step {
+                            // Once all are sent, the step says so itself.
+                            batch.hasWork ? Text("\(batch.sent + batch.failed) of \(batch.mails.count) done · \(step.text)")
+                                : step.text
+                        } else {
+                            Text(batch.status(in: phase))
+                        }
+                    }
                         .font(.caption)
+                        .monospacedDigit()
                         .foregroundStyle(.inkMuted)
                         .lineLimit(2)
                         .contentTransition(.numericText())

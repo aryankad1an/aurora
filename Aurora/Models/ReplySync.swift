@@ -497,11 +497,11 @@ final class ReplySync {
     /// answers), since a notice for mail sent minutes ago has nowhere else
     /// to be. Gmail's own notices arrive within seconds.
     ///
-    /// Quiet: no progress, nothing in the check timeline, and the checkpoint
-    /// left where it is — this reads only part of what a check reads. What it
-    /// finds is kept like any bounce, and notices it read aren't read again.
-    /// Skipped while a check is running, which will find the same. Returns how
-    /// many bounces it found.
+    /// The queue says it's checking (`MailQueue.Step`); it isn't added to the
+    /// check timeline, and the checkpoint is left where it is, since this reads
+    /// only part of what a check reads. What it finds is kept like any bounce,
+    /// and notices it read aren't read again. Skipped while a check is
+    /// running, which will find the same. Returns how many bounces it found.
     @discardableResult
     func checkBouncesWhileSending(sends: [MailSend], emailByContact: [String: String], since: Date) async -> Int {
         guard !isSyncing, sendingCheck == nil, reader != nil else { return 0 }

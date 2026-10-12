@@ -56,7 +56,8 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
         var company: String?
         /// When a rate-limit wait ends, or a paused batch carries on by itself.
         var resumesAt: Date?
-        /// A few words on why it's waiting or stopped: "Connection lost".
+        /// A few words on why it's waiting or stopped ("Connection lost"), or,
+        /// while sending, what the run is doing instead ("Checking for bounced mail").
         var note: String?
         /// The batch, for the activity's Send Now link.
         var batchID: String?

@@ -82,8 +82,14 @@ final class FakeGmail {
     var searchMisses = 0
     /// Set when a send was "killed": the request that never returns.
     private(set) var killed = false
+    /// Told of each send as it arrives, before it's answered: the mail is in
+    /// flight. With how many sends came before it.
+    var onSend: ((Int) -> Void)?
+    private var sends = 0
 
     func send(to: String, subject: String) async throws -> MailQueue.Delivery? {
+        onSend?(sends)
+        sends += 1
         let step = script.isEmpty ? .deliver : script.removeFirst()
         switch step {
         case .deliver:
@@ -155,6 +161,7 @@ struct MailQueueTests {
         timing.searchSettle = 0
         timing.recheck = 0.05
         timing.retry = [0.05]
+        timing.bounceSettle = 0
         return timing
     }
 
@@ -345,6 +352,54 @@ struct MailQueueTests {
             queue.enqueue(batch(["a@acme.com"], title: "Again"))
             try? await Task.sleep(for: .milliseconds(300))
             expectEachOnce(world, "Re-queued before the history knew", ["a@acme.com"])
+        }
+
+        print("Bounces looked for while sending")
+        do {
+            let world = World()
+            let queue = world.openQueue()
+            var checkedAt: [Int] = []
+            var sentDuringCheck = 0
+            var shownDuringCheck = true
+            queue.onBounceCheck = { [world] _ in
+                let before = world.gmail.sentBox.count
+                checkedAt.append(before)
+                shownDuringCheck = shownDuringCheck && queue.step == .checkingBounces
+                try? await Task.sleep(for: .milliseconds(100))
+                sentDuringCheck += world.gmail.sentBox.count - before
+            }
+            let many = (1...120).map { "p\($0)@acme.com" }
+            queue.enqueue(batch(many))
+            await until(30) { finished(queue) && queue.batches.allSatisfy(\.isFinished) && checkedAt.count == 3 }
+            expect(checkedAt == [50, 100, 120], "checked after 50, after 100, and after the last mail \(checkedAt)")
+            expect(sentDuringCheck == 0, "sending waits while a check runs")
+            expect(shownDuringCheck, "the queue says it's checking for bounces meanwhile")
+            expect(queue.step == nil, "nothing shown once the run is over")
+            expectEachOnce(world, "Checked for bounces along the way", many)
+        }
+
+        print("Stopped in the background")
+        for drop in [false, true] {
+            // iOS ends the background time with a mail in flight: the batch is
+            // paused. Either the mail's answer still comes, or the app is
+            // suspended and the request is cut off after Gmail took it.
+            let label = drop ? "Stopped mid-send, the request cut off" : "Stopped mid-send, the answer still came"
+            let world = World()
+            let queue = world.openQueue()
+            let sent = batch()
+            world.gmail.script = drop ? [.deliver, .deliver, .acceptThenDrop] : []
+            world.gmail.onSend = { count in
+                if count == 2 { queue.pause(sent.id, because: "Stopped in the background.") }
+            }
+            queue.enqueue(sent)
+            await until { !queue.isRunning && world.gmail.sentBox.count >= 3 }
+            if !drop {
+                expect(queue.batch(sent.id)?.pauseReason == "Stopped in the background.", "\(label): paused, saying why")
+                expect(world.gmail.sentBox.count == 3, "\(label): nothing more sent while paused")
+                queue.resume(sent.id)
+            }
+            await until { finished(queue) && queue.batches.allSatisfy(\.isFinished) }
+            expectEachOnce(world, label)
         }
 
         if failures > 0 {

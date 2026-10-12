@@ -145,7 +145,11 @@ private struct Headline: View {
         Group {
             switch state.phase {
             case .sending:
-                Text("Sending mail \(min(state.done + 1, state.total)) of \(state.total)")
+                if let note = state.note {
+                    Text(note)
+                } else {
+                    Text("Sending mail \(min(state.done + 1, state.total)) of \(state.total)")
+                }
             case .waiting:
                 if let until = state.resumesAt, until > .now {
                     Text("\(state.note ?? "Waiting") · retrying in \(Text(timerInterval: Date.now...until, countsDown: true))")

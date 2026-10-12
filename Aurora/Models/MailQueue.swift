@@ -90,8 +90,8 @@ final class MailQueue {
         /// `maxRetries`, after which the batch waits for Resume.
         var retry: [TimeInterval] = [5, 10, 20, 40, 60, 120, 300]
         var maxRetries = 12
-        /// How long after a run ends its last bounce check waits, so notices
-        /// for the last mails have time to arrive.
+        /// How long after its last mail a run waits before its last bounce
+        /// check, so notices for the last mails have time to arrive.
         var bounceSettle: TimeInterval = 60
 
         static let standard = Timing()
@@ -144,6 +144,35 @@ final class MailQueue {
     /// The run is sitting out a Gmail rate limit: which batch, until when, and
     /// what Gmail said. Nil while sending normally.
     private(set) var cooldown: Cooldown?
+    /// What the run is doing this moment, for the queue to say. Nil when
+    /// nothing is running, and while `cooldown` says it instead.
+    private(set) var step: Step?
+
+    /// One thing a run does at a time.
+    enum Step: Equatable {
+        /// Handing the mail to `name` to Gmail.
+        case sending(to: String)
+        /// The gap after the mail to `name`, until the next goes at `next`.
+        case pacing(after: String, next: Date)
+        /// Looking in Sent for the mail to `name`, cut off mid-send, before it
+        /// can go again. `until`: waiting for Gmail's search to catch up first.
+        case checkingSent(for: String, until: Date?)
+        /// Giving the run's last bounces until `until` to arrive.
+        case awaitingBounces(until: Date)
+        /// Looking for bounces to the run's mail.
+        case checkingBounces
+
+        /// In a few words, with no clock in it.
+        var summary: String {
+            switch self {
+            case .sending(let name): "Sending to \(name)"
+            case .pacing(let name, _): "Sent to \(name) · next mail in a moment"
+            case .checkingSent(let name, _): "Checking Sent mail for \(name) before sending again"
+            case .awaitingBounces: "All sent · waiting a minute for bounces"
+            case .checkingBounces: "Checking for bounced mail"
+            }
+        }
+    }
 
     struct Cooldown: Equatable {
         let batchID: UUID
@@ -167,8 +196,8 @@ final class MailQueue {
     /// Told whenever something the Live Activity shows may have changed.
     var onChange: ((MailQueue) -> Void)?
     /// Looks for bounces to mail sent since the given time — when the run
-    /// began. Called every `bounceCheckEvery` mails, without holding the run
-    /// up, and once after it ends.
+    /// began. Called every `bounceCheckEvery` mails, and once after the run's
+    /// last; sending waits for it.
     var onBounceCheck: ((_ since: Date) async -> Void)?
 
     private var file: JSONFile<[MailBatch]>?
@@ -299,10 +328,10 @@ final class MailQueue {
     /// Never cancels the request already in flight — cancellation reaches into a
     /// Gmail request that may already have been accepted, and a mail aborted
     /// client-side but delivered would be counted as unsent.
-    func pause(_ id: UUID) {
+    func pause(_ id: UUID, because reason: String? = nil) {
         update(id) { batch in
             batch.isPaused = true
-            batch.pauseReason = nil
+            batch.pauseReason = reason
             batch.resumeAt = nil
             batch.retries = nil
             batch.stopNote = nil
@@ -558,6 +587,7 @@ final class MailQueue {
 
             // Saved *before* the request: if the app is closed while it's in
             // flight, the next launch knows to check rather than to resend.
+            step = .sending(to: mail.displayName)
             setStatus(mail.id, in: id, .sending(since: .now))
             do {
                 // No transport means nothing was delivered. Recording these as
@@ -605,6 +635,7 @@ final class MailQueue {
                     break
                 }
                 cooldown = Cooldown(batchID: id, until: until, reason: message, attempt: limited)
+                self.step = nil
                 changed()
                 let waited = await waitOut(until, batch: id)
                 cooldown = nil
@@ -639,15 +670,16 @@ final class MailQueue {
             }
 
             if unrecordedCount >= Self.recordEvery { await recordDeliveries() }
-            if sent - checkedAt >= Self.bounceCheckEvery {
+            if sent - checkedAt >= Self.bounceCheckEvery, let batch = self.batch(id), !batch.isPaused, batch.hasWork {
                 checkedAt = sent
-                // In the send history first, so a notice can be matched to them.
-                await recordDeliveries()
-                checkBounces(since: startedAt)
+                await checkBounces(since: startedAt)
             }
             if let batch = self.batch(id), !batch.isPaused, batch.hasWork {
                 let jitter = timing.jitter
-                try? await Task.sleep(for: timing.spacing + .milliseconds(jitter > 0 ? Int.random(in: -jitter...jitter) : 0))
+                let gap = timing.spacing + .milliseconds(jitter > 0 ? Int.random(in: -jitter...jitter) : 0)
+                show(.pacing(after: mail.displayName, next: .now.addingTimeInterval(Double(gap.components.seconds)
+                    + Double(gap.components.attoseconds) / 1e18)))
+                try? await Task.sleep(for: gap)
             }
         }
 
@@ -658,7 +690,24 @@ final class MailQueue {
         // Record even a stopped run's successes — those mails really were sent,
         // and losing them would offer to re-send people who've already been mailed.
         await recordDeliveries()
-        if sent > 0 { checkBounces(since: startedAt, after: timing.bounceSettle) }
+        if sent > 0, stoppedBecause == nil, onBounceCheck != nil, batch(id)?.hasWork == false {
+            // Nothing else waiting to go: give the last mails' bounces a minute
+            // to arrive. A run up next checks soon enough, and its search
+            // reaches back over this one's last mails.
+            if !batches.contains(where: isRunnable) {
+                let until = Date.now.addingTimeInterval(timing.bounceSettle)
+                show(.awaitingBounces(until: until))
+                // A batch sent meanwhile cuts it short: it goes now.
+                while !isStopping, until.timeIntervalSinceNow > 0, !batches.contains(where: isRunnable) {
+                    try? await Task.sleep(for: .seconds(min(1, until.timeIntervalSinceNow)))
+                }
+            }
+            // Pause, now, skips the check — and a batch with nothing left
+            // isn't left paused by it.
+            if !isStopping { await checkBounces(since: startedAt) }
+            if batch(id)?.isPaused == true { update(id) { $0.isPaused = false } }
+        }
+        step = nil
 
         let paused = batch(id).map { $0.isPaused && $0.hasWork } ?? false
         runningBatchID = nil
@@ -670,14 +719,19 @@ final class MailQueue {
         changed()
     }
 
-    /// Look for bounces to this run's mail, in the background: the run goes on
-    /// sending meanwhile.
-    private func checkBounces(since: Date, after delay: TimeInterval = 0) {
+    /// Look for bounces to this run's mail, with sending held meanwhile — a few
+    /// seconds, and the queue says so.
+    private func checkBounces(since: Date) async {
         guard let onBounceCheck else { return }
-        Task {
-            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-            await onBounceCheck(since)
-        }
+        // In the send history first, so a notice can be matched to them.
+        await recordDeliveries()
+        show(.checkingBounces)
+        await onBounceCheck(since)
+    }
+
+    private func show(_ step: Step) {
+        self.step = step
+        changed()
     }
 
     /// Pause a batch the run couldn't go on with for now, and have it carry on
@@ -730,10 +784,16 @@ final class MailQueue {
     private func verify(_ mail: QueuedMail, since: Date) async throws -> Delivery? {
         guard let verifier else { throw MailQueueError.noTransport }
         let settle = timing.searchSettle - Date.now.timeIntervalSince(since)
-        if settle > 0 { try await Task.sleep(for: .seconds(settle)) }
+        if settle > 0 {
+            show(.checkingSent(for: mail.displayName, until: .now.addingTimeInterval(settle)))
+            try await Task.sleep(for: .seconds(settle))
+        }
+        show(.checkingSent(for: mail.displayName, until: nil))
         if let found = try await verifier(mail.recipient, since) { return found }
         guard Date.now.timeIntervalSince(since) < timing.recheckWithin else { return nil }
+        show(.checkingSent(for: mail.displayName, until: .now.addingTimeInterval(timing.recheck)))
         try await Task.sleep(for: .seconds(timing.recheck))
+        show(.checkingSent(for: mail.displayName, until: nil))
         return try await verifier(mail.recipient, since)
     }
 

@@ -260,6 +260,7 @@ struct RootView: View {
         }
         mailQueue.onChange = { queue in
             SendLiveActivity.shared.sync(with: queue)
+            SendBackgroundTask.shared.sync(with: queue)
         }
         mailQueue.onBounceCheck = { since in
             await jobStore.checkBouncesWhileSending(using: replySync, since: since)
