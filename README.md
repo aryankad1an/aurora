@@ -435,14 +435,17 @@ A check runs in up to six steps:
 The status line at the top of Activity says "Updating · Step 2 of 5 ·
 Checking threads for replies · 12 of 80 mails (15%)" while a check runs,
 wrapped rather than cut off, and "Status updated 4 minutes ago" once it's done.
-Tapping it opens **Status**: the latest check as a simple timeline. Finished
-steps are ticked with what they did ("Read 12 threads with new mail since
-3:04 PM · 0 replies"). The step running now moves, with its count and a bar,
-and the timeline scrolls smoothly to follow it. Steps still to come are greyed
-out. Anything that couldn't be read is listed under its step with the reason
-("3 couldn't be read: Connection dropped"), and a check that stopped says why.
-Only the latest check is kept (`ReplyCheckLog`): once a new one finishes, it
-replaces the one before.
+A check shows as running from the tap: the reload and the lookup of the people
+mailed that come before Gmail is read ("Updating · Getting ready") are part of
+it, and the ↻ in the top bar opens Status while one is running rather than
+ignoring the tap. Tapping the status line opens **Status**: the latest check
+as a simple timeline. Finished steps are ticked with what they did ("Read 12
+threads with new mail since 3:04 PM · 0 replies"). The step running now moves,
+with its count and a bar, and the timeline scrolls smoothly to follow it. Steps
+still to come are greyed out. Anything that couldn't be read is listed under
+its step with the reason ("3 couldn't be read: Connection dropped"), and a
+check that stopped says why. Only the latest check is kept (`ReplyCheckLog`):
+once a new one finishes, it replaces the one before.
 
 <p align="center">
   <img src="docs/screenshots/status.png" alt="The Status timeline during a check" width="300">

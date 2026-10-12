@@ -57,11 +57,16 @@ struct ActivityView: View {
             .navigationBarTitleDisplayMode(.large)
             .searchable(text: $searchText, prompt: "Search people, companies, subjects")
             // Asking Gmail is what this screen is for; the glyph turns for as
-            // long as the check runs, however it was started.
+            // long as the check runs, however it was started, and a tap then
+            // shows how far it has got rather than doing nothing.
             .topBarActions(
-                TopBarPrimary(title: "Check for Replies", systemImage: "arrow.clockwise",
-                              isBusy: replySync.isSyncing) {
-                    Task { await checkForReplies() }
+                TopBarPrimary(title: replySync.isSyncing ? "Show Check Progress" : "Check for Replies",
+                              systemImage: "arrow.clockwise", isBusy: replySync.isSyncing) {
+                    if replySync.isSyncing {
+                        showsCheckHistory = true
+                    } else {
+                        Task { await checkForReplies() }
+                    }
                 }
             ) {
                 QueueClearItems { clearingQueue = true }
@@ -209,10 +214,9 @@ struct ActivityView: View {
         if case .bounced = result { Haptics.thud() }
     }
 
-    /// Ask Gmail what came back, then reload.
+    /// Reload, then ask Gmail what came back.
     private func checkForReplies() async {
-        await jobStore.load()
-        await jobStore.syncReplies(using: replySync)
+        await jobStore.syncReplies(using: replySync, reloadingFirst: true)
     }
 
     private var emptyState: some View {

@@ -73,7 +73,7 @@ final class ReplySync {
         /// "Step 2 of 6 · Checking for replies · 12 of 80 mails (15%)".
         var summary: String {
             var parts: [String] = []
-            if steps > 0 { parts.append("Step \(step) of \(steps)") }
+            if steps > 0, step > 0 { parts.append("Step \(step) of \(steps)") }
             if !label.isEmpty { parts.append(label) }
             if total > 0 {
                 let unitText = unit.isEmpty ? "" : " \(unit)"
@@ -249,11 +249,28 @@ final class ReplySync {
              excludingContactIDs: Set<String> = [],
              forceFullCheck: Bool = false,
              lookingUpNames names: [String] = []) async -> Outcome {
+        await run(forceFullCheck: forceFullCheck) {
+            Inputs(sends: sends, emailByContact: emailByContact,
+                   excludingContactIDs: excludingContactIDs, lookingUpNames: names)
+        }
+    }
+
+    /// What a check reads from: see `run(sends:…)` for each.
+    struct Inputs {
+        var sends: [MailSend]
+        var emailByContact: [String: String]
+        var excludingContactIDs: Set<String> = []
+        var lookingUpNames: [String] = []
+    }
+
+    /// A check whose inputs take a while to gather — a reload, a fetch of the
+    /// contacts mailed. They're gathered once the check has begun, so the wait
+    /// shows as the check running ("Updating", the timeline's steps waiting)
+    /// rather than as a tap that did nothing.
+    @discardableResult
+    func run(forceFullCheck: Bool = false, gathering gather: () async -> Inputs) async -> Outcome {
         guard !isSyncing, reader != nil else { return Outcome() }
         isSyncing = true
-        // Let a bounce check started by the send queue finish first: they share
-        // what's been read, and its reads would count toward this run's progress.
-        _ = await sendingCheck?.value
         errorMessage = nil
         needsReconnect = false
         needsMigration = SupabaseAPI.replyColumnsMissing
@@ -270,21 +287,14 @@ final class ReplySync {
             }
         }
 
-        var sends = sends
         let startedAt = Date.now
         // Mail before this has been read already, unless asked to read it all.
         let since = checkpoint.readFrom(fullCheck: forceFullCheck)
-        // Open sends the last check didn't cover are new to this phone (sent
-        // from another device, a contact valid again): their notices may have
-        // come before it, so the notice searches reach back to them.
-        let covered = checkpoint.coveredThreadIDs ?? []
-        let newSends = openSends(sends, excluding: excludingContactIDs)
-            .filter { !covered.contains($0.gmailThreadID ?? "") }.compactMap(\.sentAt)
-        let noticesSince = checkpoint.noticesReadFrom(fullCheck: forceFullCheck, newSends: newSends)
-        let lookups = MailboxNames.shared.pending(names)
-        progress = Progress(steps: lookups.isEmpty ? 5 : 6)
+        // On the timeline from the tap: the names step joins the plan once the
+        // inputs say there's anyone to name.
+        progress = Progress(label: "Getting ready", steps: 5)
         var record = ReplyCheckRecord(startedAt: startedAt, readFrom: since)
-        record.plan = Array(Self.stepTitles.prefix(progress.steps))
+        record.plan = Array(Self.stepTitles.prefix(5))
         checkLog.begin(record)
         saveCheckLog()
         defer {
@@ -306,6 +316,28 @@ final class ReplySync {
             }
             saveCheckLog()
         }
+
+        let inputs = await gather()
+        var sends = inputs.sends
+        let emailByContact = inputs.emailByContact
+        let excludingContactIDs = inputs.excludingContactIDs
+        // Let a bounce check started by the send queue finish first: they share
+        // what's been read, and its reads would count toward this run's progress.
+        _ = await sendingCheck?.value
+        // Open sends the last check didn't cover are new to this phone (sent
+        // from another device, a contact valid again): their notices may have
+        // come before it, so the notice searches reach back to them.
+        let covered = checkpoint.coveredThreadIDs ?? []
+        let newSends = openSends(sends, excluding: excludingContactIDs)
+            .filter { !covered.contains($0.gmailThreadID ?? "") }.compactMap(\.sentAt)
+        let noticesSince = checkpoint.noticesReadFrom(fullCheck: forceFullCheck, newSends: newSends)
+        let lookups = MailboxNames.shared.pending(inputs.lookingUpNames)
+        progress = Progress(steps: lookups.isEmpty ? 5 : 6)
+        if !lookups.isEmpty {
+            let plan = Array(Self.stepTitles.prefix(6))
+            checkLog.update(record.id) { $0.plan = plan }
+        }
+
         let after = since.map { " since " + Self.when($0) } ?? " in the last 120 days"
         let noticesAfter = noticesSince.map { " since " + Self.when($0) } ?? ""
         do {

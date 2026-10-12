@@ -206,14 +206,20 @@ final class JobStore {
     /// The same check names the people mailed who have no name on file: the
     /// name they signed a reply with, or what the account's own mail calls
     /// them ("Aryan Kadian <kdaryan@acme.com>"), is saved to their contact.
-    func syncReplies(using sync: ReplySync, forceFullCheck: Bool = false) async {
-        let invalidIDs = Set(knownCompanies.flatMap(\.invalidContacts).map(\.id))
-        let unnamed = await mailedContactsWithoutNames()
-        let outcome = await sync.run(sends: sends,
-                                     emailByContact: emailByContact,
-                                     excludingContactIDs: invalidIDs,
-                                     forceFullCheck: forceFullCheck,
-                                     lookingUpNames: unnamed.map(\.email))
+    ///
+    /// `reloadingFirst` reloads everything before reading Gmail, for a check
+    /// someone asked for. The reload and the fetch of who has no name are part
+    /// of the check, so it shows as running from the tap.
+    func syncReplies(using sync: ReplySync, forceFullCheck: Bool = false, reloadingFirst: Bool = false) async {
+        var unnamed: [Contact] = []
+        let outcome = await sync.run(forceFullCheck: forceFullCheck) {
+            if reloadingFirst { await load() }
+            unnamed = await mailedContactsWithoutNames()
+            return ReplySync.Inputs(sends: sends,
+                                    emailByContact: emailByContact,
+                                    excludingContactIDs: Set(knownCompanies.flatMap(\.invalidContacts).map(\.id)),
+                                    lookingUpNames: unnamed.map(\.email))
+        }
         // Deliberately `reloadSendsOnly()`: re-fetching the entire companies catalog
         // is unnecessary when only per-user sent/reply records have changed.
         if outcome.changedAnything {

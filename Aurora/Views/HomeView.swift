@@ -20,7 +20,6 @@ struct HomeView: View {
     @State private var isAddingContact = false
     /// The companies a Send from the selection bar is choosing recipients at.
     @State private var sendingTo: SendTarget?
-    @Namespace private var zoom
     @State private var selection = ListSelection<String>()
 
     private var query: String {
@@ -72,10 +71,10 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.large)
             .searchable(text: $searchText, prompt: "Search tracked companies and people")
             .navigationDestination(for: String.self) { companyID in
-                // The card the user tapped grows into the company screen, and
-                // shrinks back into its place on the way out.
+                // The system push, not a zoom out of the card: on iOS 27 a
+                // swipe back from a zoom left the bar behind and the screen
+                // ignoring touches for a few seconds.
                 JobDetailView(jobID: companyID)
-                    .navigationTransition(.zoom(sourceID: companyID, in: zoom))
             }
             .topBarActions(
                 TopBarPrimary(title: "Add Contact", systemImage: "plus") { isAddingContact = true },
@@ -124,7 +123,6 @@ struct HomeView: View {
             } else {
                 ForEach(filteredJobs) { job in
                     CompanyCard(job: job)
-                        .matchedTransitionSource(id: job.id, in: zoom)
                         .cardRow()
                         .swipeActions(edge: .trailing) { untrackButton(job) }
                         // Both edges used to untrack. The leading one now does

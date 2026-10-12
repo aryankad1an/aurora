@@ -15,7 +15,6 @@ struct CompaniesView: View {
     @State private var isAdding = false
     @State private var isAddingContact = false
     @State private var sendingTo: SendTarget?
-    @Namespace private var zoom
     @State private var editingCompany: Job?
     /// Rows push through this rather than through `NavigationLink`, so the card
     /// can carry its own chevron instead of the system drawing one outside it.
@@ -95,10 +94,10 @@ struct CompaniesView: View {
             .navigationTitle("Companies")
             .navigationBarTitleDisplayMode(.large)
             .navigationDestination(for: String.self) { companyID in
-                // The card the user tapped grows into the company screen, and
-                // shrinks back into its place on the way out.
+                // The system push, not a zoom out of the card: on iOS 27 a
+                // swipe back from a zoom left the bar behind and the screen
+                // ignoring touches for a few seconds.
                 JobDetailView(jobID: companyID)
-                    .navigationTransition(.zoom(sourceID: companyID, in: zoom))
             }
             .searchable(text: $searchText, prompt: "Search companies, sectors, people")
             // Cancelled and restarted per keystroke, which is what debounces it.
@@ -172,7 +171,6 @@ struct CompaniesView: View {
         ForEach(companies) { company in
             let tracked = jobStore.isTracked(company.id)
             CompanyCard(job: company, isTracked: tracked)
-                .matchedTransitionSource(id: company.id, in: zoom)
                 .cardRow()
                 // Ask for the next 50 while ten rows are still to come, so the
                 // page lands before the list runs out rather than after.

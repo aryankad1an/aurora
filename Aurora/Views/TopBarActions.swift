@@ -6,8 +6,9 @@ struct TopBarPrimary {
     let systemImage: String
     /// Coloured, for the one tap that commits something (Save).
     var isProminent = false
-    /// Working on it: the glyph turns in place and the button can't be tapped
-    /// again until it's done.
+    /// Working on it: the glyph turns in place. Still tappable — the action
+    /// decides what a tap means meanwhile (Activity's shows the check's
+    /// progress), since a control that ignores taps reads as broken.
     var isBusy = false
     let action: () -> Void
 }
@@ -98,7 +99,6 @@ private struct TopBarActions<More: View>: ViewModifier {
                 .symbolEffect(.bounce.up.byLayer, options: .nonRepeating, value: primaryArrival)
                 .symbolEffect(.rotate.byLayer, options: .repeat(.continuous), isActive: primary.isBusy)
         }
-        .disabled(primary.isBusy)
         .accessibilityLabel(primary.title)
     }
 

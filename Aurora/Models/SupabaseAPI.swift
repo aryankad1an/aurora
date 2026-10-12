@@ -407,16 +407,25 @@ enum SupabaseAPI {
 
     /// Contacts by id, wherever they're filed, a hundred to a request.
     static func fetchContacts(ids: [String]) async throws -> [Contact] {
-        var contacts: [Contact] = []
-        for start in stride(from: 0, to: ids.count, by: 100) {
-            let chunk = ids[start..<min(start + 100, ids.count)]
-            let request = makeRequest(path: "recruiters", query: [
+        // A hundred ids a request keeps the URL short, and the requests go out
+        // together: one after another, a few hundred mailed contacts held up
+        // every reply check by seconds before it had read a thing.
+        let requests = stride(from: 0, to: ids.count, by: 100).map { start in
+            makeRequest(path: "recruiters", query: [
                 URLQueryItem(name: "select", value: "*"),
-                URLQueryItem(name: "id", value: "in.(\(chunk.joined(separator: ",")))")
+                URLQueryItem(name: "id", value: "in.(\(ids[start..<min(start + 100, ids.count)].joined(separator: ",")))")
             ])
-            contacts += try decoder.decode([Contact].self, from: try await send(request))
         }
-        return contacts
+        return try await withThrowingTaskGroup(of: Data.self) { group in
+            for request in requests {
+                group.addTask { try await send(request) }
+            }
+            var contacts: [Contact] = []
+            for try await data in group {
+                contacts += try decoder.decode([Contact].self, from: data)
+            }
+            return contacts
+        }
     }
 
     /// Give a contact a name found for them, but only if their name is still
