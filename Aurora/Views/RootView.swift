@@ -261,6 +261,9 @@ struct RootView: View {
         mailQueue.onChange = { queue in
             SendLiveActivity.shared.sync(with: queue)
         }
+        mailQueue.onBounceCheck = { since in
+            await jobStore.checkBouncesWhileSending(using: replySync, since: since)
+        }
         replySync.reader = { path, query in
             try await gmailAuth.gmailGET(path: path, query: query)
         }

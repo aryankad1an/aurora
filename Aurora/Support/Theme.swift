@@ -156,6 +156,18 @@ extension Date {
         return formatted(.dateTime.month(.abbreviated).day().year())
     }
 
+    /// How long ago, in as few characters as a figure needs: "Today", "3d ago",
+    /// "2mo ago". Counted in calendar days, so last night's mail is "1d ago"
+    /// this morning rather than "Today" until 24 hours have passed.
+    var agoLabel: String {
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: self),
+                                      to: cal.startOfDay(for: .now)).day ?? 0
+        if days <= 0 { return "Today" }
+        if days < 60 { return "\(days)d ago" }
+        return "\(days / 30)mo ago"
+    }
+
     /// `activityLabel` for the middle of a sentence — "sent today", "sent Aug
     /// 12". Only the relative words drop their capital; lowercasing the whole
     /// label turned months into "aug".

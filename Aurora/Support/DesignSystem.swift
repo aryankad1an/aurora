@@ -25,8 +25,9 @@ extension Theme {
     }
 
     enum Space {
-        /// The margin every screen's content sits inside.
-        static let gutter: CGFloat = 18
+        /// The margin every screen's content sits inside. 14, down from 18:
+        /// on a phone the four points either side went to every card's text.
+        static let gutter: CGFloat = 14
     }
 
     /// The app's springs, so everything that moves shares one tempo.
@@ -438,12 +439,28 @@ extension View {
 
 /// A metric set the way every metric in the app is set: serif figures over a
 /// sans caption, monospaced so digits don't jitter when they change.
+///
+/// Usually a count; `text` takes a figure that isn't one — "3d ago", "—".
 struct Metric: View {
-    let value: Int
+    let text: String
     var caption: String
     var tint: Color = .ink
     var size: CGFloat = 26
     var alignment: HorizontalAlignment = .center
+
+    init(value: Int, caption: String, tint: Color = .ink, size: CGFloat = 26,
+         alignment: HorizontalAlignment = .center) {
+        self.init(text: "\(value)", caption: caption, tint: tint, size: size, alignment: alignment)
+    }
+
+    init(text: String, caption: String, tint: Color = .ink, size: CGFloat = 26,
+         alignment: HorizontalAlignment = .center) {
+        self.text = text
+        self.caption = caption
+        self.tint = tint
+        self.size = size
+        self.alignment = alignment
+    }
 
     /// Drives the kick. Held for a beat and released, so the figure overshoots
     /// on the way out and springs back rather than easing to a new size.
@@ -455,8 +472,9 @@ struct Metric: View {
 
     var body: some View {
         VStack(alignment: alignment, spacing: 1) {
-            Text("\(value)")
+            Text(text)
                 .font(.display(size))
+                .lineLimit(1)
                 .monospacedDigit()
                 .contentTransition(.numericText())
                 .foregroundStyle(tint)
@@ -471,8 +489,8 @@ struct Metric: View {
         }
         .frame(maxWidth: alignment == .center ? .infinity : nil,
                alignment: alignment == .center ? .center : .leading)
-        .animation(Theme.Motion.settle, value: value)
-        .task(id: value) {
+        .animation(Theme.Motion.settle, value: text)
+        .task(id: text) {
             guard settled else { settled = true; return }
             withAnimation(Theme.Motion.pop) { kicked = true }
             try? await Task.sleep(for: .milliseconds(140))

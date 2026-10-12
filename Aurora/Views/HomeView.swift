@@ -123,7 +123,7 @@ struct HomeView: View {
                     .cardRow()
             } else {
                 ForEach(filteredJobs) { job in
-                    TrackingCard(job: job)
+                    CompanyCard(job: job)
                         .matchedTransitionSource(id: job.id, in: zoom)
                         .cardRow()
                         .swipeActions(edge: .trailing) { untrackButton(job) }
@@ -208,58 +208,6 @@ struct HomeView: View {
         ) {
             for job in jobs { store.restoreJob(job) }
         }
-    }
-}
-
-// MARK: - Tracking card
-
-/// A tracked company, carrying its own outreach state: how many people, how many
-/// answered, and how long the rest have been quiet.
-///
-/// Always the same three lines — name, head count, status — so every card in the
-/// list is the same height whatever state its company is in.
-private struct TrackingCard: View {
-    let job: Job
-
-    private var subtitle: String {
-        let people = job.contacts.isEmpty
-            ? "No contacts yet"
-            : "\(job.contacts.count) contact\(job.contacts.count == 1 ? "" : "s")"
-        guard let sector = job.sector, !sector.isEmpty else { return people }
-        return "\(people) · \(sector)"
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            MonogramAvatar(company: job.company)
-
-            // The chips sit on their own line rather than trailing the contact
-            // count. Chips are intrinsically sized so they can't shrink, and on a
-            // narrow phone a count plus two of them ran past the card's edge.
-            VStack(alignment: .leading, spacing: 5) {
-                Text(job.company)
-                    .font(.headline)
-                    .foregroundStyle(.ink)
-                    .lineLimit(1)
-
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.inkMuted)
-                    .lineLimit(1)
-
-                OutreachChips(job: job)
-                    .padding(.top, 1)
-            }
-            // Fills the row, so the name only truncates when it really doesn't
-            // fit — not to share the room with a Spacer.
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.inkFaint)
-        }
-        .padding(12)
-        .panel()
     }
 }
 

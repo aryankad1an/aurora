@@ -233,6 +233,12 @@ final class JobStore {
         }
     }
 
+    /// Look for bounces to a batch's mail while it's still sending, from
+    /// `since` (when the run began). Quiet: see `ReplySync.checkBouncesWhileSending`.
+    func checkBouncesWhileSending(using sync: ReplySync, since: Date) async {
+        await sync.checkBouncesWhileSending(sends: sends, emailByContact: emailByContact, since: since)
+    }
+
     /// The contacts this account has mailed whose name field gives no name:
     /// empty, or the mailbox copied over. Fetched by id, since a mailed
     /// contact's company may not be loaded.

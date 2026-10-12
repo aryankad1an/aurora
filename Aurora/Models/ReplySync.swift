@@ -251,6 +251,9 @@ final class ReplySync {
              lookingUpNames names: [String] = []) async -> Outcome {
         guard !isSyncing, reader != nil else { return Outcome() }
         isSyncing = true
+        // Let a bounce check started by the send queue finish first: they share
+        // what's been read, and its reads would count toward this run's progress.
+        _ = await sendingCheck?.value
         errorMessage = nil
         needsReconnect = false
         needsMigration = SupabaseAPI.replyColumnsMissing
@@ -412,8 +415,12 @@ final class ReplySync {
                     failedThreads.insert(thread)
                 }
             }
+            // A search cut short at its limit holds the notices' checkpoint like
+            // a failed read: the next check searches from the same point, past
+            // the ones read now, for the rest.
+            let unfinished = scanned.failed + dead.failed + (scanned.more ? 1 : 0) + (dead.more ? 1 : 0)
             checkpoint.complete(startedAt: startedAt, openThreadIDs: checked.openThreadIDs,
-                                failedThreadIDs: failedThreads, failedNotices: scanned.failed + dead.failed)
+                                failedThreadIDs: failedThreads, failedNotices: unfinished)
             checkpointFile?.save(checkpoint)
             saveBounces()
             // A run where every request failed (offline, Gmail down) read
@@ -456,7 +463,15 @@ final class ReplySync {
     }
 
     /// What an inbox search for notices found. `read` counts the search itself.
-    nonisolated private static func scanSummary(_ scan: (found: Int, failed: Int, read: Int),
+    nonisolated struct NoticeScan {
+        var found = 0
+        var failed = 0
+        var read = 0
+        /// The search stopped at `bounceListLimit` with notices still unread.
+        var more = false
+    }
+
+    nonisolated private static func scanSummary(_ scan: NoticeScan,
                                                 after: String, noun: String, plural: String) -> String {
         guard scan.read > 0 else { return "Couldn't search" }
         let notices = scan.read - 1 + scan.failed
@@ -465,9 +480,49 @@ final class ReplySync {
         return "\(notices) new \(notices == 1 ? noun : plural)\(range) · \(scan.found) \(scan.found == 1 ? "bounce" : "bounces")"
     }
 
-    nonisolated private static func scanIssues(_ scan: (found: Int, failed: Int, read: Int)) -> [String] {
+    nonisolated private static func scanIssues(_ scan: NoticeScan) -> [String] {
         if scan.read == 0 && scan.failed > 0 { return ["The search couldn't be run; tried again next check"] }
-        return scan.failed > 0 ? ["\(scan.failed) couldn't be read; tried again next check"] : []
+        var issues = scan.failed > 0 ? ["\(scan.failed) couldn't be read; tried again next check"] : []
+        if scan.more { issues.append("More than \(bounceListLimit) new; the rest are read next check") }
+        return issues
+    }
+
+    // MARK: - While sending
+
+    /// The bounce check the send queue started, while it runs.
+    private var sendingCheck: Task<Int, Never>?
+
+    /// Look for bounces to mail sent since `since`, while a batch is still
+    /// going: the inbox searches only (failure notices, and "no longer here"
+    /// answers), since a notice for mail sent minutes ago has nowhere else
+    /// to be. Gmail's own notices arrive within seconds.
+    ///
+    /// Quiet: no progress, nothing in the check timeline, and the checkpoint
+    /// left where it is — this reads only part of what a check reads. What it
+    /// finds is kept like any bounce, and notices it read aren't read again.
+    /// Skipped while a check is running, which will find the same. Returns how
+    /// many bounces it found.
+    @discardableResult
+    func checkBouncesWhileSending(sends: [MailSend], emailByContact: [String: String], since: Date) async -> Int {
+        guard !isSyncing, sendingCheck == nil, reader != nil else { return 0 }
+        let task = Task { [weak self] () -> Int in
+            guard let self else { return 0 }
+            defer { progress = Progress() }
+            do {
+                let from = since.addingTimeInterval(-ReplyCheckpoint.overlap)
+                let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact, since: from)
+                let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact, since: from)
+                saveBounces()
+                return scanned.found + dead.found
+            } catch let error as GmailAuthError where error.needsReconnect {
+                needsReconnect = true
+            } catch {}
+            saveBounces()
+            return 0
+        }
+        sendingCheck = task
+        defer { sendingCheck = nil }
+        return await task.value
     }
 
     // MARK: - One mail
@@ -531,7 +586,7 @@ final class ReplySync {
 
             // Notices that never joined the thread, found by the address in them.
             guard Self.isSearchable(address) else { return .clear }
-            let ids = try await Self.listBounceNotices(matching: "\"\(address)\"", limit: 20, reader: reader)
+            let ids = try await Self.listBounceNotices(matching: "\"\(address)\"", limit: 20, reader: reader).ids
             for id in ids where Self.isSafePathComponent(id) {
                 guard let notice = try? await Self.readNotice(id: id, lookingUpOriginal: true, reader: reader) else { continue }
                 seenBounceMessages.insert(id)
@@ -551,7 +606,7 @@ final class ReplySync {
             let domain = address.split(separator: "@").last.map(String.init) ?? address
             let answers = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery,
                                                            matching: "{from:\(address) \"\(address)\" from:\(domain)}",
-                                                           limit: 20, reader: reader)
+                                                           limit: 20, reader: reader).ids
             let mailed = Self.mailed(sends, emailByContact: emailByContact)
             for answer in try await readHeaders(ids: answers.filter(Self.isSafePathComponent)) {
                 seenBounceMessages.insert(answer.id)
@@ -915,8 +970,14 @@ final class ReplySync {
 
     // MARK: - Pass 3: failure notices
 
-    /// At most this many notices are listed per sync.
-    nonisolated private static let bounceListLimit = 300
+    /// At most this many notices not read before are read per check. Notices
+    /// already read don't count: the listing pages past them, so however many
+    /// a mailbox has collected, the new ones are still reached. A check that
+    /// stops at the limit leaves the rest to the next (`NoticeList.more`).
+    nonisolated private static let bounceListLimit = 1000
+    /// The most notices one listing goes through, read or not — a bound on the
+    /// requests a mailbox full of them could ask for (100 a page).
+    nonisolated private static let bounceListCeiling = 10_000
 
     /// A failure notice, read whole, and the send it names when that could be
     /// looked up.
@@ -985,7 +1046,7 @@ final class ReplySync {
     /// mailed before it arrived: an address that bounced for someone else,
     /// months ago, says nothing about this send.
     private func scanInbox(sends: [MailSend], emailByContact: [String: String],
-                           since: Date?) async throws -> (found: Int, failed: Int, read: Int) {
+                           since: Date?) async throws -> NoticeScan {
         guard let reader else { throw GmailAuthError.notConnected }
         var contactsByAddress: [String: [String]] = [:]
         for (contactID, address) in emailByContact {
@@ -998,16 +1059,17 @@ final class ReplySync {
             if let id = send.gmailMessageID { contactByGmailID[id] = send.contactID }
         }
 
-        let ids: [String]
+        let list: NoticeList
         do {
-            ids = try await Self.listBounceNotices(matching: ReplyCheckpoint.searchTerm(after: since), reader: reader)
+            list = try await Self.listBounceNotices(matching: ReplyCheckpoint.searchTerm(after: since),
+                                                    skipping: seenBounceMessages, reader: reader)
         } catch let error as GmailAuthError where error.endsRun {
             throw error
         } catch {
-            return (0, 1, 0)
+            return NoticeScan(failed: 1)
         }
-        let unread = ids.filter { !seenBounceMessages.contains($0) && Self.isSafePathComponent($0) }
-        guard !unread.isEmpty else { return (0, 0, 1) }
+        let unread = list.ids.filter(Self.isSafePathComponent)
+        guard !unread.isEmpty else { return NoticeScan(read: 1, more: list.more) }
 
         count(unread.count, "notices")
         let notices = try await readNotices(ids: unread, lookingUpOriginals: true)
@@ -1053,7 +1115,7 @@ final class ReplySync {
             // unseen: a send learnt of later (from another device) can still
             // claim it when a search reaches back to it.
         }
-        return (found, failed, read)
+        return NoticeScan(found: found, failed: failed, read: read, more: list.more)
     }
 
     // MARK: - Pass 4: "no longer in service"
@@ -1074,22 +1136,23 @@ final class ReplySync {
     /// is matched to the person it's about (`BounceParsing.matchDeadAddressNotice`)
     /// and kept as their bounce. Read once each, like failure notices.
     private func scanDeadAddressNotices(sends: [MailSend], emailByContact: [String: String],
-                                        since: Date?) async throws -> (found: Int, failed: Int, read: Int) {
+                                        since: Date?) async throws -> NoticeScan {
         guard let reader else { throw GmailAuthError.notConnected }
         let mailed = Self.mailed(sends, emailByContact: emailByContact)
-        guard !mailed.isEmpty else { return (0, 0, 0) }
+        guard !mailed.isEmpty else { return NoticeScan() }
 
-        let ids: [String]
+        let list: NoticeList
         do {
-            ids = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery, matching: ReplyCheckpoint.searchTerm(after: since),
-                                                   limit: 100, reader: reader)
+            list = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery,
+                                                    matching: ReplyCheckpoint.searchTerm(after: since),
+                                                    skipping: seenBounceMessages, reader: reader)
         } catch let error as GmailAuthError where error.endsRun {
             throw error
         } catch {
-            return (0, 1, 0)
+            return NoticeScan(failed: 1)
         }
-        let unread = ids.filter { !seenBounceMessages.contains($0) && Self.isSafePathComponent($0) }
-        guard !unread.isEmpty else { return (0, 0, 1) }
+        let unread = list.ids.filter(Self.isSafePathComponent)
+        guard !unread.isEmpty else { return NoticeScan(read: 1, more: list.more) }
 
         count(unread.count, "messages")
         let answers = try await readHeaders(ids: unread)
@@ -1105,7 +1168,7 @@ final class ReplySync {
             if !isNotice || matched { seenBounceMessages.insert(answer.id) }
             if keepDeadAddressNotice(answer, mailed: mailed, emailByContact: emailByContact) != nil { found += 1 }
         }
-        return (found, unread.count - answers.count, read)
+        return NoticeScan(found: found, failed: unread.count - answers.count, read: read, more: list.more)
     }
 
     /// Keep `answer` as a bounce if it says an address is dead and can be
@@ -1248,18 +1311,30 @@ final class ReplySync {
         return result
     }
 
+    /// What a search for notices listed.
+    nonisolated struct NoticeList {
+        /// Newest first, none of them among the ones skipped.
+        var ids: [String] = []
+        /// Gmail had more than the listing took: the limit, or the ceiling,
+        /// stopped it.
+        var more = false
+    }
+
     /// The ids of recent failure notices, newest first — Spam and Trash
     /// included, where a notice filtered or deleted by hand would otherwise
-    /// never be seen.
+    /// never be seen. Ids in `skipping` (notices read before) are paged past
+    /// without counting toward `limit`.
     nonisolated private static func listBounceNotices(base: String = BounceParsing.noticeQuery,
                                                       matching terms: String? = nil, limit: Int = bounceListLimit,
-                                                      reader: (String, [URLQueryItem]) async throws -> Data) async throws -> [String] {
+                                                      skipping: Set<String> = [],
+                                                      reader: (String, [URLQueryItem]) async throws -> Data) async throws -> NoticeList {
         struct Listing: Decodable {
             struct Item: Decodable { let id: String }
             let messages: [Item]?
             let nextPageToken: String?
         }
-        var ids: [String] = []
+        var list = NoticeList()
+        var listed = 0
         var pageToken: String?
         repeat {
             let search = [base, terms].compactMap { $0 }.joined(separator: " ")
@@ -1268,10 +1343,20 @@ final class ReplySync {
                          URLQueryItem(name: "maxResults", value: "100")]
             if let pageToken { query.append(URLQueryItem(name: "pageToken", value: pageToken)) }
             let listing = try JSONDecoder().decode(Listing.self, from: try await reader("messages", query))
-            ids += listing.messages?.map(\.id) ?? []
+            let page = listing.messages?.map(\.id) ?? []
+            listed += page.count
+            let fresh = page.filter { !skipping.contains($0) }
+            let room = limit - list.ids.count
+            list.ids += fresh.prefix(room)
             pageToken = listing.nextPageToken
-        } while pageToken != nil && ids.count < limit
-        return Array(ids.prefix(limit))
+            // Stopped with notices unlisted: some on this page didn't fit, or
+            // there are pages still to go.
+            if fresh.count > room || (fresh.count == room || listed >= bounceListCeiling) && pageToken != nil {
+                list.more = true
+                break
+            }
+        } while pageToken != nil
+        return list
     }
 
     /// One notice, whole: `format=raw` is the only form that keeps the report

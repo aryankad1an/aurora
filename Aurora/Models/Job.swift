@@ -209,17 +209,19 @@ struct Job: Identifiable, Decodable {
     var validContacts: [Contact] { contacts.filter(\.isValid) }
     var invalidContacts: [Contact] { contacts.filter { !$0.isValid } }
 
-    /// Contacts at this company who wrote back, and the ones still silent after
-    /// being mailed. Neither counts anyone never mailed.
+    /// Contacts at this company who wrote back.
     var repliedContacts: [Contact] { contacts.filter(\.hasReplied) }
-    var awaitingContacts: [Contact] { contacts.filter { $0.isSent && !$0.hasReplied } }
 
-    /// Days since the most recent mail to anyone here who hasn't answered — nil
-    /// when nobody is waiting on a reply.
-    var quietDays: Int? {
-        guard let last = awaitingContacts.compactMap(\.sentAt).max() else { return nil }
-        return Calendar.current.dateComponents([.day], from: last, to: .now).day
-    }
+    /// Valid contacts already mailed, and the valid ones not mailed yet. An
+    /// invalid contact counts as neither: a mail that bounced reached nobody,
+    /// and a dead address is never going to be contacted.
+    var contactedContacts: [Contact] { validContacts.filter(\.isSent) }
+    var uncontactedContacts: [Contact] { validContacts.filter { !$0.isSent } }
+
+    /// When the latest mail to a valid contact went out — nil when none has.
+    /// Mail to contacts since marked invalid doesn't count, so a company whose
+    /// every mail bounced doesn't read as one you've been waiting on for weeks.
+    var lastSentAt: Date? { contactedContacts.compactMap(\.sentAt).max() }
 
     /// Whether this company answers a search box. Matching runs over the people
     /// inside as well as the company itself, so a half-remembered contact's name

@@ -171,7 +171,7 @@ struct CompaniesView: View {
     private func companyRows(_ companies: [Job]) -> some View {
         ForEach(companies) { company in
             let tracked = jobStore.isTracked(company.id)
-            CompanyRow(job: company, isTracked: tracked)
+            CompanyCard(job: company, isTracked: tracked)
                 .matchedTransitionSource(id: company.id, in: zoom)
                 .cardRow()
                 // Ask for the next 50 while ten rows are still to come, so the
@@ -335,81 +335,5 @@ struct CompaniesView: View {
                  ? "No companies with contacts. Turn on “Show empty companies” to see the rest."
                  : "No company, sector or contact matches “\(query)”.")
         }
-    }
-}
-
-/// A company card in the Companies list: monogram, name, sector, a pin when
-/// tracked, a fixed-size contacts-count pill that never truncates, and the same
-/// outreach chips Home's cards carry.
-///
-/// Always three lines, whatever the company has on file — a missing sector says
-/// so rather than collapsing the line — so every card in the catalog is the same
-/// height and the list scrolls as an even column.
-private struct CompanyRow: View {
-    let job: Job
-    let isTracked: Bool
-
-    private var sector: String? {
-        guard let sector = job.sector, !sector.isEmpty else { return nil }
-        return sector
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            MonogramAvatar(company: job.company)
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(job.company)
-                        .font(.headline)
-                        .lineLimit(1)
-                    if isTracked {
-                        Image(systemName: "pin.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.tint)
-                            // The pin springs in the moment a swipe tracks the
-                            // company, on the row the swipe happened on.
-                            .transition(.scale(scale: 0.2).combined(with: .opacity))
-                    }
-                }
-                Text(sector ?? "No sector")
-                    .font(.caption)
-                    .foregroundStyle(sector == nil ? Color.inkFaint : Color.inkMuted)
-                    .lineLimit(1)
-                // Own line, for the same reason as Home's card: a long sector name
-                // beside a fixed-width chip overflowed the row on a narrow phone.
-                OutreachChips(job: job)
-                    .padding(.top, 1)
-            }
-            // Fills the row. Beside a Spacer the HStack split the spare room
-            // between the two, and "1DigitalStack" truncated to "1Digital…"
-            // next to half a row of empty card.
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            countPill
-
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.inkFaint)
-        }
-        .padding(12)
-        .panel()
-        .animation(Theme.Motion.pop, value: isTracked)
-    }
-
-    /// The contact count as a compact capsule. `fixedSize` keeps it at its
-    /// intrinsic width so it can never be squeezed or overflow — the name
-    /// truncates instead.
-    private var countPill: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "person.2.fill")
-            Text("\(job.contacts.count)")
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.inkMuted)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Color.inkMuted.opacity(0.15), in: Capsule())
-        .fixedSize()
     }
 }

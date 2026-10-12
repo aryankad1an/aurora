@@ -90,6 +90,9 @@ final class MailQueue {
         /// `maxRetries`, after which the batch waits for Resume.
         var retry: [TimeInterval] = [5, 10, 20, 40, 60, 120, 300]
         var maxRetries = 12
+        /// How long after a run ends its last bounce check waits, so notices
+        /// for the last mails have time to arrive.
+        var bounceSettle: TimeInterval = 60
 
         static let standard = Timing()
     }
@@ -100,6 +103,9 @@ final class MailQueue {
     /// second time, so they're written as the run goes — and anything left
     /// unrecorded by a close is written the next time the app opens.
     private static let recordEvery = 5
+    /// Bounces are looked for every this many mails a run delivers
+    /// (`onBounceCheck`), and once more after it ends.
+    static let bounceCheckEvery = 50
     /// How long to wait after Gmail's first, second… rate limit in a row before
     /// trying the same mail again, when Gmail didn't say how long. Each step
     /// doubles; a success resets it.
@@ -160,6 +166,10 @@ final class MailQueue {
     var onRecord: (([Contact.ID: SentMail]) async -> Bool)?
     /// Told whenever something the Live Activity shows may have changed.
     var onChange: ((MailQueue) -> Void)?
+    /// Looks for bounces to mail sent since the given time — when the run
+    /// began. Called every `bounceCheckEvery` mails, without holding the run
+    /// up, and once after it ends.
+    var onBounceCheck: ((_ since: Date) async -> Void)?
 
     private var file: JSONFile<[MailBatch]>?
     #if canImport(UIKit)
@@ -501,7 +511,10 @@ final class MailQueue {
         beginAssertion()
         defer { endAssertion() }
 
+        let startedAt = Date.now
         var sent = 0
+        /// How many had been sent at the last bounce check.
+        var checkedAt = 0
         var failed: [String] = []
         var stoppedBecause: String?
         /// Gmail rate limits in a row, for the backoff.
@@ -626,6 +639,12 @@ final class MailQueue {
             }
 
             if unrecordedCount >= Self.recordEvery { await recordDeliveries() }
+            if sent - checkedAt >= Self.bounceCheckEvery {
+                checkedAt = sent
+                // In the send history first, so a notice can be matched to them.
+                await recordDeliveries()
+                checkBounces(since: startedAt)
+            }
             if let batch = self.batch(id), !batch.isPaused, batch.hasWork {
                 let jitter = timing.jitter
                 try? await Task.sleep(for: timing.spacing + .milliseconds(jitter > 0 ? Int.random(in: -jitter...jitter) : 0))
@@ -639,6 +658,7 @@ final class MailQueue {
         // Record even a stopped run's successes — those mails really were sent,
         // and losing them would offer to re-send people who've already been mailed.
         await recordDeliveries()
+        if sent > 0 { checkBounces(since: startedAt, after: timing.bounceSettle) }
 
         let paused = batch(id).map { $0.isPaused && $0.hasWork } ?? false
         runningBatchID = nil
@@ -648,6 +668,16 @@ final class MailQueue {
                           stoppedBecause: stoppedBecause, isPaused: paused)
         startNext()
         changed()
+    }
+
+    /// Look for bounces to this run's mail, in the background: the run goes on
+    /// sending meanwhile.
+    private func checkBounces(since: Date, after delay: TimeInterval = 0) {
+        guard let onBounceCheck else { return }
+        Task {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            await onBounceCheck(since)
+        }
     }
 
     /// Pause a batch the run couldn't go on with for now, and have it carry on

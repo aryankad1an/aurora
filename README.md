@@ -443,7 +443,16 @@ A bounce is found two ways during the same sync:
   sync searches for the usual senders and the usual subjects ("Undeliverable",
   "Delivery Status Notification", "Returned mail", "Delivery failure", …) from
   the last 120 days, Spam and Trash included. It reads only the notices it
-  hasn't seen before.
+  hasn't seen before. The search pages past the ones already read, so however
+  many have piled up, new ones are still reached. A check reads up to 1,000
+  new notices; if there are more, it leaves its checkpoint where it was and
+  the next check carries on from there.
+
+Bounces are also looked for while a batch sends: after every 50 mails, and
+once more a minute after the run ends. These quiet checks only run the inbox
+searches (failure notices and "no longer here" answers) from when the run
+began. They don't show progress or add to the Status timeline, and they don't
+move the checkpoint. They skip their turn while a full check is running.
 
 Either way, the notice is read whole (`format=raw`), not just its preview.
 Most notices carry a machine-readable report (RFC 3464) that gives each failed

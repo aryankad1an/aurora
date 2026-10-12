@@ -358,17 +358,9 @@ struct JobDetailView: View {
 
             Divider().overlay(Color.hairline)
 
-            // Figures over captions in three equal columns — side by side, a
-            // figure and its word competed for one line and "Contacts" broke
-            // into "Con-tacts".
-            HStack(spacing: 0) {
-                Metric(value: job.contacts.count, caption: "Contacts", size: 22)
-                MetricDivider()
-                Metric(value: job.contacts.filter(\.isSent).count, caption: "Sent", size: 22)
-                MetricDivider()
-                Metric(value: job.repliedContacts.count, caption: "Replied",
-                       tint: job.repliedContacts.isEmpty ? .ink : .olive, size: 22)
-            }
+            // The same figures, worked out the same way, as this company's card
+            // on Home and in Companies.
+            OutreachStats(job: job, size: 22)
         }
         .padding(16)
         .panel()
