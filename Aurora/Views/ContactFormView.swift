@@ -101,8 +101,14 @@ struct ContactFormView: View {
                 isPickingCompany = true
             } label: {
                 HStack(spacing: 12) {
-                    MonogramAvatar(company: destinationName ?? "?", size: Theme.Avatar.small)
-                        .opacity(destination == nil ? 0.4 : 1)
+                    Group {
+                        if case .existing(let job) = destination {
+                            CompanyLogo(job: job, size: Theme.Avatar.small)
+                        } else {
+                            MonogramAvatar(company: destinationName ?? "?", size: Theme.Avatar.small)
+                        }
+                    }
+                    .opacity(destination == nil ? 0.4 : 1)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(destinationName ?? "Choose a company")
                             .font(.headline)
@@ -279,7 +285,7 @@ struct CompanyPickerView: View {
                     pick(.existing(company))
                 } label: {
                     HStack(spacing: 12) {
-                        MonogramAvatar(company: company.company, size: Theme.Avatar.small)
+                        CompanyLogo(job: company, size: Theme.Avatar.small)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(company.company)
                                 .font(.headline)

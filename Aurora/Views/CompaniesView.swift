@@ -34,12 +34,21 @@ struct CompaniesView: View {
     ///
     /// Searching covers the loaded pages *and* the server's matches, so a company
     /// on a page not yet scrolled to is still found.
+    ///
+    /// A fresher scope lists every company in it, contacts or not, for the same
+    /// reason: having asked for companies that hire freshers, one with nobody on
+    /// file yet is still an answer — and its careers page is what's wanted.
     private var filtered: [Job] {
+        let scope = jobStore.catalogScope
         guard query.isEmpty else {
-            return .matching(query, in: jobStore.allCompanies, jobStore.searchResults)
+            // Server hits come from the whole catalog; the scope still applies.
+            return [Job].matching(query, in: jobStore.allCompanies, jobStore.searchResults).filter(scope.includes)
         }
-        return showEmpty ? jobStore.allCompanies : jobStore.allCompanies.filter { !$0.contacts.isEmpty }
+        return showEmpty || scope != .all ? jobStore.allCompanies : jobStore.allCompanies.filter { !$0.contacts.isEmpty }
     }
+
+    /// The filter chips show once the database can filter by fresher hiring.
+    private var showsScopes: Bool { !SupabaseAPI.fresherColumnsMissing }
 
     var body: some View {
         // Filtered once per render: the rows, the empty check and the paging
@@ -48,8 +57,10 @@ struct CompaniesView: View {
         return NavigationStack(path: $path) {
             Group {
                 if jobStore.allCompanies.isEmpty {
-                    if jobStore.isLoading {
+                    if jobStore.isLoading || jobStore.isLoadingMoreCompanies {
                         LoadingState()
+                    } else if jobStore.catalogScope != .all {
+                        emptyScopeState
                     } else {
                         emptyState
                     }
@@ -90,6 +101,16 @@ struct CompaniesView: View {
                     .scrollDismissesKeyboard(.immediately)
                 }
             }
+            // Under the search field, above the list, so a scope can be
+            // changed from anywhere in it — and from an empty result.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if showsScopes && !selection.isSelecting {
+                    ScopeBar(selection: jobStore.catalogScope, counts: jobStore.scopeCounts) { scope in
+                        Haptics.select()
+                        Task { await jobStore.setScope(scope) }
+                    }
+                }
+            }
             .paperScreen()
             .navigationTitle("Companies")
             .navigationBarTitleDisplayMode(.large)
@@ -125,17 +146,11 @@ struct CompaniesView: View {
                 Task { await jobStore.deleteCompanies([company.id]) }
             }
             .sheet(isPresented: $isAdding) {
-                CompanyFormView(title: "New Company", confirmLabel: "Add") { name, sector, domains in
+                CompanyFormView(title: "New Company", confirmLabel: "Add") { details in
                     // A brand-new company has no contacts yet, so reveal empty
                     // companies — otherwise the add would seem to do nothing.
                     showEmpty = true
-                    Task {
-                        await jobStore.createCompany(
-                            name: name,
-                            sector: sector.isEmpty ? nil : sector,
-                            domains: domains
-                        )
-                    }
+                    Task { await jobStore.createCompany(details) }
                 }
             }
             .addContactSheet(isPresented: $isAddingContact)
@@ -156,9 +171,23 @@ struct CompaniesView: View {
         }
         .disabled(jobStore.allCompanies.isEmpty)
         Divider()
+        if showsScopes {
+            // The chips' choices again, for VoiceOver and Switch Control users
+            // who'd rather not hunt along a scrolling row.
+            Picker(selection: Binding(get: { jobStore.catalogScope },
+                                      set: { scope in Task { await jobStore.setScope(scope) } })) {
+                ForEach(CatalogScope.allCases) { scope in
+                    Label(scope.title, systemImage: scope.systemImage).tag(scope)
+                }
+            } label: {
+                Label("Show", systemImage: "line.3.horizontal.decrease.circle")
+            }
+            .pickerStyle(.menu)
+        }
         Toggle(isOn: $showEmpty) {
             Label("Show empty companies", systemImage: "tray")
         }
+        .disabled(jobStore.catalogScope != .all)
     }
 
     /// The row whose appearance fetches the next page: ten from the end.
@@ -329,9 +358,105 @@ struct CompaniesView: View {
         ContentUnavailableView {
             Label("No Companies", systemImage: "magnifyingglass")
         } description: {
-            Text(query.isEmpty
-                 ? "No companies with contacts. Turn on “Show empty companies” to see the rest."
-                 : "No company, sector or contact matches “\(query)”.")
+            if !query.isEmpty {
+                Text(jobStore.catalogScope == .all
+                     ? "No company, sector or contact matches “\(query)”."
+                     : "No company in “\(jobStore.catalogScope.title)” matches “\(query)”.")
+            } else {
+                Text("No companies with contacts. Turn on “Show empty companies” to see the rest.")
+            }
+        } actions: {
+            if !query.isEmpty && jobStore.catalogScope != .all {
+                Button("Search All Companies") {
+                    Task { await jobStore.setScope(.all) }
+                }
+                .secondaryButton()
+            }
         }
+    }
+
+    /// A fresher scope with nothing in it.
+    private var emptyScopeState: some View {
+        ContentUnavailableView {
+            Label("Nothing in “\(jobStore.catalogScope.title)”", systemImage: jobStore.catalogScope.systemImage)
+        } description: {
+            Text(jobStore.catalogScope == .openNow
+                 ? "No fresher posting is known to be open right now."
+                 : "No company in the catalog is in this group yet.")
+        } actions: {
+            Button("Show All Companies") {
+                Task { await jobStore.setScope(.all) }
+            }
+            .secondaryButton()
+        }
+    }
+}
+
+/// The row of filter chips over the catalog: All, then the fresher-hiring
+/// scopes, each with how many companies it holds.
+private struct ScopeBar: View {
+    let selection: CatalogScope
+    let counts: [CatalogScope: Int]
+    let onSelect: (CatalogScope) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(CatalogScope.allCases) { scope in
+                        chip(scope)
+                            .id(scope)
+                    }
+                }
+                .padding(.horizontal, Theme.Space.gutter)
+                .padding(.vertical, 8)
+            }
+            .onChange(of: selection) { _, scope in
+                withAnimation(Theme.Motion.snappy) { proxy.scrollTo(scope, anchor: .center) }
+            }
+        }
+        .background(Color.paper.opacity(0.92))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color.hairline).frame(height: 1)
+        }
+    }
+
+    private func chip(_ scope: CatalogScope) -> some View {
+        let isOn = scope == selection
+        let count = counts[scope]
+        return Button {
+            guard !isOn else { return }
+            onSelect(scope)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: scope.systemImage)
+                    .font(.caption.weight(.semibold))
+                Text(scope.title)
+                    .font(.subheadline.weight(.semibold))
+                if let count {
+                    Text(count.formatted())
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(isOn ? Color.white.opacity(0.8) : Color.inkFaint)
+                        .contentTransition(.numericText())
+                }
+            }
+            .foregroundStyle(isOn ? Color.white : Color.ink)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background {
+                if isOn {
+                    Capsule().fill(Color.clay)
+                } else {
+                    Capsule().fill(Color.paperRaised)
+                        .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
+                }
+            }
+            .contentShape(.capsule)
+        }
+        .buttonStyle(BouncyPress(scale: 0.94))
+        .animation(Theme.Motion.snappy, value: isOn)
+        .accessibilityLabel(count.map { "\(scope.title), \($0)" } ?? scope.title)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }

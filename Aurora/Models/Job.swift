@@ -161,12 +161,59 @@ struct Job: Identifiable, Decodable {
     var domains: [String] = []
     var contacts: [Contact] = []
 
+    // MARK: Links and fresher hiring
+    //
+    // Filled from the Fresher Hiring Ledger and the company's own website (see
+    // scripts/fresher_ledger), and editable in Edit Company. All empty until the
+    // fresher-hiring migration in the README has run.
+
+    /// The company's own website, e.g. "https://stripe.com".
+    var website: String?
+    /// How the website was found ("wikidata", "mail_domain", "edited", …).
+    var websiteSource: String?
+    var careersURL: String?
+    var careersSource: String?
+    /// A square PNG the company's own site offers as its icon. Shown in place of
+    /// the monogram wherever the company appears.
+    var logoURL: String?
+    /// Whether the company is known to hire freshers — every company in the
+    /// ledger is. What the Companies filter's Freshers scope shows.
+    var isFresher = false
+    /// The Fresher Hiring Ledger companies this one is (one, or a few when
+    /// subsidiaries share its mail domain).
+    var ledgerIDs: [String] = []
+    /// Product / MNC, IT services / consulting, …
+    var companyType: String?
+    /// Every route it has been seen hiring freshers by, as stored.
+    var hiringRouteValues: [String] = []
+    /// Whether a fresher posting is open right now.
+    var isOpenNow = false
+    /// The months its off-campus hiring usually opens, e.g. "Sep, Dec".
+    var usuallyOpens: String?
+    /// Graduation years its fresher roles have asked for.
+    var batches: [String] = []
+    /// The fresher roles it hires for most.
+    var fresherRoles: [String] = []
+
     enum CodingKeys: String, CodingKey {
         case id
         case company = "name"
         case sector
         case domains
         case contacts = "recruiters"
+        case website
+        case websiteSource = "website_source"
+        case careersURL = "careers_url"
+        case careersSource = "careers_source"
+        case logoURL = "logo_url"
+        case isFresher = "is_fresher"
+        case ledgerIDs = "ledger_ids"
+        case companyType = "company_type"
+        case hiringRouteValues = "hiring_routes"
+        case isOpenNow = "open_now"
+        case usuallyOpens = "usually_opens"
+        case batches
+        case fresherRoles = "fresher_roles"
     }
 
     init(id: String, company: String, sector: String? = nil, domains: [String] = [], contacts: [Contact] = []) {
@@ -184,6 +231,50 @@ struct Job: Identifiable, Decodable {
         sector = try c.decodeIfPresent(String.self, forKey: .sector)
         domains = (try c.decodeIfPresent([String].self, forKey: .domains) ?? []).compactMap(MailDomain.clean)
         contacts = try c.decodeIfPresent([Contact].self, forKey: .contacts) ?? []
+        // Every one of these is absent until the fresher-hiring migration has run.
+        website = try c.decodeIfPresent(String.self, forKey: .website)
+        websiteSource = try c.decodeIfPresent(String.self, forKey: .websiteSource)
+        careersURL = try c.decodeIfPresent(String.self, forKey: .careersURL)
+        careersSource = try c.decodeIfPresent(String.self, forKey: .careersSource)
+        logoURL = try c.decodeIfPresent(String.self, forKey: .logoURL)
+        isFresher = try c.decodeIfPresent(Bool.self, forKey: .isFresher) ?? false
+        ledgerIDs = try c.decodeIfPresent([String].self, forKey: .ledgerIDs) ?? []
+        companyType = try c.decodeIfPresent(String.self, forKey: .companyType)
+        hiringRouteValues = try c.decodeIfPresent([String].self, forKey: .hiringRouteValues) ?? []
+        isOpenNow = try c.decodeIfPresent(Bool.self, forKey: .isOpenNow) ?? false
+        usuallyOpens = try c.decodeIfPresent(String.self, forKey: .usuallyOpens)
+        batches = try c.decodeIfPresent([String].self, forKey: .batches) ?? []
+        fresherRoles = try c.decodeIfPresent([String].self, forKey: .fresherRoles) ?? []
+    }
+
+    /// The hiring routes it's known by, strongest first. A value the app doesn't
+    /// know is left out rather than shown raw.
+    var hiringRoutes: [HiringRoute] {
+        let known = Set(hiringRouteValues.compactMap(HiringRoute.init(rawValue:)))
+        return HiringRoute.ordered.filter(known.contains)
+    }
+
+    /// The bucket its strongest route puts it in.
+    var routeCategory: RouteCategory? { RouteCategory.of(hiringRoutes) }
+
+    var websiteLink: URL? { CompanyLink.url(website) }
+    var careersLink: URL? { CompanyLink.url(careersURL) }
+    /// Only ever an https image: an http one would be blocked by App Transport
+    /// Security, and every logo on file is https.
+    var logoLink: URL? {
+        guard let url = CompanyLink.url(logoURL), url.scheme?.lowercased() == "https" else { return nil }
+        return url
+    }
+
+    /// Everything Edit Company can change, as it stands.
+    var details: CompanyDetails {
+        CompanyDetails(
+            name: company, sector: sector ?? "", domains: domains,
+            website: website ?? "", careersURL: careersURL ?? "", logoURL: logoURL ?? "",
+            isFresher: isFresher, isOpenNow: isOpenNow, companyType: companyType ?? "",
+            hiringRoutes: Set(hiringRoutes), usuallyOpens: usuallyOpens ?? "",
+            batches: batches, fresherRoles: fresherRoles
+        )
     }
 
     /// Work domains seen on this company's contacts' addresses, most common first.
@@ -235,8 +326,72 @@ struct Job: Identifiable, Decodable {
         guard !query.isEmpty else { return false }
         if company.localizedCaseInsensitiveContains(query) { return true }
         if sector?.localizedCaseInsensitiveContains(query) == true { return true }
+        if companyType?.localizedCaseInsensitiveContains(query) == true { return true }
+        if fresherRoles.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return true }
         if domains.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return true }
         return contacts.contains { $0.matches(query) }
+    }
+}
+
+/// A company's editable fields, as Edit Company holds them while they're
+/// changed: text fields as typed, so an empty field means "none".
+struct CompanyDetails: Equatable {
+    var name = ""
+    var sector = ""
+    var domains: [String] = []
+    var website = ""
+    var careersURL = ""
+    var logoURL = ""
+    var isFresher = false
+    var isOpenNow = false
+    var companyType = ""
+    var hiringRoutes: Set<HiringRoute> = []
+    var usuallyOpens = ""
+    var batches: [String] = []
+    var fresherRoles: [String] = []
+
+    /// The routes in their stored order, strongest first.
+    var orderedRoutes: [HiringRoute] { HiringRoute.ordered.filter(hiringRoutes.contains) }
+
+    /// The fresher details with surrounding space trimmed and empty entries
+    /// dropped — what's compared and saved.
+    var trimmed: CompanyDetails {
+        func clean(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
+        func list(_ xs: [String]) -> [String] {
+            var seen = Set<String>()
+            return xs.map(clean).filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+        }
+        var d = self
+        d.name = clean(name)
+        d.sector = clean(sector)
+        d.website = clean(website)
+        d.careersURL = clean(careersURL)
+        d.logoURL = clean(logoURL)
+        d.companyType = clean(companyType)
+        d.usuallyOpens = clean(usuallyOpens)
+        d.batches = list(batches)
+        d.fresherRoles = list(fresherRoles)
+        return d
+    }
+
+    /// Whether any of the fields only the fresher-hiring migration can store
+    /// is set.
+    var hasFresherDetails: Bool {
+        let t = trimmed
+        return !t.website.isEmpty || !t.careersURL.isEmpty || !t.logoURL.isEmpty || t.isFresher
+            || !t.companyType.isEmpty || !t.hiringRoutes.isEmpty || !t.usuallyOpens.isEmpty
+            || !t.batches.isEmpty || !t.fresherRoles.isEmpty
+    }
+
+    /// A link field that holds something that isn't a web address. Saving is
+    /// held back until it's fixed or cleared, rather than storing a dead link.
+    var invalidLinkFields: [String] {
+        var bad: [String] = []
+        let t = trimmed
+        if !t.website.isEmpty && CompanyLink.url(t.website) == nil { bad.append("Website") }
+        if !t.careersURL.isEmpty && CompanyLink.url(t.careersURL) == nil { bad.append("Careers page") }
+        if !t.logoURL.isEmpty && CompanyLink.url(t.logoURL)?.scheme?.lowercased() != "https" { bad.append("Logo") }
+        return bad
     }
 }
 

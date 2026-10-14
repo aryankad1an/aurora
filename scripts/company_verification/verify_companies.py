@@ -742,6 +742,46 @@ def chunks(xs, n=100):
         yield xs[i:i + n]
 
 
+def company_sources(cid):
+    """The fresher-hiring sources filed under a company; none before that migration."""
+    try:
+        return supabase.get("company_sources", {"company_id": f"eq.{cid}"}, select="id")
+    except supabase.APIError as e:
+        if "company_sources" in str(e) and ("PGRST205" in str(e) or "42P01" in str(e)):
+            return []
+        raise
+
+
+FRESHER_LISTS = ("ledger_ids", "hiring_routes", "batches", "fresher_roles")
+FRESHER_TEXT = ("website", "website_source", "careers_url", "careers_source", "logo_url",
+                "company_type", "route_category", "usually_opens")
+
+
+def move_fresher_data(cid, tgt):
+    """Move a folded company's sources to `tgt`, and give `tgt` the fresher
+    flag and any fresher details it lacks. A no-op before the migration."""
+    if not company_sources(cid):
+        moved = 0
+    else:
+        moved = len(supabase.write("PATCH", "company_sources", {"company_id": f"eq.{cid}"},
+                                   {"company_id": tgt}))
+    try:
+        src = supabase.get("companies", {"id": f"eq.{cid}"})[0]
+        dst = supabase.get("companies", {"id": f"eq.{tgt}"})[0]
+    except (supabase.APIError, IndexError):
+        return
+    if not src.get("is_fresher"):
+        return
+    patch = {"is_fresher": True, "open_now": bool(src.get("open_now") or dst.get("open_now"))}
+    for k in FRESHER_LISTS:
+        patch[k] = list(dict.fromkeys((dst.get(k) or []) + (src.get(k) or [])))
+    for k in FRESHER_TEXT:
+        if not dst.get(k) and src.get(k):
+            patch[k] = src[k]
+    supabase.write("PATCH", "companies", {"id": f"eq.{tgt}"}, patch, prefer="return=minimal")
+    print(f"  moved {moved} hiring sources and the fresher flag from {src['name']} to {dst['name']}")
+
+
 def apply(st, plan):
     ids = dict()  # placeholder -> real id
     for key, spec in plan["creates"].items():
@@ -789,15 +829,22 @@ def apply(st, plan):
     print(f"  deleted {len(plan.get('delete_personal', []))} personal-mailbox contacts, "
           f"{len(plan.get('delete_dead', []))} contacts on dead domains")
 
+    # A folded company's fresher-hiring sources and flag go with its contacts:
+    # deleting it would cascade to the sources.
+    for cid, tgt in plan.get("fold_into", {}).items():
+        move_fresher_data(cid, real(tgt))
+
     # Deleting a company cascades to its contacts and their sends: refuse
     # unless the DB confirms it's empty and untracked right now.
     for cid in plan["delete_companies"] + plan.get("delete_emptied", []):
         left = supabase.get("recruiters", {"company_id": f"eq.{cid}"}, select="id")
         tracked = (supabase.get("tracked_companies", {"company_id": f"eq.{cid}"}, select="user_email")
                    + supabase.get("user_companies", {"company_id": f"eq.{cid}"}, select="user_email"))
-        if left or tracked:
+        sources = company_sources(cid)
+        if left or tracked or sources:
             raise SystemExit(f"refusing to delete {st.companies[cid]['name']}: "
-                             f"{len(left)} contacts, {len(tracked)} tracked rows remain")
+                             f"{len(left)} contacts, {len(tracked)} tracked rows, "
+                             f"{len(sources)} hiring sources remain")
         supabase.write("DELETE", "companies", {"id": f"eq.{cid}"}, prefer="return=minimal")
     print(f"  deleted {len(plan['delete_companies'])} folded companies, "
           f"{len(plan.get('delete_emptied', []))} emptied companies")
@@ -807,6 +854,8 @@ def apply(st, plan):
         sent = supabase.get("mail_sends", {"recruiter_id": supabase.in_filter(rids)}, select="id") if rids else []
         if sent:
             raise SystemExit(f"refusing to delete junk {st.companies[cid]['name']}: it has sends")
+        if company_sources(cid):
+            raise SystemExit(f"refusing to delete junk {st.companies[cid]['name']}: it has hiring sources")
         if rids:
             supabase.write("DELETE", "recruiters", {"id": supabase.in_filter(rids)}, prefer="return=minimal")
         supabase.write("DELETE", "companies", {"id": f"eq.{cid}"}, prefer="return=minimal")

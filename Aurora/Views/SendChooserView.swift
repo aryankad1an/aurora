@@ -44,7 +44,7 @@ struct SendChooserView: View {
         HStack(spacing: 12) {
             HStack(spacing: -10) {
                 ForEach(companies.prefix(4)) { company in
-                    MonogramAvatar(company: company.company, size: 34)
+                    CompanyLogo(job: company, size: 34)
                         .overlay(RoundedRectangle(cornerRadius: 34 * 0.28, style: .continuous)
                             .strokeBorder(Color.paper, lineWidth: 2))
                 }

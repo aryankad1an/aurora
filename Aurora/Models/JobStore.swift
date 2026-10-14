@@ -44,6 +44,22 @@ final class JobStore {
     /// How many catalog rows have been paged in from the server.
     private var companyOffset = 0
 
+    /// Which slice of the catalog the Companies tab lists. Changing it pages
+    /// the catalog in again from the server (see `setScope`).
+    private(set) var catalogScope = CatalogScope.all
+    /// How many companies each scope holds, for the filter chips. Missing until
+    /// counted; best-effort, so a failed count leaves the chip without a figure.
+    private(set) var scopeCounts: [CatalogScope: Int] = [:]
+
+    // MARK: - Hiring sources
+
+    /// Each company's hiring sources, once its screen has asked for them. Loaded
+    /// per company rather than with the catalog: a company can have a hundred,
+    /// and the lists only ever need the company's own fields.
+    private(set) var sources: [String: [CompanySource]] = [:]
+    /// Companies whose sources are being fetched right now.
+    private(set) var loadingSources: Set<String> = []
+
     // MARK: - Server search
 
     /// Catalog matches from the server for `searchQuery`, covering companies on
@@ -339,34 +355,64 @@ final class JobStore {
     /// Create a new company in the shared catalog. Not auto-tracked; it appears in
     /// the Companies list (with "Show empty" on) ready for contacts.
     func createCompany(name: String, sector: String? = nil, domains: [String] = []) async {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        var details = CompanyDetails()
+        details.name = name
+        details.sector = sector ?? ""
+        details.domains = domains
+        await createCompany(details)
+    }
+
+    /// Create a company with everything the form was given.
+    func createCompany(_ details: CompanyDetails) async {
+        let details = details.trimmed
+        guard !details.name.isEmpty else { return }
         await perform {
-            _ = try await SupabaseAPI.addCompany(name: trimmed, sector: sector, domains: domains)
+            _ = try await SupabaseAPI.addCompany(details)
         }
-        warnIfDomainsDropped(domains)
+        warnIfDomainsDropped(details.domains)
+        warnIfFresherDetailsDropped(details, previous: nil)
+    }
+
+    /// Save a catalog company's details (upstream, for everyone), with a short
+    /// window to undo it.
+    func updateCompany(id: String, details: CompanyDetails) async {
+        let details = details.trimmed
+        guard !details.name.isEmpty else { return }
+        let previous = company(id: id)
+
+        let saved = await perform {
+            try await SupabaseAPI.updateCompany(id: id, details: details, previous: previous)
+        }
+        if saved, details.domains != previous?.domains { warnIfDomainsDropped(details.domains) }
+        if saved { warnIfFresherDetailsDropped(details, previous: previous) }
+        // Only a write that landed has anything to undo.
+        guard saved, let previous else { return }
+        UndoCoordinator.shared.stage(message: "Company details updated") { [weak self] in
+            await self?.perform {
+                // Restored as it was — including where its links came from.
+                try await SupabaseAPI.updateCompany(id: id, details: previous.details, previous: nil)
+                try await SupabaseAPI.restoreLinkSources(id: id, website: previous.websiteSource,
+                                                         careers: previous.careersSource)
+            }
+        }
     }
 
     /// Rename, re-sector, or change the domains of a catalog company (upstream,
     /// for everyone), with a short window to undo it.
     func updateCompany(id: String, name: String, sector: String?, domains: [String]) async {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        let previous = company(id: id)
+        guard var details = company(id: id)?.details else { return }
+        details.name = name
+        details.sector = sector ?? ""
+        details.domains = domains
+        await updateCompany(id: id, details: details)
+    }
 
-        let saved = await perform {
-            try await SupabaseAPI.updateCompany(id: id, name: trimmed, sector: sector, domains: domains)
-        }
-        if saved, domains != previous?.domains { warnIfDomainsDropped(domains) }
-        // Only a write that landed has anything to undo.
-        guard saved, let previous else { return }
-        UndoCoordinator.shared.stage(message: "Company details updated") { [weak self] in
-            await self?.perform {
-                try await SupabaseAPI.updateCompany(id: id, name: previous.company,
-                                                    sector: previous.sector,
-                                                    domains: previous.domains)
-            }
-        }
+    /// Fresher details that couldn't be stored (the database predates their
+    /// columns) are a partial save, and say so.
+    private func warnIfFresherDetailsDropped(_ details: CompanyDetails, previous: Job?) {
+        guard SupabaseAPI.fresherColumnsMissing, details.hasFresherDetails || previous?.details.hasFresherDetails == true
+        else { return }
+        errorMessage = "The company was saved, but its links, logo and fresher-hiring details weren't: the database needs a one-time update first. Run the fresher-hiring migration from the README in the Supabase SQL editor."
     }
 
     /// A company saved without the domains it was given (the database predates
@@ -491,6 +537,106 @@ final class JobStore {
         return true
     }
 
+    // MARK: - Hiring sources (shared, upstream)
+
+    /// Fetch a company's sources. Quiet on failure: the company screen still
+    /// shows everything else, and says the sources couldn't be loaded.
+    func loadSources(companyID: String) async {
+        loadingSources.insert(companyID)
+        defer { loadingSources.remove(companyID) }
+        do {
+            sources[companyID] = try await SupabaseAPI.fetchSources(companyID: companyID)
+        } catch {
+            if !error.isCancellation && sources[companyID] == nil { sources[companyID] = [] }
+        }
+    }
+
+    /// Mark sources valid or invalid, for every user, with a short window to
+    /// undo it. An invalid source stops counting toward the stated package.
+    func setSourceValidity(_ changed: [CompanySource], isValid: Bool) async {
+        let ids = changed.map(\.id)
+        guard let companyID = changed.first?.companyID, !ids.isEmpty else { return }
+        let saved = await performOnSources(companyID) {
+            try await SupabaseAPI.setSourceValidity(ids: ids, isValid: isValid)
+        }
+        guard saved else { return }
+        let noun = ids.count == 1 ? "Source" : "\(ids.count) sources"
+        UndoCoordinator.shared.stage(message: "\(noun) marked \(isValid ? "valid" : "invalid")") { [weak self] in
+            await self?.performOnSources(companyID) {
+                try await SupabaseAPI.setSourceValidity(ids: ids, isValid: !isValid)
+            }
+        }
+    }
+
+    /// Add a source, or save an edited one. Returns whether it landed.
+    @discardableResult
+    func saveSource(_ source: CompanySource) async -> Bool {
+        await performOnSources(source.companyID) {
+            if source.id.isEmpty {
+                try await SupabaseAPI.addSource(source)
+            } else {
+                try await SupabaseAPI.updateSource(source)
+            }
+        }
+    }
+
+    /// Delete sources for good. Marking one invalid is the reversible way.
+    func deleteSources(_ doomed: [CompanySource]) async {
+        guard let companyID = doomed.first?.companyID else { return }
+        await performOnSources(companyID) {
+            try await SupabaseAPI.deleteSources(ids: doomed.map(\.id))
+        }
+    }
+
+    /// Run a write to one company's sources, then refetch just those — not the
+    /// whole catalog, which a source never changes.
+    @discardableResult
+    private func performOnSources(_ companyID: String, _ operation: () async throws -> Void) async -> Bool {
+        inFlight += 1
+        defer { inFlight -= 1 }
+        do {
+            try await operation()
+        } catch {
+            report(error)
+            return false
+        }
+        await loadSources(companyID: companyID)
+        return true
+    }
+
+    // MARK: - Export
+
+    /// Everything the database holds that this account can see: the shared
+    /// catalog (companies, contacts, hiring sources) and this account's own
+    /// rows (sends, templates, profile, Home's companies). Other people's
+    /// sends and templates are theirs, and stay out.
+    func exportSnapshot() async throws -> DataExport {
+        guard let email = userEmail else { throw ExportError.signedOut }
+        let mine = [URLQueryItem(name: "user_email", value: "eq.\(email)")]
+        // One table after another: an export is a few seconds once, and the
+        // rows are raw JSON objects, which can't be handed between tasks.
+        let companies = try await SupabaseAPI.fetchRows("companies", order: "name")
+        let contacts = try await SupabaseAPI.fetchRows("recruiters", order: "id")
+        let sources = try await Self.optionalRows("company_sources", order: "id")
+        let sends = try await SupabaseAPI.fetchRows("mail_sends", filters: mine, order: "sent_at.desc")
+        let templates = try await SupabaseAPI.fetchRows("templates", filters: mine, order: "name")
+        let profile = try await SupabaseAPI.fetchRows("profiles", filters: [URLQueryItem(name: "email", value: "eq.\(email)")],
+                                                      order: "email")
+        let tracked = try await SupabaseAPI.fetchRows("tracked_companies", filters: mine, order: "company_id")
+        return DataExport(account: email, exportedAt: Date(), companies: companies, contacts: contacts,
+                          sources: sources, sends: sends, templates: templates, profile: profile,
+                          tracked: tracked)
+    }
+
+    /// A table that may not exist yet (its migration pending) reads as empty.
+    private static func optionalRows(_ path: String, order: String) async throws -> [[String: Any]] {
+        do {
+            return try await SupabaseAPI.fetchRows(path, order: order)
+        } catch SupabaseError.schemaOutOfDate {
+            return []
+        }
+    }
+
     // MARK: - Helpers
 
     /// Fetch this user's tracked companies and the full catalog, overlay their
@@ -498,7 +644,7 @@ final class JobStore {
     private func reloadAll() async throws {
         guard let email = userEmail else {
             jobs = []; allCompanies = []; detachedCompanies = [:]; searchResults = []
-            activity = []; sends = []
+            activity = []; sends = []; sources = [:]; scopeCounts = [:]; catalogScope = .all
             companyOffset = 0; hasMoreCompanies = true
             return
         }
@@ -526,7 +672,9 @@ final class JobStore {
         let query = searchQuery
         let previousSearch = searchResults
         async let tracked = SupabaseAPI.fetchTrackedCompanies(userEmail: email)
-        async let catalog = SupabaseAPI.fetchAllCompanies(limit: pageLimit, offset: 0)
+        let scope = catalogScope
+        async let catalog = SupabaseAPI.fetchAllCompanies(limit: pageLimit, offset: 0, scope: scope)
+        async let counts = Self.countScopes()
         async let history = Self.fetchHistory(userEmail: email)
         async let detached = Self.refetch(Array(detachedCompanies.keys))
         async let search: [Job] = query.isEmpty
@@ -540,6 +688,7 @@ final class JobStore {
         let catalogIDs = Set(all.map(\.id))
         let refreshedDetached = (await detached).filter { !catalogIDs.contains($0.key) }
         let refreshedSearch = await search
+        let refreshedCounts = await counts
 
         // Server is the source of truth for membership; mirror it into the cache.
         trackedByEmail[email] = companies.map(\.id)
@@ -553,7 +702,50 @@ final class JobStore {
         allCompanies = all
         detachedCompanies = refreshedDetached
         searchResults = refreshedSearch
+        if !refreshedCounts.isEmpty { scopeCounts = refreshedCounts }
         apply(sends: sends, activity: activity)
+    }
+
+    /// Every scope's count, all at once. Empty when the database has no
+    /// fresher columns yet, or the counts fail — the chips just go without.
+    private static func countScopes() async -> [CatalogScope: Int] {
+        await withTaskGroup(of: (CatalogScope, Int?).self) { group in
+            for scope in CatalogScope.allCases {
+                group.addTask { (scope, try? await SupabaseAPI.countCompanies(scope: scope)) }
+            }
+            var counts: [CatalogScope: Int] = [:]
+            for await case let (scope, count?) in group { counts[scope] = count }
+            return counts
+        }
+    }
+
+    /// List another slice of the catalog. The pages loaded so far belong to the
+    /// old scope, so the list starts again from the top of the new one.
+    func setScope(_ scope: CatalogScope) async {
+        guard scope != catalogScope else { return }
+        catalogScope = scope
+        isLoadingMoreCompanies = true
+        defer { isLoadingMoreCompanies = false }
+        do {
+            var page = try await SupabaseAPI.fetchAllCompanies(limit: SupabaseAPI.defaultPageSize,
+                                                              offset: 0, scope: scope)
+            // A quicker tap on another chip already replaced this one.
+            guard scope == catalogScope else { return }
+            overlaySends(latestSendByContact, into: &page)
+            allCompanies = page
+            companyOffset = page.count
+            hasMoreCompanies = page.count == SupabaseAPI.defaultPageSize
+        } catch {
+            guard scope == catalogScope else { return }
+            allCompanies = []
+            companyOffset = 0
+            hasMoreCompanies = false
+            if case SupabaseError.schemaOutOfDate = error {
+                errorMessage = "Filtering by fresher hiring needs a one-time database update. Run the fresher-hiring migration from the README in the Supabase SQL editor."
+            } else {
+                report(error)
+            }
+        }
     }
 
     /// Refresh only sent records and reply state, without re-downloading the entire
@@ -624,10 +816,15 @@ final class JobStore {
         defer { isLoadingMoreCompanies = false }
 
         do {
+            let scope = catalogScope
             var page = try await SupabaseAPI.fetchAllCompanies(
                 limit: SupabaseAPI.defaultPageSize,
-                offset: companyOffset
+                offset: companyOffset,
+                scope: scope
             )
+            // The scope changed while this page was on its way: it belongs to
+            // a list that's gone.
+            guard scope == catalogScope else { return }
             companyOffset += page.count
             hasMoreCompanies = page.count == SupabaseAPI.defaultPageSize
             guard !page.isEmpty else { return }

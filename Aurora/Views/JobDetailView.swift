@@ -37,6 +37,10 @@ struct JobDetailView: View {
     /// True until the first attempt to fetch a company that isn't in memory has
     /// finished, so the screen shows a spinner rather than "not found" meanwhile.
     @State private var isResolving = true
+    /// The full list of hiring sources, pushed from the preview or the package.
+    @State private var showingSources = false
+    /// A source being added from the preview's Add.
+    @State private var newSource: CompanySource?
 
     /// Always read the live job from the store so edits show immediately. Looks in
     /// the full catalog first, so a company opened from the Companies tab renders
@@ -105,6 +109,25 @@ struct JobDetailView: View {
                     Section {
                         companyHeaderCard(job)
                             .cardRow(top: 8, bottom: 8)
+                    }
+
+                    // Where to apply, what it pays, and how it hires — before
+                    // the bounces, which are about mail already sent. Hidden
+                    // until the database has the columns to hold it.
+                    if !SupabaseAPI.fresherColumnsMissing {
+                        let sources = jobStore.sources[job.id]
+                        Section {
+                            HiringPanel(job: job, sources: sources,
+                                        onEdit: { editingCompany = job },
+                                        onShowSources: { showingSources = true })
+                                .cardRow(top: 0, bottom: 8)
+                            if !SupabaseAPI.sourcesTableMissing && (job.isFresher || !(sources ?? []).isEmpty) {
+                                SourcesPreview(sources: sources,
+                                               onShowAll: { showingSources = true },
+                                               onAdd: { newSource = CompanySource(companyID: job.id) })
+                                    .cardRow(top: 0, bottom: 8)
+                            }
+                        }
                     }
 
                     if !bounces.isEmpty {
@@ -306,10 +329,19 @@ struct JobDetailView: View {
         .sheet(item: $composeRequest) { request in
             if let job { SendMailView(job: job, preselect: request.preselect) }
         }
+        .navigationDestination(isPresented: $showingSources) {
+            CompanySourcesView(companyID: jobID)
+        }
+        .sheet(item: $newSource) { source in
+            SourceEditorView(source: source)
+        }
         .undoBanner()
         .task(id: jobID) {
+            // The sources come from their own table, so they load alongside.
+            async let sources: Void = jobStore.loadSources(companyID: jobID)
             await jobStore.loadCompanyIfNeeded(id: jobID)
             isResolving = false
+            await sources
         }
     }
 
@@ -318,7 +350,8 @@ struct JobDetailView: View {
     private func companyHeaderCard(_ job: Job) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
-                MonogramAvatar(company: job.company)
+                CompanyLogo(job: job)
+                    .fresherBadge(for: job, size: 18)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(job.company)
@@ -334,6 +367,12 @@ struct JobDetailView: View {
                             .font(.subheadline)
                             .foregroundStyle(Color.inkMuted)
                             .lineLimit(2)
+                    }
+                    if job.isFresher {
+                        TagChip(text: job.isOpenNow ? "Hiring freshers now" : "Hires freshers",
+                                systemImage: job.isOpenNow ? "dot.radiowaves.left.and.right" : "graduationcap.fill",
+                                tint: job.isOpenNow ? .statusDone : .slate)
+                            .padding(.top, 3)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

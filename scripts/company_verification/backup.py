@@ -22,7 +22,10 @@ TABLES = {  # table -> stable sort order (tables without an id sort on their key
     "templates": "id.asc",
     "tracked_companies": "user_email.asc,company_id.asc",
     "user_companies": "user_email.asc,company_id.asc",
+    "company_sources": "id.asc",
 }
+# Tables that only exist once their migration has run.
+OPTIONAL = {"company_sources"}
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -31,7 +34,13 @@ def backup(root=REPO / "db_backups", label=""):
     out.mkdir(parents=True)
     manifest = {}
     for table, order in TABLES.items():
-        rows = supabase.get_all(table, order=order)
+        try:
+            rows = supabase.get_all(table, order=order)
+        except supabase.APIError as e:
+            if table in OPTIONAL and ("PGRST205" in str(e) or "42P01" in str(e)):
+                print(f"  {table:18}      - (not created yet)", flush=True)
+                continue
+            raise
         path = out / f"{table}.json"
         path.write_text(json.dumps(rows, indent=1, ensure_ascii=False))
         manifest[table] = {"rows": len(rows), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}

@@ -4,7 +4,7 @@ import SwiftUI
 /// catalog share it, so one company reads the same way on both screens — and
 /// its figures are `OutreachStats`, the same strip the company screen shows.
 ///
-/// A header — monogram, name, head count and sector — over a strip of outreach
+/// A header — logo (or monogram), name, head count and sector — over a strip of outreach
 /// figures. The strip runs the card's full width, under the avatar too:
 /// indented beside it, it lost a fifth of the card to empty space.
 ///
@@ -22,14 +22,22 @@ struct CompanyCard: View {
                      : "\(job.contacts.count) contact\(job.contacts.count == 1 ? "" : "s")"]
         let invalid = job.invalidContacts.count
         if invalid > 0 { parts.append("\(invalid) invalid") }
-        if let sector = job.sector, !sector.isEmpty { parts.append(sector) }
+        // An open fresher posting is the one fact worth the room before the
+        // sector; that the company hires freshers at all, the badge says.
+        if job.isFresher && job.isOpenNow { parts.append("Hiring freshers now") }
+        if let sector = job.sector, !sector.isEmpty {
+            parts.append(sector)
+        } else if job.isFresher, let type = job.companyType, !type.isEmpty {
+            parts.append(type)
+        }
         return parts.joined(separator: " · ")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                MonogramAvatar(company: job.company, size: Theme.Avatar.small)
+                CompanyLogo(job: job, size: Theme.Avatar.small)
+                    .fresherBadge(for: job, size: 15)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
@@ -68,6 +76,7 @@ struct CompanyCard: View {
         .padding(.vertical, 10)
         .panel()
         .animation(Theme.Motion.pop, value: isTracked)
+        .animation(Theme.Motion.pop, value: job.isFresher)
     }
 }
 

@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var isEditingProfile = false
     @State private var isReconnecting = false
     @State private var confirmingSignOut = false
+    @State private var isExporting = false
 
     private enum Route: Hashable { case theme }
 
@@ -25,6 +26,7 @@ struct SettingsView: View {
                 accountSection
                 appearanceSection
                 if gmail.isConnected { gmailSection }
+                dataSection
                 aboutSection
             }
             .navigationTitle("Settings")
@@ -46,6 +48,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $isEditingProfile) {
                 EditProfileSheet(profile: store.profile)
+            }
+            .sheet(isPresented: $isExporting) {
+                DataExportView()
             }
             // Signing out drops the Gmail connection, and getting it back means
             // the whole Google sign-in again — so it asks, as Settings does.
@@ -169,6 +174,41 @@ struct SettingsView: View {
             Text(replySync.needsReconnect
                  ? "Reconnecting signs in to the same account again. Nothing is deleted."
                  : "Used to send your mails and to check which ones were answered.")
+        }
+    }
+
+    // MARK: - Data
+
+    private var dataSection: some View {
+        Section {
+            Button {
+                Haptics.tap()
+                isExporting = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "square.and.arrow.down.on.square")
+                        .foregroundStyle(Color.clay)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Export Data")
+                            .foregroundStyle(.ink)
+                        Text("Save everything to Files, as JSON or spreadsheets")
+                            .font(.caption)
+                            .foregroundStyle(.inkMuted)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.inkFaint)
+                }
+            }
+            .disabled(gmail.connectedEmail == nil)
+        } header: {
+            Text("Data")
+        } footer: {
+            if gmail.connectedEmail == nil {
+                Text("Sign in with Gmail to export your data.")
+            }
         }
     }
 

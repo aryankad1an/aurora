@@ -18,11 +18,14 @@ enum SupabaseAPI {
     /// same reason `fetchSends` does it: naming a column PostgREST doesn't have
     /// yet fails the whole request, and `greeting_name` only exists once the
     /// migration in the README has been run.
-    static func fetchAllCompanies(limit: Int = defaultPageSize, offset: Int = 0) async throws -> [Job] {
+    ///
+    /// `scope` narrows it to fresher-hiring companies (see `CatalogScope`).
+    static func fetchAllCompanies(limit: Int = defaultPageSize, offset: Int = 0,
+                                  scope: CatalogScope = .all) async throws -> [Job] {
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "select", value: "*,recruiters(*)"),
             URLQueryItem(name: "order", value: "name")
-        ]
+        ] + scope.filters
         if limit > 0 {
             queryItems.append(URLQueryItem(name: "limit", value: String(limit)))
             queryItems.append(URLQueryItem(name: "offset", value: String(offset)))
@@ -34,16 +37,39 @@ enum SupabaseAPI {
         // load rather than discovered by a failed save.
         if let probe = try? decoder.decode([ColumnProbe].self, from: data).first {
             domainsColumnMissing = !probe.hasDomains
+            fresherColumnsMissing = !probe.hasFresher
         }
         return try decoder.decode([Job].self, from: data)
     }
 
     private struct ColumnProbe: Decodable {
         let hasDomains: Bool
-        private enum Key: String, CodingKey { case domains }
+        let hasFresher: Bool
+        private enum Key: String, CodingKey { case domains, is_fresher }
         init(from decoder: Decoder) throws {
-            hasDomains = try decoder.container(keyedBy: Key.self).contains(.domains)
+            let c = try decoder.container(keyedBy: Key.self)
+            hasDomains = c.contains(.domains)
+            hasFresher = c.contains(.is_fresher)
         }
+    }
+
+    /// How many catalog companies are in `scope` — the figure on its filter
+    /// chip. Counted by the server (a one-row request asking for the total), so
+    /// it's right before any page of that scope has loaded.
+    static func countCompanies(scope: CatalogScope) async throws -> Int {
+        var request = makeRequest(path: "companies", query: [URLQueryItem(name: "select", value: "id")] + scope.filters)
+        request.setValue("count=exact", forHTTPHeaderField: "Prefer")
+        request.setValue("0-0", forHTTPHeaderField: "Range")
+        request.setValue("items", forHTTPHeaderField: "Range-Unit")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw SupabaseError.badResponse }
+        guard (200..<300).contains(http.statusCode) else { throw error(status: http.statusCode, body: data, request: request) }
+        // "0-0/1162", or "*/0" when there are none.
+        guard let range = http.value(forHTTPHeaderField: "Content-Range"),
+              let total = range.split(separator: "/").last.flatMap({ Int($0) }) else {
+            throw SupabaseError.badResponse
+        }
+        return total
     }
 
     /// Search the shared catalog for companies matching a query string across company name,
@@ -118,16 +144,31 @@ enum SupabaseAPI {
         return found
     }
 
-    /// The companies with `domain` on their row. Empty until the domains
-    /// migration has run.
+    /// The companies with `domain` on their row, or whose website is on it — a
+    /// fresher-hiring company added from the ledger has a website but no
+    /// contacts yet, and the first contact added there should find it. Empty
+    /// until the domains migration has run.
     private static func companiesListing(_ domain: String) async throws -> [Job] {
         guard !domainsColumnMissing else { return [] }
-        let request = makeRequest(path: "companies", query: [
-            URLQueryItem(name: "select", value: "*,recruiters(*)"),
-            URLQueryItem(name: "domains", value: "cs.{\(domain)}")
-        ])
+        func request(includingWebsite: Bool) -> URLRequest {
+            var filters = ["domains.cs.{\(domain)}"]
+            if includingWebsite {
+                // The site's host is the domain or one under it, with or
+                // without a path after it.
+                for host in ["//\(domain)", "//www.\(domain)", ".\(domain)"] {
+                    filters += ["website.ilike.*\(host)", "website.ilike.*\(host)/*"]
+                }
+            }
+            return makeRequest(path: "companies", query: [
+                URLQueryItem(name: "select", value: "*,recruiters(*)"),
+                URLQueryItem(name: "or", value: "(" + filters.joined(separator: ",") + ")")
+            ])
+        }
         do {
-            return try decoder.decode([Job].self, from: try await send(request))
+            return try decoder.decode([Job].self, from: try await send(request(includingWebsite: !fresherColumnsMissing)))
+        } catch SupabaseError.schemaOutOfDate where !fresherColumnsMissing {
+            fresherColumnsMissing = true
+            return try await companiesListing(domain)
         } catch SupabaseError.schemaOutOfDate {
             domainsColumnMissing = true
             return []
@@ -298,18 +339,47 @@ enum SupabaseAPI {
     /// so the store tells the user rather than dropping them silently.
     private(set) static var domainsColumnMissing = false
 
+    /// Set once the database reports it has none of the fresher-hiring columns
+    /// (website, careers page, logo, routes…): their migration hasn't run. The
+    /// rest of a company still saves; the store says what didn't.
+    private(set) static var fresherColumnsMissing = false
+
     /// Create a company in the catalog and return its new id. The company is
-    /// created even when its domains can't be stored (see `domainsColumnMissing`).
+    /// created even when its domains or fresher details can't be stored (see
+    /// `domainsColumnMissing`, `fresherColumnsMissing`).
     static func addCompany(name: String, sector: String?, domains: [String] = []) async throws -> String {
-        var body: [String: Any] = ["name": name]
-        if let sector, !sector.isEmpty { body["sector"] = sector }
-        if !domains.isEmpty, !domainsColumnMissing { body["domains"] = domains }
-        do {
-            return try await insertReturningID(path: "companies", body: body)
-        } catch SupabaseError.schemaOutOfDate where body["domains"] != nil {
-            domainsColumnMissing = true
-            body.removeValue(forKey: "domains")
-            return try await insertReturningID(path: "companies", body: body)
+        var details = CompanyDetails()
+        details.name = name
+        details.sector = sector ?? ""
+        details.domains = domains
+        return try await addCompany(details)
+    }
+
+    static func addCompany(_ details: CompanyDetails) async throws -> String {
+        var body = companyBody(details.trimmed, previous: nil)
+        if details.domains.isEmpty { body.removeValue(forKey: "domains") }
+        while true {
+            do {
+                return try await insertReturningID(path: "companies", body: stripMissingColumns(body))
+            } catch SupabaseError.schemaOutOfDate where noteMissingColumn(in: body) {
+                continue
+            }
+        }
+    }
+
+    /// Save a catalog company's details. `previous` is the company as it was,
+    /// so a website or careers link changed here is marked as edited by hand —
+    /// a later import from the ledger leaves it alone.
+    static func updateCompany(id: String, details: CompanyDetails, previous: Job?) async throws {
+        let body = companyBody(details.trimmed, previous: previous)
+        let query = [URLQueryItem(name: "id", value: "eq.\(id)")]
+        while true {
+            do {
+                try await write(method: "PATCH", path: "companies", query: query, body: stripMissingColumns(body))
+                return
+            } catch SupabaseError.schemaOutOfDate where noteMissingColumn(in: body) {
+                continue
+            }
         }
     }
 
@@ -331,6 +401,77 @@ enum SupabaseAPI {
         }
     }
 
+    /// Put back where a company's links came from — an undo restores a link
+    /// to what it was, and it was not edited by hand.
+    static func restoreLinkSources(id: String, website: String?, careers: String?) async throws {
+        guard !fresherColumnsMissing else { return }
+        try await write(method: "PATCH", path: "companies",
+                        query: [URLQueryItem(name: "id", value: "eq.\(id)")],
+                        body: ["website_source": website ?? NSNull(), "careers_source": careers ?? NSNull()])
+    }
+
+    /// The columns only the fresher-hiring migration adds.
+    private static let fresherColumns: Set<String> = [
+        "website", "website_source", "careers_url", "careers_source", "logo_url", "is_fresher",
+        "company_type", "route_category", "hiring_routes", "open_now", "usually_opens", "batches",
+        "fresher_roles"
+    ]
+
+    /// A company row's body from its details. Empty text becomes null so an
+    /// edit can clear a value.
+    private static func companyBody(_ d: CompanyDetails, previous: Job?) -> [String: Any] {
+        func value(_ s: String) -> Any { s.isEmpty ? NSNull() : s }
+        let website = CompanyLink.normalized(d.website)
+        let careers = CompanyLink.normalized(d.careersURL)
+        var body: [String: Any] = [
+            "name": d.name,
+            "sector": value(d.sector),
+            "domains": d.domains,
+            "website": website ?? NSNull(),
+            "careers_url": careers ?? NSNull(),
+            "logo_url": CompanyLink.normalized(d.logoURL) ?? NSNull(),
+            "is_fresher": d.isFresher,
+            "open_now": d.isFresher && d.isOpenNow,
+            "company_type": value(d.companyType),
+            "hiring_routes": d.orderedRoutes.map(\.rawValue),
+            "route_category": RouteCategory.of(d.orderedRoutes)?.rawValue ?? NSNull(),
+            "usually_opens": value(d.usuallyOpens),
+            "batches": d.batches,
+            "fresher_roles": d.fresherRoles
+        ]
+        // Where a link came from is kept with it: unchanged, it keeps its
+        // source; changed by hand, it says so; cleared, there's nothing to source.
+        if website != previous?.website.flatMap(CompanyLink.normalized) {
+            body["website_source"] = website == nil ? NSNull() : "edited"
+        }
+        if careers != previous?.careersURL.flatMap(CompanyLink.normalized) {
+            body["careers_source"] = careers == nil ? NSNull() : "edited"
+        }
+        return body
+    }
+
+    /// The body without the columns this database is known not to have yet.
+    private static func stripMissingColumns(_ body: [String: Any]) -> [String: Any] {
+        body.filter { key, _ in
+            !(domainsColumnMissing && key == "domains") && !(fresherColumnsMissing && fresherColumns.contains(key))
+        }
+    }
+
+    /// After a write was refused for a missing column, mark the group it most
+    /// likely belongs to as missing. False when there's nothing left to drop,
+    /// so the caller rethrows instead of looping.
+    private static func noteMissingColumn(in body: [String: Any]) -> Bool {
+        if !fresherColumnsMissing && body.keys.contains(where: fresherColumns.contains) {
+            fresherColumnsMissing = true
+            return true
+        }
+        if !domainsColumnMissing && body["domains"] != nil {
+            domainsColumnMissing = true
+            return true
+        }
+        return false
+    }
+
     /// Replace just a company's domains.
     static func setDomains(companyID: String, domains: [String]) async throws {
         guard !domainsColumnMissing else { return }
@@ -349,6 +490,109 @@ enum SupabaseAPI {
         guard !ids.isEmpty else { return }
         try await write(method: "DELETE", path: "companies",
                         query: [URLQueryItem(name: "id", value: "in.(\(ids.joined(separator: ",")))")])
+    }
+
+    // MARK: - Hiring sources (shared)
+
+    /// Set once the database reports it has no `company_sources` table — the
+    /// fresher-hiring migration hasn't run — so screens can say so instead of
+    /// showing an empty list as if there were no sources.
+    private(set) static var sourcesTableMissing = false
+
+    /// Every hiring source filed under a company, valid or not.
+    static func fetchSources(companyID: String) async throws -> [CompanySource] {
+        let request = makeRequest(path: "company_sources", query: [
+            URLQueryItem(name: "select", value: "*"),
+            URLQueryItem(name: "company_id", value: "eq.\(companyID)"),
+            URLQueryItem(name: "limit", value: "2000")
+        ])
+        do {
+            let rows = try decoder.decode([CompanySource].self, from: try await send(request))
+            sourcesTableMissing = false
+            return rows
+        } catch SupabaseError.schemaOutOfDate {
+            sourcesTableMissing = true
+            return []
+        }
+    }
+
+    /// Add a source to a company and return its id.
+    @discardableResult
+    static func addSource(_ source: CompanySource) async throws -> String {
+        var body = sourceBody(source)
+        body["company_id"] = source.companyID
+        return try await insertReturningID(path: "company_sources", body: body)
+    }
+
+    /// Save an edited source. Marked as edited, so a later import from the
+    /// ledger doesn't put the old text back.
+    static func updateSource(_ source: CompanySource) async throws {
+        var body = sourceBody(source)
+        body["edited_at"] = iso(Date())
+        try await write(method: "PATCH", path: "company_sources",
+                        query: [URLQueryItem(name: "id", value: "eq.\(source.id)")], body: body)
+    }
+
+    /// Mark sources valid or invalid, for every user. Separate from
+    /// `updateSource`, as a contact's validity is from its edit: an ordinary
+    /// edit never flips it back.
+    static func setSourceValidity(ids: [String], isValid: Bool) async throws {
+        guard !ids.isEmpty else { return }
+        try await write(method: "PATCH", path: "company_sources",
+                        query: [URLQueryItem(name: "id", value: "in.(\(ids.joined(separator: ",")))")],
+                        body: ["is_valid": isValid])
+    }
+
+    static func deleteSources(ids: [String]) async throws {
+        guard !ids.isEmpty else { return }
+        try await write(method: "DELETE", path: "company_sources",
+                        query: [URLQueryItem(name: "id", value: "in.(\(ids.joined(separator: ",")))")])
+    }
+
+    /// A source row's editable columns. Empty text becomes null.
+    private static func sourceBody(_ s: CompanySource) -> [String: Any] {
+        func value(_ text: String?) -> Any {
+            let t = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return t.isEmpty ? NSNull() : t
+        }
+        return [
+            "route": s.route,
+            "role": value(s.role),
+            "location": value(s.location),
+            "batch": value(s.batch),
+            "source_label": value(s.sourceLabel),
+            // As the editor hands them over: tidied when typed, kept to the
+            // letter when not, so an imported link is never rewritten.
+            "url": value(s.url),
+            "proof_url": value(s.proofURL),
+            "posted_on": value(s.postedOn),
+            "open_now": s.isOpenNow,
+            "package_lpa": s.packageLPA ?? NSNull(),
+            "package_text": value(s.packageText)
+        ]
+    }
+
+    // MARK: - Export
+
+    /// Every row of a table, a thousand to a request, exactly as the database
+    /// holds it — every column, including ones this build doesn't know.
+    static func fetchRows(_ path: String, filters: [URLQueryItem] = [], order: String) async throws -> [[String: Any]] {
+        let page = 1000
+        var rows: [[String: Any]] = []
+        while true {
+            let request = makeRequest(path: path, query: [
+                URLQueryItem(name: "select", value: "*"),
+                URLQueryItem(name: "order", value: order),
+                URLQueryItem(name: "limit", value: String(page)),
+                URLQueryItem(name: "offset", value: String(rows.count))
+            ] + filters)
+            let data = try await send(request)
+            guard let batch = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                throw SupabaseError.badResponse
+            }
+            rows += batch
+            if batch.count < page { return rows }
+        }
     }
 
     // MARK: - Contact writes
@@ -620,22 +864,28 @@ enum SupabaseAPI {
             throw SupabaseError.badResponse
         }
         guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? "status \(http.statusCode)"
-            // A unique-constraint violation (Postgres 23505) means the row already
-            // exists — surface a friendly message instead of raw SQL.
-            if http.statusCode == 409 || body.contains("\"23505\"") {
-                throw request.url?.lastPathComponent == "recruiters"
-                    ? SupabaseError.duplicateContact : SupabaseError.duplicateCompany
-            }
-            // PGRST204 (a column we wrote) or 42703 (a column we filtered on):
-            // PostgREST knows the table but not the column. That's a pending
-            // migration, not a bug in the request.
-            if body.contains("PGRST204") || body.contains("\"42703\"") {
-                throw SupabaseError.schemaOutOfDate
-            }
-            throw SupabaseError.server(body)
+            throw error(status: http.statusCode, body: data, request: request)
         }
         return data
+    }
+
+    /// What a failed request means, from its status and PostgREST's error body.
+    private static func error(status: Int, body data: Data, request: URLRequest) -> SupabaseError {
+        let body = String(data: data, encoding: .utf8) ?? "status \(status)"
+        // A unique-constraint violation (Postgres 23505) means the row already
+        // exists — surface a friendly message instead of raw SQL.
+        if status == 409 || body.contains("\"23505\"") {
+            return request.url?.lastPathComponent == "recruiters"
+                ? .duplicateContact : .duplicateCompany
+        }
+        // PGRST204 (a column we wrote), 42703 (a column we filtered on),
+        // PGRST205 / 42P01 (a table) or PGRST200 (a relationship): the schema
+        // is behind this build. That's a pending migration, not a bug in the
+        // request.
+        if ["PGRST204", "\"42703\"", "PGRST205", "\"42P01\"", "PGRST200"].contains(where: body.contains) {
+            return .schemaOutOfDate
+        }
+        return .server(body)
     }
 
     /// POST `body` and return the new row's `id`. When `onConflict` is given the

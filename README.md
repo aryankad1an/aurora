@@ -58,6 +58,10 @@ sent and read through the Gmail API under Google OAuth.
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
 | **Themes** | Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and Gilded. Each changes the colours, the chart that moves behind every screen, the launch screen and the app icon. |
 | **Send animation** | Sending launches paper planes, one per mail (up to three), that climb on glowing trails, loop and fly off the top of the screen. |
+| **Fresher hiring** | Every company in the Fresher Hiring Ledger is flagged, with a cap on its logo. Filter chips over Companies list freshers, ones hiring now, and each hiring route (off-campus, campus & intern, unclear), with counts. A company's screen shows its website and careers page, the package its sources state, the routes it hires freshers by, when it usually opens, batches and roles. |
+| **Sources** | Each fact rests on a source: a job post, an offer write-up, a placement page, each with its link, date and the package it states. Any source can be opened, edited, added or marked invalid (shared, with Undo); invalid ones stop counting toward the stated package. |
+| **Logos** | A company's own logo, found on its website, in place of the monogram everywhere it appears. Edit Company can find one on the website, or take a link. |
+| **Export** | Settings → Export Data saves the shared catalog and your own sends, templates and profile to a place you pick in Files, as one JSON file or a .zip of spreadsheets. |
 | **Invalid contacts** | A contact whose address bounces or who has left can be marked invalid, and isn't mailed or suggested again until marked valid. Shared across users, since a dead address is dead for everyone. A company's contacts are split into Valid and Invalid lists, one at a time; Select All selects the list on screen. |
 
 ## Getting started
@@ -81,6 +85,66 @@ Changes the app expects, newest first. Run them in the Supabase SQL editor; each
 is safe to re-run.
 
 ```sql
+-- Fresher hiring: links, logos, routes and sources for each company
+-- (also in scripts/fresher_ledger/migration.sql).
+
+-- What a company's own site says about it, and how it hires freshers.
+alter table companies
+  add column if not exists website        text,
+  add column if not exists website_source text,     -- how the website was found
+  add column if not exists careers_url    text,
+  add column if not exists careers_source text,     -- how the careers page was found
+  add column if not exists logo_url       text,     -- a square PNG on the company's own site
+  add column if not exists is_fresher     boolean not null default false,
+  add column if not exists ledger_ids     text[]  not null default '{}',  -- Fresher Hiring Ledger ids
+  add column if not exists company_type   text,     -- Product / MNC, IT services / consulting, …
+  add column if not exists route_category text,     -- off_campus | route_unclear | on_campus_or_intern_only
+  add column if not exists hiring_routes  text[]  not null default '{}',
+  add column if not exists open_now       boolean not null default false,
+  add column if not exists usually_opens  text,     -- e.g. "Sep, Dec"
+  add column if not exists batches        text[]  not null default '{}',
+  add column if not exists fresher_roles  text[]  not null default '{}';
+
+create index if not exists companies_is_fresher_idx on companies (name) where is_fresher;
+
+-- The evidence behind a company's fresher hiring: a job post, an offer
+-- write-up, a placement page. Each carries the package it states, if any.
+-- `is_valid` is shared, like a contact's: a source shown to be wrong is wrong
+-- for everyone, and an invalid source no longer counts toward the package.
+create table if not exists company_sources (
+  id            uuid primary key default gen_random_uuid(),
+  company_id    uuid not null references companies (id) on delete cascade,
+  ledger_id     text,                 -- the ledger company it came from; null when added in the app
+  route         text not null,        -- off_campus_opening, on_campus, intern_conversion_or_ppo, …
+  role          text,
+  location      text,
+  batch         text,
+  source_code   text,                 -- lc, tg, jt, … (null when added in the app)
+  source_label  text,                 -- "LeetCode offer post"
+  url           text,
+  proof_url     text,                 -- a permanent snapshot of the posting
+  posted_on     text,                 -- YYYY-MM-DD, or YYYY-MM when only the month is known
+  confidence    text,
+  open_now      boolean not null default false,
+  package_lpa   numeric,              -- lakh INR a year, when it's one number
+  package_text  text,                 -- when it's a range or has notes ("₹4–4.5L")
+  is_valid      boolean not null default true,
+  fingerprint   text,                 -- identifies an imported row, so a re-import updates it
+  edited_at     timestamptz,          -- set when edited in the app; a re-import leaves it alone
+  created_at    timestamptz not null default now(),
+  unique (company_id, fingerprint)
+);
+alter table company_sources add column if not exists edited_at timestamptz;
+create index if not exists company_sources_company_idx on company_sources (company_id);
+
+-- Shared like the rest of the catalog: anyone using the app can read and
+-- correct it, the same access `recruiters` gives.
+grant select, insert, update, delete on company_sources to anon, authenticated;
+alter table company_sources enable row level security;
+drop policy if exists "company_sources are shared" on company_sources;
+create policy "company_sources are shared" on company_sources
+  for all to anon, authenticated using (true) with check (true);
+
 -- Company mail domains (e.g. {stripe.com, stripe.dev}). A company can have
 -- several; the app adds a contact's work domain to its company automatically,
 -- and suggests the company from the domain when a contact is added. The
@@ -126,6 +190,10 @@ alter table recruiters
 ```
 
 The app still runs if some of these haven't been applied yet:
+
+- Without the fresher-hiring columns, companies show their monograms, the
+  filter chips and the hiring card are hidden, and Edit Company says the links
+  and fresher details need the update.
 
 - Without `greeting_name`, greetings are worked out from the name and address,
   and a greeting typed into the contact form is dropped while the rest of the
@@ -599,8 +667,8 @@ passes them closures for sending, looking up Sent mail, recording sends and
 reading threads. That keeps them independent of Gmail and Supabase, and let the
 queue be exercised with a fake transport.
 
-Tables: `companies`, `recruiters` (shared by all users), `mail_sends` (per
-user), plus profiles and templates. Sent and reply state is overlaid onto the
+Tables: `companies`, `recruiters`, `company_sources` (shared by all users),
+`mail_sends` (per user), plus profiles and templates. Sent and reply state is overlaid onto the
 shared contact rows after they're loaded.
 
 `recruiters.is_valid` is shared on purpose and only written by
@@ -669,6 +737,7 @@ notice. The Python scripts below have their own `unittest` suites.
 
 | Path | What it does |
 |---|---|
+| [`scripts/fresher_ledger/`](scripts/fresher_ledger/README.md) | Imports the Fresher Hiring Ledger: matches each of its companies to the catalog (or adds it), flags it, and loads its links, routes and sources; crawls company websites for logos and careers pages. Dry run first; backs up before writing. |
 | [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. Backs up before every change. |
 | `scripts/app_icon/make_icon.swift` | Draws the app icon, one rising curve from rose to amber with a glow behind it, and its tinted variant. Usage is at the top of the file. |
 | `scripts/app_icons/make_theme_icons.swift` | Draws the app icon for each theme. |
@@ -686,6 +755,7 @@ Aurora/
 AuroraLive/                    Widget extension: the mail queue's Live Activity
 Shared/                        Code compiled into both the app and the extension
 Tests/                         Standalone Swift test programs
+scripts/fresher_ledger/        Fresher Hiring Ledger import and website crawl (Python)
 scripts/company_verification/  Catalog verification pipeline (Python)
 scripts/app_icon/              Draws the app icon (Swift, Core Graphics)
 scripts/app_icons/             Draws each theme's app icon (Swift, Core Graphics)
