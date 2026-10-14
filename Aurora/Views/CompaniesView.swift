@@ -19,11 +19,6 @@ struct CompaniesView: View {
     /// Rows push through this rather than through `NavigationLink`, so the card
     /// can carry its own chevron instead of the system drawing one outside it.
     @State private var path = NavigationPath()
-    /// Whether the filter header has pinned under the navigation bar.
-    @State private var headerStuck = false
-    /// The header's top edge sits below this at rest (under the large title)
-    /// and above it once pinned (under the collapsed bar).
-    private static let stickingLine: CGFloat = 140
 
     private var query: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -89,19 +84,21 @@ struct CompaniesView: View {
                         // chips update after a reply sync — lost the section's
                         // and spread to the screen edges.
                         Section {
+                            // The filters are the list's first row, like
+                            // Activity's lane selector: they scroll with the
+                            // content, so the title, search field and bars
+                            // behave as on every other tab. The ⋯ menu has the
+                            // same choices once they're scrolled away.
+                            if !selection.isSelecting {
+                                filterHeader(resultCount: rows.count)
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                                    .listRowInsets(EdgeInsets())
+                            }
                             companyRows(rows)
                             if jobStore.isLoadingMoreCompanies || jobStore.isSearchingServer {
                                 LoadingRow()
                                     .cardRow()
-                            }
-                        } header: {
-                            // A pinned header, not a bar under the navigation
-                            // bar: on iOS 27 the large title and search field
-                            // scroll with the list, so a fixed bar put them
-                            // *below* the filters while pulling down. As the
-                            // list's own header it stays under both.
-                            if !selection.isSelecting {
-                                filterHeader(resultCount: rows.count)
                             }
                         }
                     }
@@ -190,7 +187,10 @@ struct CompaniesView: View {
                     if !query.isEmpty {
                         Text(resultCount == 1 ? "1 match" : "\(resultCount.formatted()) matches")
                     } else {
-                        Label("\(jobStore.jobs.count.formatted()) tracked on Home", systemImage: "pin.fill")
+                        HStack(spacing: 6) {
+                            Image(systemName: "pin.fill")
+                            Text("\(jobStore.jobs.count.formatted()) tracked on Home")
+                        }
                     }
                 }
                 .font(.caption)
@@ -205,8 +205,11 @@ struct CompaniesView: View {
                         Haptics.select()
                         withAnimation(Theme.Motion.snappy) { showEmpty.toggle() }
                     } label: {
-                        Label("Show empty", systemImage: showEmpty ? "tray.full.fill" : "tray")
-                            .font(.caption.weight(.semibold))
+                        HStack(spacing: 6) {
+                            Image(systemName: showEmpty ? "tray.full.fill" : "tray")
+                            Text("Show empty")
+                        }
+                        .font(.caption.weight(.semibold))
                             .foregroundStyle(showEmpty ? Color.clay : Color.inkMuted)
                     }
                     .buttonStyle(.plain)
@@ -219,21 +222,6 @@ struct CompaniesView: View {
             .padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // At rest the header is bare, over the graph paper like the title above
-        // it. Once it has stuck under the navigation bar it takes the tone the
-        // bar's own blur gives the cards beneath it, so the two read as one
-        // top edge — and cards sliding under don't show through the chips.
-        // Kept to the header's own frame: a colour background reaches into
-        // the safe area and spread up over the large title, dimming "Companies".
-        .background(headerStuck ? Color.paperRaised : Color.clear, ignoresSafeAreaEdges: [])
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.hairline).frame(height: 1).opacity(headerStuck ? 1 : 0)
-        }
-        .onGeometryChange(for: Bool.self) { $0.frame(in: .global).minY < Self.stickingLine } action: { stuck in
-            withAnimation(.easeOut(duration: 0.15)) { headerStuck = stuck }
-        }
-        .listRowInsets(EdgeInsets())
-        .textCase(nil)
     }
 
     /// The card's pin button and the leading swipe: onto Home, or off it.
