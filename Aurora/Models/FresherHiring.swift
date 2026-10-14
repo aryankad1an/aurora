@@ -247,6 +247,17 @@ struct CompanySource: Identifiable, Decodable, Equatable, Hashable {
         return text.isEmpty ? nil : text
     }
 
+    /// The package in lakhs a year, as a range: the number when there is one,
+    /// else the figures in the written package ("₹7–21L by band" is 7…21,
+    /// "₹15L base" is 15). Nil when neither says.
+    var packageRange: ClosedRange<Double>? {
+        if let packageLPA { return packageLPA...packageLPA }
+        guard let text = packageText, PackageFormat.isLakhs(text) else { return nil }
+        let figures = PackageFormat.figures(in: text)
+        guard let low = figures.min(), let high = figures.max() else { return nil }
+        return low...high
+    }
+
     /// The posting date as a day, when the source gives one.
     var date: Date? { PostedDate.parse(postedOn) }
 
@@ -286,10 +297,10 @@ struct StatedPackage {
 
     init(_ all: [CompanySource]) {
         let stated = all.filter { $0.isValid && $0.package != nil }
-        sources = stated.sorted { ($0.packageLPA ?? -1) > ($1.packageLPA ?? -1) }
-        let numbers = stated.compactMap(\.packageLPA)
-        low = numbers.min()
-        high = numbers.max()
+        sources = stated.sorted { ($0.packageRange?.upperBound ?? -1) > ($1.packageRange?.upperBound ?? -1) }
+        let ranges = stated.compactMap(\.packageRange)
+        low = ranges.map(\.lowerBound).min()
+        high = ranges.map(\.upperBound).max()
     }
 
     var isEmpty: Bool { sources.isEmpty }
@@ -308,6 +319,25 @@ enum PackageFormat {
     static func lpa(_ value: Double) -> String { "₹\(number(value)) LPA" }
 
     static func range(_ low: Double, _ high: Double) -> String { "₹\(number(low))–\(number(high)) LPA" }
+
+    /// Whether written package text is in lakhs ("₹4–4.5L", "₹12 LPA", "16
+    /// lakh") rather than something else (a monthly stipend, a dollar figure).
+    static func isLakhs(_ text: String) -> Bool {
+        text.range(of: #"\d\s*(L\b|LPA|lakh|lac)"#, options: [.regularExpression, .caseInsensitive]) != nil
+            && text.range(of: #"(\$|USD|per month|/month|pm\b|stipend)"#, options: [.regularExpression, .caseInsensitive]) == nil
+    }
+
+    /// The plausible yearly figures in lakh text: 0.5 to 200.
+    static func figures(in text: String) -> [Double] {
+        let pattern = #"\d+(?:\.\d+)?"#
+        var out: [Double] = []
+        var rest = text[...]
+        while let r = rest.range(of: pattern, options: .regularExpression) {
+            if let value = Double(rest[r]), (0.5...200).contains(value) { out.append(value) }
+            rest = rest[r.upperBound...]
+        }
+        return out
+    }
 
     private static func number(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(0...1)))
