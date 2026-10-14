@@ -89,7 +89,7 @@ enum RouteCategory: String, CaseIterable, Hashable {
 /// Which slice of the catalog the Companies tab lists. Every scope but `all`
 /// is a fresher-hiring one, filtered by the server so it pages like the rest.
 enum CatalogScope: String, CaseIterable, Identifiable, Hashable {
-    case all, fresher, openNow, offCampus, campusOrIntern, routeUnclear
+    case all, fresher, offCampus, campusOrIntern, routeUnclear
 
     var id: String { rawValue }
 
@@ -97,7 +97,6 @@ enum CatalogScope: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .all: "All"
         case .fresher: "Freshers"
-        case .openNow: "Open now"
         case .offCampus: "Off-campus"
         case .campusOrIntern: "Campus & intern"
         case .routeUnclear: "Route unclear"
@@ -108,7 +107,6 @@ enum CatalogScope: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .all: "building.2"
         case .fresher: "graduationcap.fill"
-        case .openNow: "dot.radiowaves.left.and.right"
         case .offCampus: "megaphone.fill"
         case .campusOrIntern: "building.columns.fill"
         case .routeUnclear: "questionmark.circle"
@@ -121,7 +119,6 @@ enum CatalogScope: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .all: return []
         case .fresher: return [fresher]
-        case .openNow: return [fresher, URLQueryItem(name: "open_now", value: "is.true")]
         case .offCampus: return [fresher, URLQueryItem(name: "route_category", value: "eq.\(RouteCategory.offCampus.rawValue)")]
         case .campusOrIntern: return [fresher, URLQueryItem(name: "route_category", value: "eq.\(RouteCategory.campusOrIntern.rawValue)")]
         case .routeUnclear: return [fresher, URLQueryItem(name: "route_category", value: "eq.\(RouteCategory.unclear.rawValue)")]
@@ -134,7 +131,6 @@ enum CatalogScope: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .all: true
         case .fresher: job.isFresher
-        case .openNow: job.isFresher && job.isOpenNow
         case .offCampus: job.isFresher && job.routeCategory == .offCampus
         case .campusOrIntern: job.isFresher && job.routeCategory == .campusOrIntern
         case .routeUnclear: job.isFresher && job.routeCategory == .unclear

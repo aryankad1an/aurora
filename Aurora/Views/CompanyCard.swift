@@ -2,14 +2,13 @@ import SwiftUI
 
 /// A company as a card in a list. Home's tracked companies and the Companies
 /// catalog share it, so one company reads the same way on both screens — and
-/// its figures are `OutreachStats`, the same strip the company screen shows.
+/// its figures are the company screen's `OutreachStats`, set compactly as an
+/// `OutreachMeter`.
 ///
-/// A header — logo (or monogram), name, head count and sector — over a strip of outreach
-/// figures. The strip runs the card's full width, under the avatar too:
-/// indented beside it, it lost a fifth of the card to empty space.
-///
-/// Always the same two parts whatever state the company is in, so every card
-/// in a list is the same height and the list scrolls as an even column.
+/// One column beside the logo: name and when mail last went out, the
+/// subtitle, then how far outreach has got as a bar with its legend. Half
+/// the height of the old four-column strip, so a screen holds twice the
+/// companies, and every card is the same height whatever the company's state.
 struct CompanyCard: View {
     let job: Job
     /// Shows the tracked pin — the catalog's cue. Home lists only tracked
@@ -34,12 +33,12 @@ struct CompanyCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                CompanyLogo(job: job, size: Theme.Avatar.small)
-                    .fresherBadge(for: job, size: 15)
+        HStack(alignment: .top, spacing: 12) {
+            CompanyLogo(job: job, size: Theme.Avatar.small)
+                .fresherBadge(for: job, size: 15)
 
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     HStack(spacing: 5) {
                         Text(job.company)
                             .font(.headline)
@@ -54,29 +53,88 @@ struct CompanyCard: View {
                                 .transition(.scale(scale: 0.2).combined(with: .opacity))
                         }
                     }
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.inkMuted)
-                        .lineLimit(1)
-                }
-                // Fills the row, so the name only truncates when it really
-                // doesn't fit — not to share the room with a Spacer.
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    // Fills the row, so the name only truncates when it really
+                    // doesn't fit — not to share the room with a Spacer.
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.inkFaint)
+                    if let last = job.lastSentAt {
+                        Label(last.agoLabel, systemImage: "paperplane")
+                            .labelStyle(.titleAndIcon)
+                            .font(.caption)
+                            .foregroundStyle(.inkMuted)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .accessibilityLabel("Last sent \(last.agoLabel)")
+                    }
+                }
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.inkMuted)
+                    .lineLimit(1)
+
+                OutreachMeter(job: job)
+                    .padding(.top, 6)
             }
 
-            Divider().overlay(Color.hairline)
-
-            OutreachStats(job: job)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.inkFaint)
+                // Level with the name, not centred on the whole card.
+                .padding(.top, 4)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(12)
         .panel()
         .animation(Theme.Motion.pop, value: isTracked)
         .animation(Theme.Motion.pop, value: job.isFresher)
+    }
+}
+
+/// `OutreachStats`' figures set small, for a card: one bar of the company's
+/// valid people — contacted, the replied among them, and the rest still to
+/// contact — over a legend naming each part. Counted exactly as the strip
+/// counts them, so a card and its company screen always agree.
+struct OutreachMeter: View {
+    let job: Job
+
+    var body: some View {
+        let contacted = job.contactedContacts.count
+        let uncontacted = job.uncontactedContacts.count
+        let replied = job.repliedContacts.count
+        // Replies count invalid contacts too; the bar is valid people only, so
+        // its green never runs past the contacted part it's a share of.
+        let repliedShare = min(replied, contacted)
+
+        VStack(alignment: .leading, spacing: 6) {
+            SegmentMeter(segments: [(contacted - repliedShare, .clay), (repliedShare, .statusDone)],
+                         total: contacted + uncontacted, height: 5)
+
+            if contacted + uncontacted == 0 {
+                Text("No one to contact yet")
+                    .font(.caption)
+                    .foregroundStyle(.inkFaint)
+            } else {
+                WrappingHStack(spacing: 12, lineSpacing: 3) {
+                    if contacted > 0 { item(contacted, "contacted", .clay) }
+                    if replied > 0 { item(replied, "replied", .statusDone) }
+                    if uncontacted > 0 { item(uncontacted, "to contact", .inkFaint) }
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func item(_ count: Int, _ caption: String, _ color: Color) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            let figure = Text(count.formatted()).foregroundStyle(.ink).fontWeight(.semibold)
+            Text("\(figure) \(caption)")
+                .font(.caption)
+                .foregroundStyle(.inkMuted)
+                .monospacedDigit()
+                .lineLimit(1)
+                .contentTransition(.numericText())
+        }
     }
 }
 
@@ -90,8 +148,9 @@ struct CompanyCard: View {
 /// text size, not `ViewThatFits`: the row's total width still fit there, but
 /// split into equal columns "To contact" overran its own.
 ///
-/// The one place these figures are worked out and laid out: the Home and
-/// Companies cards and the company screen's header all show this view.
+/// The one place these figures are worked out and laid out for the company
+/// screen's header; the Home and Companies cards show the same counts as an
+/// `OutreachMeter`.
 struct OutreachStats: View {
     let job: Job
     /// Figure size: the cards' 20, the company screen's larger 22.

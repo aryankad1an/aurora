@@ -426,20 +426,8 @@ struct QueueMeter: View {
     var height: CGFloat = 6
 
     var body: some View {
-        GeometryReader { proxy in
-            let unit = total > 0 ? proxy.size.width / CGFloat(total) : 0
-            HStack(spacing: 0) {
-                Rectangle().fill(Color.statusDone).frame(width: unit * CGFloat(sent))
-                Rectangle().fill(Color.statusInvalid).frame(width: unit * CGFloat(failed))
-                Spacer(minLength: 0)
-            }
-            .background(Color.paperSunken)
-            .clipShape(.capsule)
-        }
-        .frame(height: height)
-        .animation(Theme.Motion.settle, value: sent)
-        .animation(Theme.Motion.settle, value: failed)
-        .accessibilityHidden(true)
+        SegmentMeter(segments: [(sent, .statusDone), (failed, .statusInvalid)],
+                     total: total, height: height)
     }
 }
 

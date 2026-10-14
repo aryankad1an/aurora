@@ -437,6 +437,36 @@ extension View {
 
 // MARK: - Numbers
 
+/// Parts of a whole as one rounded bar: each segment in its colour, in order,
+/// over a sunken track standing for whatever's left. A queue's sent and
+/// failed mail, a company's replied and contacted people.
+struct SegmentMeter: View {
+    let segments: [(count: Int, color: Color)]
+    let total: Int
+    var height: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { proxy in
+            let unit = total > 0 ? proxy.size.width / CGFloat(total) : 0
+            HStack(spacing: 0) {
+                ForEach(segments.indices, id: \.self) { index in
+                    Rectangle()
+                        .fill(segments[index].color)
+                        .frame(width: unit * CGFloat(max(segments[index].count, 0)))
+                }
+                Spacer(minLength: 0)
+            }
+            .background(Color.paperSunken)
+            .clipShape(.capsule)
+        }
+        .frame(height: height)
+        .animation(Theme.Motion.settle, value: segments.map(\.count))
+        .animation(Theme.Motion.settle, value: total)
+        .accessibilityHidden(true)
+    }
+}
+
+
 /// A metric set the way every metric in the app is set: serif figures over a
 /// sans caption, monospaced so digits don't jitter when they change.
 ///

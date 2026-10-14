@@ -380,9 +380,7 @@ struct CompaniesView: View {
         ContentUnavailableView {
             Label("Nothing in “\(jobStore.catalogScope.title)”", systemImage: jobStore.catalogScope.systemImage)
         } description: {
-            Text(jobStore.catalogScope == .openNow
-                 ? "No fresher posting is known to be open right now."
-                 : "No company in the catalog is in this group yet.")
+            Text("No company in the catalog is in this group yet.")
         } actions: {
             Button("Show All Companies") {
                 Task { await jobStore.setScope(.all) }
@@ -415,7 +413,10 @@ private struct ScopeBar: View {
                 withAnimation(Theme.Motion.snappy) { proxy.scrollTo(scope, anchor: .center) }
             }
         }
-        .background(Color.paper.opacity(0.92))
+        // Kept to the bar's own frame: a colour background reaches into the
+        // safe area by default, and this one spread up over the large title,
+        // dimming "Companies" to near black.
+        .background(Color.paper.opacity(0.92), ignoresSafeAreaEdges: [])
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color.hairline).frame(height: 1)
         }
