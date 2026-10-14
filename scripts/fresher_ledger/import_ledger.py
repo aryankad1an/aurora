@@ -1,7 +1,10 @@
 """Load the Fresher Hiring Ledger into the catalog.
 
-    python3 import_ledger.py <companies.json> <crawl.json>            # dry run
-    python3 import_ledger.py <companies.json> <crawl.json> --apply    # back up, write, re-verify
+    python3 import_ledger.py <companies.json> <vetted.json>            # dry run
+    python3 import_ledger.py <companies.json> <vetted.json> --apply    # back up, write, re-verify
+
+<vetted.json> is the crawl after logo_paths.py's logos are merged in and
+vet_logos.py has dropped the ones that aren't a company's own.
 
 Needs migration.sql to have been run. Outputs go to data_verification/fresher_ledger/
 (git-ignored): plan.json and report.md.
@@ -208,6 +211,11 @@ def plan(ledger, companies, recruiters, crawl):
         if row.get("logo"):
             fields["logo_url"] = row["logo"]["url"]
         fields = {k: v for k, v in respect_edits(c, fields).items() if not c.get(k)}
+        # A logo vet_logos.py ruled out (a platform's default icon, a
+        # placeholder) comes off a company that already has it.
+        if row.get("rejected_logo") and c.get("logo_url") == row["rejected_logo"] \
+                and c.get("website_source") != EDITED:
+            fields["logo_url"] = None
         if fields:
             enrich[c["id"]] = fields
 

@@ -26,6 +26,7 @@ import re
 import sys
 import threading
 import warnings
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -140,7 +141,48 @@ def check_png(url):
     colors = rgba.convert("RGB").getcolors(maxcolors=4)
     if colors is not None and len(colors) <= 1:
         return None
+    if is_placeholder_shape(im):
+        return None
     return w, h
+
+
+def is_placeholder_shape(im):
+    """One colour filling a plain circle or square: a placeholder, not a mark.
+
+    A single-colour logo is common (a spade, an eagle); what gives a
+    placeholder away is that its one colour fills the most basic shape there is.
+    """
+    n = 48
+    rgba = im.convert("RGBA").resize((n, n))
+    pixels = list(rgba.getdata())
+    opaque = [(x, y) for i, (r, g, b, a) in enumerate(pixels) if a >= 128 for x, y in [(i % n, i // n)]]
+    # Fine marks (a dotted wordmark) shrink to nothing solid: no shape to judge.
+    if not opaque:
+        return False
+    buckets = defaultdict(int)
+    for r, g, b, a in pixels:
+        if a >= 128:
+            buckets[(r // 32, g // 32, b // 32)] += 1
+    # Truly one colour: a wordmark on a solid tile blurs into many faint
+    # shades when shrunk, each too small to count on its own, but together
+    # they're more than a sliver.
+    if max(buckets.values()) < len(opaque) * 0.985:
+        return False
+    xs, ys = [p[0] for p in opaque], [p[1] for p in opaque]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    w, h = x1 - x0 + 1, y1 - y0 + 1
+    # A placeholder is a round or square blob filling the icon; a wordmark is
+    # a wide band, however solid it looks once shrunk.
+    if not (0.85 <= w / h <= 1.18) or w < n * 0.6:
+        return False
+    mask = set(opaque)
+    square = {(x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)}
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    disc = {(x, y) for x, y in square if ((x - cx) / (w / 2)) ** 2 + ((y - cy) / (h / 2)) ** 2 <= 1.0}
+
+    def iou(a, b):
+        return len(a & b) / len(a | b) if a | b else 0
+    return iou(mask, square) > 0.97 or iou(mask, disc) > 0.93
 
 
 def icon_candidates(soup, base):

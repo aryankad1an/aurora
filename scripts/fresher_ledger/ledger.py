@@ -13,6 +13,9 @@ ledger company is matched to at most one catalog company:
 4. By a verified rule in `decisions.json` (`same`), for a company the catalog
    files under another domain or name (Heinz is Kraft Heinz at hjheinz.com).
 
+A company an earlier import already placed (it carries the ledger id) stays
+where it is, so a re-import is stable whatever has been renamed since.
+
 `decisions.json` can also keep two apart (`distinct`) when a name or domain
 matches but the companies differ. Anything ambiguous is reported, never guessed.
 """
@@ -86,16 +89,31 @@ def match(ledger, companies, recruiters):
         names[norm(c["name"])].add(c["id"])
 
     same = {k: v for k, v in DECISIONS["same"].items() if not k.startswith("_")}
+    renames = {k: v for k, v in DECISIONS.get("renames", {}).items() if not k.startswith("_")}
     distinct = {tuple(p[:2]) for p in DECISIONS["distinct"]}
+    # Each pair also under the catalog company's name after an import renamed it.
+    distinct |= {(a, renames[b]) for a, b in distinct if b in renames}
     report = defaultdict(list)
     matches = {}
+    # A company an earlier import placed carries the ledger id: that settles it,
+    # whatever has been renamed since.
+    placed = {}
+    for c in companies:
+        for lid in c.get("ledger_ids") or []:
+            if lid in placed:
+                raise SystemExit(f"ledger id {lid} is on two catalog companies")
+            placed[lid] = c["id"]
 
     for lc in ledger:
         lid, dom = lc["id"], site_domain(lc.get("website"))
+        if lid in placed:
+            matches[lid] = (placed[lid], "placed")
+            continue
         if lc["name"] in same:
-            target = by_name.get(same[lc["name"]])
+            name = same[lc["name"]]
+            target = by_name.get(name) or by_name.get(renames.get(name, ""))
             if not target:
-                raise SystemExit(f"decisions.same: no catalog company named {same[lc['name']]!r}")
+                raise SystemExit(f"decisions.same: no catalog company named {name!r}")
             matches[lid] = (target["id"], "decision")
             continue
 

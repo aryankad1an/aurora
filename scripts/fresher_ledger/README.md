@@ -17,10 +17,15 @@ python3 ../company_verification/backup.py
 python3 targets.py companies.json ../../db_backups/<stamp> targets.json
 python3 crawl.py targets.json crawl.json --workers 48
 python3 crawl.py targets_retry.json crawl_retry.json --workers 12 --desktop   # sites that refused
-# 3. Dry run: writes plan.json and report.md. Read the report.
-python3 import_ledger.py companies.json crawl.json
-# 4. Back up, write, and re-read the catalog to check every ledger company landed.
-python3 import_ledger.py companies.json crawl.json --apply
+#    (merge the retry's answers into crawl.json for the sites that refused the first time)
+# 3. Logos: try the icon files sites serve without declaring them, merge those
+#    in, then drop the ones that aren't a company's own.
+python3 logo_paths.py crawl.json logo_paths.json
+python3 vet_logos.py crawl.json vetted.json
+# 4. Dry run: writes plan.json and report.md. Read the report.
+python3 import_ledger.py companies.json vetted.json
+# 5. Back up, write, and re-read the catalog to check every ledger company landed.
+python3 import_ledger.py companies.json vetted.json --apply
 ```
 
 ## Matching (`ledger.py`, `decisions.json`)
@@ -55,18 +60,21 @@ the same letters with spaces or punctuation added. A real one-word name
 | `is_fresher`, `ledger_ids` | every matched or created ledger company |
 | `website`, `website_source` | the ledger (Wikidata, a verified lookup, its careers page…); for other companies, their mail domain's homepage when it's a real site (stays on the domain or names the company, isn't parked) |
 | `careers_url`, `careers_source` | the ledger; else a careers link on the homepage, on the company's own domain or a known applicant-tracking host, that answers. Student career-service pages are left out. |
-| `logo_url` | the best square PNG the site offers as its icon (apple-touch-icon, PNG `<link rel=icon>`, manifest icon, /apple-touch-icon.png), downloaded and checked: a real PNG, at least 64 px, roughly square, not one flat colour |
+| `logo_url` | the best square PNG the site offers as its icon (apple-touch-icon, PNG `<link rel=icon>`, manifest icon, then the usual undeclared files like /apple-touch-icon-precomposed.png or a PNG served as /favicon.ico), downloaded and checked: a real PNG, at least 64 px, roughly square, not one flat colour or a plain one-colour circle or square. `vet_logos.py` then drops any image three or more unrelated sites serve — a platform's default, like WordPress's "W" |
 | `company_type`, `route_category`, `hiring_routes`, `open_now`, `usually_opens`, `batches`, `fresher_roles` | the ledger |
 | `company_sources` rows | each piece of ledger evidence |
 
 Re-running is safe:
 
+- A company that already carries a ledger id stays matched to it, whatever it
+  has been renamed to since.
 - Sources are keyed by a fingerprint and upserted, so they update in place, and
   `is_valid` is never written: a source someone marked invalid stays invalid.
 - A source edited in the app (`edited_at` set) is left as edited.
 - A website or careers link edited in the app (`*_source = 'edited'`) is left alone.
 - Imported sources that have left the ledger are removed.
-- Values already on a company the ledger doesn't cover are never overwritten.
+- Values already on a company the ledger doesn't cover are never overwritten,
+  except a logo that vetting has since ruled out, which is cleared.
 
 ## Merges in the verification pipeline
 
