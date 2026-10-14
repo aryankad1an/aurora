@@ -19,6 +19,11 @@ struct CompaniesView: View {
     /// Rows push through this rather than through `NavigationLink`, so the card
     /// can carry its own chevron instead of the system drawing one outside it.
     @State private var path = NavigationPath()
+    /// Whether the filter header has pinned under the navigation bar.
+    @State private var headerStuck = false
+    /// The header's top edge sits below this at rest (under the large title)
+    /// and above it once pinned (under the collapsed bar).
+    private static let stickingLine: CGFloat = 140
 
     private var query: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,6 +59,7 @@ struct CompaniesView: View {
         // Filtered once per render: the rows, the empty check and the paging
         // trigger all read the same array instead of each re-filtering the catalog.
         let rows = filtered
+        let showsList = !jobStore.allCompanies.isEmpty && !rows.isEmpty
         return NavigationStack(path: $path) {
             Group {
                 if jobStore.allCompanies.isEmpty {
@@ -88,6 +94,15 @@ struct CompaniesView: View {
                                 LoadingRow()
                                     .cardRow()
                             }
+                        } header: {
+                            // A pinned header, not a bar under the navigation
+                            // bar: on iOS 27 the large title and search field
+                            // scroll with the list, so a fixed bar put them
+                            // *below* the filters while pulling down. As the
+                            // list's own header it stays under both.
+                            if !selection.isSelecting {
+                                filterHeader(resultCount: rows.count)
+                            }
                         }
                     }
                     .cardList()
@@ -104,15 +119,11 @@ struct CompaniesView: View {
                     .scrollDismissesKeyboard(.immediately)
                 }
             }
-            // A bar of the screen's own, not a pinned list header: the system
-            // blurs content under it exactly as it does under the navigation
-            // bar, so the two read as one top edge like every other tab's.
-            // (A list header with its own fill sat as a flat band under the
-            // blurred bar.) An empty or loading screen has it too — a scope is
-            // still a tap away from an empty result.
-            .safeAreaBar(edge: .top, spacing: 0) {
-                if !selection.isSelecting {
-                    filterHeader(resultCount: rows.count)
+            // An empty or loading screen doesn't scroll, so its header can sit
+            // over it — a scope is still a tap away from an empty result.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !showsList && !selection.isSelecting {
+                    filterHeader(resultCount: 0)
                 }
             }
             .paperScreen()
@@ -188,15 +199,19 @@ struct CompaniesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 if query.isEmpty && jobStore.catalogScope == .all {
-                    Toggle(isOn: $showEmpty.animation(Theme.Motion.snappy)) {
+                    // Plain text, not a bordered toggle button: its chrome made
+                    // this row taller than the line it sits beside.
+                    Button {
+                        Haptics.select()
+                        withAnimation(Theme.Motion.snappy) { showEmpty.toggle() }
+                    } label: {
                         Label("Show empty", systemImage: showEmpty ? "tray.full.fill" : "tray")
                             .font(.caption.weight(.semibold))
+                            .foregroundStyle(showEmpty ? Color.clay : Color.inkMuted)
                     }
-                    .toggleStyle(.button)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
-                    .tint(.clay)
+                    .buttonStyle(.plain)
                     .fixedSize()
+                    .accessibilityAddTraits(showEmpty ? .isSelected : [])
                 }
             }
             .padding(.horizontal, Theme.Space.gutter)
@@ -204,6 +219,21 @@ struct CompaniesView: View {
             .padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // At rest the header is bare, over the graph paper like the title above
+        // it. Once it has stuck under the navigation bar it takes the tone the
+        // bar's own blur gives the cards beneath it, so the two read as one
+        // top edge — and cards sliding under don't show through the chips.
+        // Kept to the header's own frame: a colour background reaches into
+        // the safe area and spread up over the large title, dimming "Companies".
+        .background(headerStuck ? Color.paperRaised : Color.clear, ignoresSafeAreaEdges: [])
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color.hairline).frame(height: 1).opacity(headerStuck ? 1 : 0)
+        }
+        .onGeometryChange(for: Bool.self) { $0.frame(in: .global).minY < Self.stickingLine } action: { stuck in
+            withAnimation(.easeOut(duration: 0.15)) { headerStuck = stuck }
+        }
+        .listRowInsets(EdgeInsets())
+        .textCase(nil)
     }
 
     /// The card's pin button and the leading swipe: onto Home, or off it.
