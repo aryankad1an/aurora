@@ -50,6 +50,15 @@ final class JobStore {
     /// How many companies each scope holds, for the filter chips. Missing until
     /// counted; best-effort, so a failed count leaves the chip without a figure.
     private(set) var scopeCounts: [CatalogScope: Int] = [:]
+    /// The first pages of each scope already fetched, so a chip tap shows its
+    /// list the same frame instead of waiting on the network. Always refreshed
+    /// behind the scenes after it's shown (see `setScope`).
+    private struct CatalogPage {
+        var companies: [Job]
+        var offset: Int
+        var hasMore: Bool
+    }
+    @ObservationIgnored private var scopePages: [CatalogScope: CatalogPage] = [:]
 
     // MARK: - Hiring sources
 
@@ -645,7 +654,7 @@ final class JobStore {
         guard let email = userEmail else {
             jobs = []; allCompanies = []; detachedCompanies = [:]; searchResults = []
             activity = []; sends = []; sources = [:]; scopeCounts = [:]; catalogScope = .all
-            companyOffset = 0; hasMoreCompanies = true
+            companyOffset = 0; hasMoreCompanies = true; scopePages = [:]
             return
         }
 
@@ -704,6 +713,29 @@ final class JobStore {
         searchResults = refreshedSearch
         if !refreshedCounts.isEmpty { scopeCounts = refreshedCounts }
         apply(sends: sends, activity: activity)
+        warmScopes()
+    }
+
+    /// Fetch the first page of every scope not yet held, in the background, so
+    /// the chips switch instantly. Best-effort: a scope that fails just loads
+    /// when tapped.
+    private func warmScopes() {
+        let missing = CatalogScope.allCases.filter { $0 != catalogScope && scopePages[$0] == nil }
+        guard !missing.isEmpty, !SupabaseAPI.fresherColumnsMissing else { return }
+        Task {
+            await withTaskGroup(of: (CatalogScope, [Job]?).self) { group in
+                for scope in missing {
+                    group.addTask {
+                        (scope, try? await SupabaseAPI.fetchAllCompanies(limit: SupabaseAPI.defaultPageSize,
+                                                                         offset: 0, scope: scope))
+                    }
+                }
+                for await case let (scope, page?) in group where scopePages[scope] == nil {
+                    scopePages[scope] = CatalogPage(companies: page, offset: page.count,
+                                                    hasMore: page.count == SupabaseAPI.defaultPageSize)
+                }
+            }
+        }
     }
 
     /// Every scope's count, all at once. Empty when the database has no
@@ -721,22 +753,40 @@ final class JobStore {
 
     /// List another slice of the catalog. The pages loaded so far belong to the
     /// old scope, so the list starts again from the top of the new one.
+    ///
+    /// A scope seen before (or warmed in the background) shows at once and is
+    /// refreshed behind the scenes; one not held yet clears the list, so the
+    /// screen shows its spinner rather than the old scope's rows under the new
+    /// chip.
     func setScope(_ scope: CatalogScope) async {
         guard scope != catalogScope else { return }
+        scopePages[catalogScope] = CatalogPage(companies: allCompanies, offset: companyOffset,
+                                               hasMore: hasMoreCompanies)
         catalogScope = scope
-        isLoadingMoreCompanies = true
-        defer { isLoadingMoreCompanies = false }
+        let held = scopePages[scope]
+        if var held {
+            overlaySends(latestSendByContact, into: &held.companies)
+            allCompanies = held.companies
+            companyOffset = held.offset
+            hasMoreCompanies = held.hasMore
+        } else {
+            allCompanies = []
+            companyOffset = 0
+            hasMoreCompanies = true
+            isLoadingMoreCompanies = true
+        }
+        defer { if held == nil { isLoadingMoreCompanies = false } }
         do {
-            var page = try await SupabaseAPI.fetchAllCompanies(limit: SupabaseAPI.defaultPageSize,
-                                                              offset: 0, scope: scope)
+            let limit = max(held?.offset ?? 0, SupabaseAPI.defaultPageSize)
+            var page = try await SupabaseAPI.fetchAllCompanies(limit: limit, offset: 0, scope: scope)
             // A quicker tap on another chip already replaced this one.
             guard scope == catalogScope else { return }
             overlaySends(latestSendByContact, into: &page)
             allCompanies = page
             companyOffset = page.count
-            hasMoreCompanies = page.count == SupabaseAPI.defaultPageSize
+            hasMoreCompanies = page.count == limit
         } catch {
-            guard scope == catalogScope else { return }
+            guard scope == catalogScope, held == nil else { return }
             allCompanies = []
             companyOffset = 0
             hasMoreCompanies = false

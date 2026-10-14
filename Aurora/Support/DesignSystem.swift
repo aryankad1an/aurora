@@ -233,14 +233,10 @@ extension View {
 
     /// A `List` laid out as a column of cards. It paints no ground of its own, so
     /// the screen's graph paper shows between the cards.
-    ///
-    /// `hardTopEdge` keeps the top edge hard even when not searching — for a
-    /// list with a pinned header, where cards scrolled past it otherwise
-    /// showed as a blur between the header and the title.
-    func cardList(hardTopEdge: Bool = false) -> some View {
+    func cardList() -> some View {
         listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .modifier(CardListEdges(hardTop: hardTopEdge))
+            .modifier(CardListEdges())
             // Rows are as tall as their cards, not padded up to the system's 44pt
             // minimum — a day label in Activity is shorter than that.
             .environment(\.defaultMinListRowHeight, 0)
@@ -273,13 +269,12 @@ extension View {
 /// that cards dissolve into. The top keeps the system edge, going hard only
 /// while searching, when the field sits there with results running under it.
 private struct CardListEdges: ViewModifier {
-    var hardTop = false
     @Environment(\.isSearching) private var isSearching
 
     func body(content: Content) -> some View {
         content
             .paperBottomEdge()
-            .scrollEdgeEffectStyle(isSearching || hardTop ? .hard : .automatic, for: .top)
+            .scrollEdgeEffectStyle(isSearching ? .hard : .automatic, for: .top)
     }
 }
 

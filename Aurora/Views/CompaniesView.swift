@@ -54,7 +54,6 @@ struct CompaniesView: View {
         // Filtered once per render: the rows, the empty check and the paging
         // trigger all read the same array instead of each re-filtering the catalog.
         let rows = filtered
-        let showsList = !jobStore.allCompanies.isEmpty && !rows.isEmpty
         return NavigationStack(path: $path) {
             Group {
                 if jobStore.allCompanies.isEmpty {
@@ -89,18 +88,12 @@ struct CompaniesView: View {
                                 LoadingRow()
                                     .cardRow()
                             }
-                        } header: {
-                            // A pinned header, not a bar under the navigation
-                            // bar: on iOS 27 the large title and search field
-                            // scroll with the list, and slid straight through a
-                            // bar fixed beneath them. The list keeps its own
-                            // header clear of both.
-                            if !selection.isSelecting {
-                                filterHeader(resultCount: rows.count)
-                            }
                         }
                     }
-                    .cardList(hardTopEdge: true)
+                    .cardList()
+                    // A new scope is a new list: start at its top, not wherever
+                    // the last one was scrolled to.
+                    .id(jobStore.catalogScope)
                     .listRows(selection) { path.append($0) } menu: { rowMenu($0) }
                     .refreshable { await jobStore.load() }
                     // Typing re-cuts the list on every keystroke; the rows just
@@ -111,11 +104,15 @@ struct CompaniesView: View {
                     .scrollDismissesKeyboard(.immediately)
                 }
             }
-            // An empty or loading screen doesn't scroll, so its header can sit
-            // over it — a scope is still a tap away from an empty result.
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if !showsList && !selection.isSelecting {
-                    filterHeader(resultCount: 0)
+            // A bar of the screen's own, not a pinned list header: the system
+            // blurs content under it exactly as it does under the navigation
+            // bar, so the two read as one top edge like every other tab's.
+            // (A list header with its own fill sat as a flat band under the
+            // blurred bar.) An empty or loading screen has it too — a scope is
+            // still a tap away from an empty result.
+            .safeAreaBar(edge: .top, spacing: 0) {
+                if !selection.isSelecting {
+                    filterHeader(resultCount: rows.count)
                 }
             }
             .paperScreen()
@@ -207,15 +204,6 @@ struct CompaniesView: View {
             .padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Kept to the header's own frame: a colour background reaches into
-        // the safe area by default, and spread up over the large title,
-        // dimming "Companies" to near black.
-        .background(Color.paper, ignoresSafeAreaEdges: [])
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.hairline).frame(height: 1)
-        }
-        .listRowInsets(EdgeInsets())
-        .textCase(nil)
     }
 
     /// The card's pin button and the leading swipe: onto Home, or off it.
