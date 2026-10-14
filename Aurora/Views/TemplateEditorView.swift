@@ -17,6 +17,7 @@ struct TemplateEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(JobStore.self) private var jobStore
     @Environment(ProfileStore.self) private var profileStore
+    @Environment(PersonalisedLineStore.self) private var personalisedLines
     @Environment(GmailAuthStore.self) private var gmail
 
     @State private var name: String
@@ -89,7 +90,8 @@ struct TemplateEditorView: View {
 
     private var sampleContext: MailContext {
         MailContext.make(contact: sample.contact, company: sample.company,
-                         profile: profileStore.profile)
+                         profile: profileStore.profile,
+                         personalised: personalisedLines.line(for: sample.company))
     }
 
     var body: some View {
@@ -207,6 +209,7 @@ struct TemplateEditorView: View {
                               axis: .vertical)
                         .focused($focus, equals: .subject)
                         .lineLimit(1...4)
+                        .writingToolsBehavior(.complete)
                 }
             }
             .panel()
@@ -215,6 +218,8 @@ struct TemplateEditorView: View {
 
             TextEditor(text: $content, selection: $contentSelection)
                 .focused($focus, equals: .content)
+                // Apple Intelligence Writing Tools: proofread, rewrite, change tone.
+                .writingToolsBehavior(.complete)
                 .font(.callout)
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 12)
@@ -266,7 +271,13 @@ struct TemplateEditorView: View {
                             Haptics.tap()
                             insert(placeholder.token)
                         } label: {
-                            Text(placeholder.shortLabel)
+                            Group {
+                                if placeholder == .companyPersonalised {
+                                    Label(placeholder.shortLabel, systemImage: "sparkles")
+                                } else {
+                                    Text(placeholder.shortLabel)
+                                }
+                            }
                                 .font(.caption.weight(.medium))
                                 .padding(.horizontal, 10)
                                 .frame(height: 30)

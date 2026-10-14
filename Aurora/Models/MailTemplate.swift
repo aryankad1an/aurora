@@ -18,6 +18,7 @@ enum MailPlaceholder: String, CaseIterable, Identifiable {
     case senderCompany = "{Sender-Company}"
     case senderPosition = "{Sender-Position}"
     case senderResume = "{Resume-Link}"
+    case companyPersonalised = "{Company-Personalised}"
 
     var id: String { rawValue }
     var token: String { rawValue }
@@ -35,6 +36,7 @@ enum MailPlaceholder: String, CaseIterable, Identifiable {
         case .senderCompany: "My company"
         case .senderPosition: "My role"
         case .senderResume: "Resume link"
+        case .companyPersonalised: "Company line"
         }
     }
 
@@ -49,6 +51,7 @@ enum MailPlaceholder: String, CaseIterable, Identifiable {
         case .senderCompany: "your company"
         case .senderPosition: "your role"
         case .senderResume: "resume link"
+        case .companyPersonalised: "company line"
         }
     }
 }
@@ -65,7 +68,11 @@ struct MailContext {
     }
 
     /// Build a context from a recipient contact, its company, and the sender profile.
-    static func make(contact: Contact, company: String, profile: Profile) -> MailContext {
+    /// - Parameter personalised: the line written for `company` (see
+    ///   `PersonalisedLineStore`); empty when there isn't one, and the
+    ///   placeholder then simply drops out of the mail.
+    static func make(contact: Contact, company: String, profile: Profile,
+                     personalised: String = "") -> MailContext {
         MailContext(values: [
             .receiverName: contact.greeting,
             .receiverPosition: contact.position,
@@ -74,7 +81,8 @@ struct MailContext {
             .senderCollege: profile.college,
             .senderCompany: profile.company,
             .senderPosition: profile.position,
-            .senderResume: profile.resumeLink
+            .senderResume: profile.resumeLink,
+            .companyPersonalised: personalised
         ])
     }
 }

@@ -42,6 +42,7 @@ struct SendMailView: View {
 
     @Environment(TemplateStore.self) private var templateStore
     @Environment(ProfileStore.self) private var profileStore
+    @Environment(PersonalisedLineStore.self) private var personalisedLines
     @Environment(JobStore.self) private var jobStore
     @Environment(GmailAuthStore.self) private var gmail
     @Environment(MailQueue.self) private var mailQueue
@@ -593,7 +594,8 @@ struct SendMailView: View {
         alreadyQueued = recipients.count - fresh.count
         batch.letters = fresh.map { contact, company in
             MailPreview(contact: contact, company: company,
-                        context: MailContext.make(contact: contact, company: company, profile: profile),
+                        context: MailContext.make(contact: contact, company: company, profile: profile,
+                                                  personalised: personalisedLines.line(for: company)),
                         templateID: template?.id)
         }
         if focus.id == nil { focus.id = letters.first?.id }
@@ -611,7 +613,8 @@ struct SendMailView: View {
         batch.letters = batch.letters.map { other in
             guard other.contact.id == contact.id, !other.isEdited else { return other }
             return MailPreview(contact: contact, company: other.company,
-                               context: MailContext.make(contact: contact, company: other.company, profile: profile),
+                               context: MailContext.make(contact: contact, company: other.company, profile: profile,
+                                                         personalised: personalisedLines.line(for: other.company)),
                                templateID: other.templateID)
         }
     }
@@ -628,7 +631,8 @@ struct SendMailView: View {
             guard !letter.isEdited, letter.context.values[.receiverName] != letter.contact.greeting else { return letter }
             return MailPreview(contact: letter.contact, company: letter.company,
                                context: MailContext.make(contact: letter.contact, company: letter.company,
-                                                         profile: profile),
+                                                         profile: profile,
+                                                         personalised: personalisedLines.line(for: letter.company)),
                                templateID: letter.templateID)
         }
     }
@@ -1268,6 +1272,7 @@ struct MailEditorView: View {
                 }
                 Section("Message") {
                     TextEditor(text: $messageBody)
+                        .writingToolsBehavior(.complete)
                         .frame(minHeight: 260)
                         .font(.callout)
                 }

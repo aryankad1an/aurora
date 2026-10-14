@@ -13,6 +13,7 @@ struct RootView: View {
     @State private var jobStore = JobStore()
     @State private var profileStore = ProfileStore()
     @State private var templateStore = TemplateStore()
+    @State private var personalisedLines = PersonalisedLineStore()
     @State private var gmailAuth = GmailAuthStore()
     @State private var mailQueue = MailQueue()
     @State private var replySync = ReplySync()
@@ -72,6 +73,7 @@ struct RootView: View {
         .environment(jobStore)
         .environment(profileStore)
         .environment(templateStore)
+        .environment(personalisedLines)
         .environment(gmailAuth)
         .environment(mailQueue)
         .environment(replySync)
@@ -185,6 +187,7 @@ struct RootView: View {
         jobStore.userEmail = email
         connectMailQueue()
         mailQueue.load(account: email)
+        personalisedLines.load(account: email)
         replySync.loadBounces(account: email)
         MailboxNames.shared.load(account: email)
 
