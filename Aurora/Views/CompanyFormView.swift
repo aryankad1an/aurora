@@ -32,17 +32,11 @@ struct CompanyFormView: View {
     @State private var logoNote: String?
     @FocusState private var isDomainFieldFocused: Bool
     @FocusState private var focus: Field?
-    private enum Field { case name, sector, website, careers, logo, batch, role, personalised }
+    private enum Field { case name, sector, website, careers, logo, batch, role }
     /// Other companies already using each domain, looked up as domains are added.
     @State private var owners: [String: [String]] = [:]
     @Environment(JobStore.self) private var jobStore
-    @Environment(PersonalisedLineStore.self) private var personalisedLines
     @Environment(\.dismiss) private var dismiss
-    /// The user's own line for this company, with what was on file when the form
-    /// opened. Unlike the rest of the form it isn't saved to the shared catalog
-    /// but to this device (see `PersonalisedLineStore`).
-    @State private var personalised = ""
-    @State private var savedPersonalised = ""
 
     init(companyID: String? = nil,
          details: CompanyDetails = CompanyDetails(),
@@ -92,10 +86,7 @@ struct CompanyFormView: View {
         return d.trimmed
     }
 
-    private var hasChanges: Bool {
-        finalDetails != initial.trimmed
-            || personalised.trimmingCharacters(in: .whitespacesAndNewlines) != savedPersonalised
-    }
+    private var hasChanges: Bool { finalDetails != initial.trimmed }
 
     private var remainingSuggestions: [String] {
         suggestedDomains.filter { !draft.domains.contains($0) }
@@ -112,7 +103,6 @@ struct CompanyFormView: View {
                     linksSection
                     fresherSection
                 }
-                personalisedSection
                 domainsSection
                 if let companyID, canStoreFresherDetails, !SupabaseAPI.sourcesTableMissing {
                     sourcesSection(companyID)
@@ -126,18 +116,11 @@ struct CompanyFormView: View {
             .animation(Theme.Motion.snappy, value: draft.fresherRoles)
             .animation(Theme.Motion.snappy, value: owners)
             .task(id: finalDetails.domains) { await lookUpOwners() }
-            .onAppear {
-                guard savedPersonalised.isEmpty, personalised.isEmpty else { return }
-                savedPersonalised = personalisedLines.line(for: initial.name)
-                personalised = savedPersonalised
-            }
             .discardableEdits(hasChanges)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(confirmLabel) {
                         Haptics.success()
-                        personalisedLines.set(personalised, for: finalDetails.name,
-                                              previousName: initial.name.isEmpty ? nil : initial.trimmed.name)
                         onSave(finalDetails)
                         dismiss()
                     }
@@ -176,33 +159,6 @@ struct CompanyFormView: View {
             if !canStoreFresherDetails {
                 Text("A logo, links and fresher hiring can be added once the database has been updated — run the fresher-hiring migration from the README.")
             }
-        }
-    }
-
-    // MARK: - Personalised line
-
-    /// A sentence or two about this company, dropped into any mail to someone
-    /// there wherever a template has `{Company-Personalised}`. Writing Tools
-    /// (Apple Intelligence) can draft, rewrite and proofread it in place.
-    private var personalisedSection: some View {
-        Section {
-            TextEditor(text: $personalised)
-                .writingToolsBehavior(.complete)
-                .focused($focus, equals: .personalised)
-                .frame(minHeight: 96)
-                .overlay(alignment: .topLeading) {
-                    if personalised.isEmpty {
-                        Text("e.g. I've been following your work on the Atlas launch.")
-                            .foregroundStyle(.inkFaint)
-                            .padding(.top, 8)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
-                    }
-                }
-        } header: {
-            Label("Your personalised line", systemImage: "sparkles")
-        } footer: {
-            Text("Goes into mails to \(draft.name.isEmpty ? "this company" : draft.name) wherever a template has the Company line placeholder. Select the text for Apple Intelligence Writing Tools to write or refine it. Only you see it, and it stays on this device.")
         }
     }
 

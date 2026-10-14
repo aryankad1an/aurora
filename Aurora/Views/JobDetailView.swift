@@ -17,6 +17,8 @@ struct JobDetailView: View {
 
     @State private var isAdding = false
     @State private var editingCompany: Job?
+    /// The company whose personalised line is being written.
+    @State private var editingLine: Job?
     @State private var composeRequest: ComposeRequest?
     /// A compose asked for from the contact sheet, opened once that sheet is gone.
     @State private var pendingCompose: ComposeRequest?
@@ -109,6 +111,8 @@ struct JobDetailView: View {
                     Section {
                         companyHeaderCard(job)
                             .cardRow(top: 8, bottom: 8)
+                        PersonalisedLineCard(company: job.company) { editingLine = job }
+                            .cardRow(top: 0, bottom: 8)
                     }
 
                     // Where to apply, what it pays, and how it hires — before
@@ -297,6 +301,9 @@ struct JobDetailView: View {
             }
         }
         .companyEditor(for: $editingCompany)
+        .sheet(item: $editingLine) { job in
+            PersonalisedLineSheet(company: job.company, sector: job.sector, website: job.website)
+        }
         .sendChooser(for: $sendingTo) {}
         .addContactSheet(isPresented: $isAdding, initialCompany: job)
         .sheet(item: $detailContact, onDismiss: {

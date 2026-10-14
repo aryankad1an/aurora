@@ -1270,11 +1270,19 @@ struct MailEditorView: View {
                 Section("Subject") {
                     TextField("Subject", text: $subject, axis: .vertical)
                 }
-                Section("Message") {
+                Section {
                     TextEditor(text: $messageBody)
                         .writingToolsBehavior(.complete)
                         .frame(minHeight: 260)
                         .font(.callout)
+                } header: {
+                    HStack {
+                        Text("Message")
+                        Spacer()
+                        WritingAssistMenu(text: $messageBody)
+                            .font(.body.weight(.semibold))
+                            .textCase(nil)
+                    }
                 }
             }
             .navigationTitle("Edit Mail")

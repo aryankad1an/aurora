@@ -216,6 +216,22 @@ struct TemplateEditorView: View {
             .padding(.horizontal)
             .padding(.top, 12)
 
+            HStack {
+                Text("Message")
+                    .font(.caption2.weight(.semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                    .foregroundStyle(.inkMuted)
+                Spacer()
+                // On-device Apple Intelligence (Foundation Models): proofread,
+                // rewrite, change tone. It keeps {placeholders} intact.
+                WritingAssistMenu(text: $content)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.tint)
+            }
+            .padding(.horizontal, 26)
+            .padding(.top, 10)
+
             TextEditor(text: $content, selection: $contentSelection)
                 .focused($focus, equals: .content)
                 // Apple Intelligence Writing Tools: proofread, rewrite, change tone.
@@ -234,7 +250,6 @@ struct TemplateEditorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 6)
         }
     }
 
