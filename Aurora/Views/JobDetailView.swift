@@ -651,18 +651,13 @@ private struct ContactRow: View {
                     SentPill(sentAt: contact.sentAt)
                 }
                 if let onSend {
-                    Button {
+                    CircleIconButton(
+                        systemImage: "paperplane.fill",
+                        accessibilityLabel: contact.isSent ? "Send again to \(contact.displayName)" : "Send to \(contact.displayName)"
+                    ) {
                         Haptics.press()
                         onSend()
-                    } label: {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.tint)
-                            .frame(width: 36, height: 36)
-                            .background(.tint.opacity(0.12), in: Circle())
                     }
-                    .buttonStyle(BouncyPress(scale: 0.82))
-                    .accessibilityLabel(contact.isSent ? "Send again to \(contact.displayName)" : "Send to \(contact.displayName)")
                 }
             }
             // The send button's height, held even for an invalid contact that has

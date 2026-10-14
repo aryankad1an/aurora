@@ -233,10 +233,14 @@ extension View {
 
     /// A `List` laid out as a column of cards. It paints no ground of its own, so
     /// the screen's graph paper shows between the cards.
-    func cardList() -> some View {
+    ///
+    /// `hardTopEdge` keeps the top edge hard even when not searching — for a
+    /// list with a pinned header, where cards scrolled past it otherwise
+    /// showed as a blur between the header and the title.
+    func cardList(hardTopEdge: Bool = false) -> some View {
         listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .modifier(CardListEdges())
+            .modifier(CardListEdges(hardTop: hardTopEdge))
             // Rows are as tall as their cards, not padded up to the system's 44pt
             // minimum — a day label in Activity is shorter than that.
             .environment(\.defaultMinListRowHeight, 0)
@@ -269,12 +273,13 @@ extension View {
 /// that cards dissolve into. The top keeps the system edge, going hard only
 /// while searching, when the field sits there with results running under it.
 private struct CardListEdges: ViewModifier {
+    var hardTop = false
     @Environment(\.isSearching) private var isSearching
 
     func body(content: Content) -> some View {
         content
             .paperBottomEdge()
-            .scrollEdgeEffectStyle(isSearching ? .hard : .automatic, for: .top)
+            .scrollEdgeEffectStyle(isSearching || hardTop ? .hard : .automatic, for: .top)
     }
 }
 
@@ -432,6 +437,33 @@ extension View {
                 guard !selection.isSelecting, ids.count == 1, let id = ids.first else { return }
                 open(id)
             }
+    }
+}
+
+/// A row's one action as a 36pt round icon — a contact's send, a company's
+/// track. Never a text capsule beside wrapping text: at large sizes the word
+/// took the room the row's own name needed. `isOn` fills it, for a toggle
+/// whose state the icon alone should show.
+struct CircleIconButton: View {
+    let systemImage: String
+    var isOn = false
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(isOn ? AnyShapeStyle(Color.white) : AnyShapeStyle(.tint))
+                .frame(width: 36, height: 36)
+                .background {
+                    Circle().fill(isOn ? AnyShapeStyle(.tint) : AnyShapeStyle(.tint.opacity(0.12)))
+                }
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(BouncyPress(scale: 0.82))
+        .animation(Theme.Motion.pop, value: isOn)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 

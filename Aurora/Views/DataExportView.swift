@@ -17,6 +17,9 @@ struct DataExportView: View {
     @State private var isPickingPlace = false
     @State private var savedName: String?
     @State private var saveError: String?
+    /// The finished save, said out loud: the footer line alone sat under the
+    /// button, out of sight once the file picker closed.
+    @State private var savedMessage: String?
 
     enum ExportFormat: String, CaseIterable, Hashable {
         case json, csv
@@ -133,6 +136,7 @@ struct DataExportView: View {
                 }
             }
             .task { await gather() }
+            .messageAlert("Export Saved", message: savedMessage) { savedMessage = nil }
             .onChange(of: format) {
                 savedName = nil
                 saveError = nil
@@ -145,6 +149,10 @@ struct DataExportView: View {
                     Haptics.success()
                     savedName = url.lastPathComponent
                     saveError = nil
+                    // The file's name only: the picker's URL names the folder
+                    // by its internal name ("File Provider Storage" for On My
+                    // iPhone), not the one the user just picked.
+                    savedMessage = "“\(url.lastPathComponent)” was saved where you chose."
                 case .failure(let error):
                     // Cancelling the picker isn't a failure worth a word.
                     if (error as NSError).code != NSUserCancelledError {

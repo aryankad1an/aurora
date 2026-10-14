@@ -11,9 +11,13 @@ import SwiftUI
 /// companies, and every card is the same height whatever the company's state.
 struct CompanyCard: View {
     let job: Job
-    /// Shows the tracked pin — the catalog's cue. Home lists only tracked
-    /// companies, so it leaves this off.
+    /// Whether the company is on Home. Home lists only tracked companies, so
+    /// it leaves this off.
     var isTracked = false
+    /// Tracks or untracks it from the card — the catalog's one-tap way onto
+    /// Home, in place of the chevron. Without it the card shows the chevron
+    /// and, when tracked, a small pin by the name.
+    var onToggleTrack: (() -> Void)? = nil
 
     private var subtitle: String {
         var parts = [job.contacts.isEmpty
@@ -44,7 +48,7 @@ struct CompanyCard: View {
                             .font(.headline)
                             .foregroundStyle(.ink)
                             .lineLimit(1)
-                        if isTracked {
+                        if isTracked && onToggleTrack == nil {
                             Image(systemName: "pin.fill")
                                 .font(.caption2)
                                 .foregroundStyle(.tint)
@@ -77,11 +81,22 @@ struct CompanyCard: View {
                     .padding(.top, 6)
             }
 
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.inkFaint)
-                // Level with the name, not centred on the whole card.
-                .padding(.top, 4)
+            if let onToggleTrack {
+                // Filled once tracked, so the catalog shows at a glance what's
+                // already on Home. The card itself still opens the company.
+                CircleIconButton(
+                    systemImage: isTracked ? "pin.fill" : "pin",
+                    isOn: isTracked,
+                    accessibilityLabel: isTracked ? "Untrack \(job.company)" : "Track \(job.company)",
+                    action: onToggleTrack
+                )
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.inkFaint)
+                    // Level with the name, not centred on the whole card.
+                    .padding(.top, 4)
+            }
         }
         .padding(12)
         .panel()

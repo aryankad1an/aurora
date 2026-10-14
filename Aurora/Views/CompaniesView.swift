@@ -54,6 +54,7 @@ struct CompaniesView: View {
         // Filtered once per render: the rows, the empty check and the paging
         // trigger all read the same array instead of each re-filtering the catalog.
         let rows = filtered
+        let showsList = !jobStore.allCompanies.isEmpty && !rows.isEmpty
         return NavigationStack(path: $path) {
             Group {
                 if jobStore.allCompanies.isEmpty {
@@ -88,9 +89,18 @@ struct CompaniesView: View {
                                 LoadingRow()
                                     .cardRow()
                             }
+                        } header: {
+                            // A pinned header, not a bar under the navigation
+                            // bar: on iOS 27 the large title and search field
+                            // scroll with the list, and slid straight through a
+                            // bar fixed beneath them. The list keeps its own
+                            // header clear of both.
+                            if !selection.isSelecting {
+                                filterHeader(resultCount: rows.count)
+                            }
                         }
                     }
-                    .cardList()
+                    .cardList(hardTopEdge: true)
                     .listRows(selection) { path.append($0) } menu: { rowMenu($0) }
                     .refreshable { await jobStore.load() }
                     // Typing re-cuts the list on every keystroke; the rows just
@@ -101,14 +111,11 @@ struct CompaniesView: View {
                     .scrollDismissesKeyboard(.immediately)
                 }
             }
-            // Under the search field, above the list, so a scope can be
-            // changed from anywhere in it — and from an empty result.
+            // An empty or loading screen doesn't scroll, so its header can sit
+            // over it — a scope is still a tap away from an empty result.
             .safeAreaInset(edge: .top, spacing: 0) {
-                if showsScopes && !selection.isSelecting {
-                    ScopeBar(selection: jobStore.catalogScope, counts: jobStore.scopeCounts) { scope in
-                        Haptics.select()
-                        Task { await jobStore.setScope(scope) }
-                    }
+                if !showsList && !selection.isSelecting {
+                    filterHeader(resultCount: 0)
                 }
             }
             .paperScreen()
@@ -160,6 +167,70 @@ struct CompaniesView: View {
         }
     }
 
+    /// The filter chips over a line saying what's listed, with the empty
+    /// companies' switch beside it rather than only in the ⋯ menu.
+    private func filterHeader(resultCount: Int) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showsScopes {
+                ScopeBar(selection: jobStore.catalogScope, counts: jobStore.scopeCounts) { scope in
+                    Haptics.select()
+                    Task { await jobStore.setScope(scope) }
+                }
+            }
+            HStack(spacing: 10) {
+                Group {
+                    if !query.isEmpty {
+                        Text(resultCount == 1 ? "1 match" : "\(resultCount.formatted()) matches")
+                    } else {
+                        Label("\(jobStore.jobs.count.formatted()) tracked on Home", systemImage: "pin.fill")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.inkMuted)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if query.isEmpty && jobStore.catalogScope == .all {
+                    Toggle(isOn: $showEmpty.animation(Theme.Motion.snappy)) {
+                        Label("Show empty", systemImage: showEmpty ? "tray.full.fill" : "tray")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .toggleStyle(.button)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                    .tint(.clay)
+                    .fixedSize()
+                }
+            }
+            .padding(.horizontal, Theme.Space.gutter)
+            .padding(.top, showsScopes ? 0 : 8)
+            .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Kept to the header's own frame: a colour background reaches into
+        // the safe area by default, and spread up over the large title,
+        // dimming "Companies" to near black.
+        .background(Color.paper, ignoresSafeAreaEdges: [])
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color.hairline).frame(height: 1)
+        }
+        .listRowInsets(EdgeInsets())
+        .textCase(nil)
+    }
+
+    /// The card's pin button and the leading swipe: onto Home, or off it.
+    private func toggleTracking(_ company: Job) {
+        if jobStore.isTracked(company.id) {
+            Haptics.tap()
+            jobStore.untrack(companyID: company.id)
+        } else {
+            // Pinning something to Home is the one constructive act on this
+            // screen, so it lands firmer than untracking does.
+            Haptics.press()
+            jobStore.track(companyID: company.id)
+        }
+    }
+
     /// Adding a company is the bar's own `+`; the menu has the rest.
     @ViewBuilder
     private var menu: some View {
@@ -199,7 +270,9 @@ struct CompaniesView: View {
     private func companyRows(_ companies: [Job]) -> some View {
         ForEach(companies) { company in
             let tracked = jobStore.isTracked(company.id)
-            CompanyCard(job: company, isTracked: tracked)
+            CompanyCard(job: company, isTracked: tracked,
+                        // While selecting, a tap anywhere on the card ticks it.
+                        onToggleTrack: selection.isSelecting ? nil : { toggleTracking(company) })
                 .cardRow()
                 // Ask for the next 50 while ten rows are still to come, so the
                 // page lands before the list runs out rather than after.
@@ -221,25 +294,10 @@ struct CompaniesView: View {
             .swipeActions(edge: .leading) {
                 // Track/Untrack is declared first so a full ("extreme") swipe
                 // triggers it; Edit sits behind it.
-                if tracked {
-                    Button {
-                        Haptics.tap()
-                        jobStore.untrack(companyID: company.id)
-                    } label: {
-                        Label("Untrack", systemImage: "pin.slash")
-                    }
-                    .tint(.slate)
-                } else {
-                    Button {
-                        // Pinning something to Home is the one constructive swipe
-                        // on this screen, so it lands firmer than untracking does.
-                        Haptics.press()
-                        jobStore.track(companyID: company.id)
-                    } label: {
-                        Label("Track", systemImage: "pin")
-                    }
-                    .tint(.olive)
+                Button { toggleTracking(company) } label: {
+                    Label(tracked ? "Untrack" : "Track", systemImage: tracked ? "pin.slash" : "pin")
                 }
+                .tint(tracked ? .slate : .olive)
                 Button {
                     Haptics.tap()
                     editingCompany = company
@@ -363,7 +421,7 @@ struct CompaniesView: View {
                      ? "No company, sector or contact matches “\(query)”."
                      : "No company in “\(jobStore.catalogScope.title)” matches “\(query)”.")
             } else {
-                Text("No companies with contacts. Turn on “Show empty companies” to see the rest.")
+                Text("No companies with contacts. Turn on “Show empty” to see the rest.")
             }
         } actions: {
             if !query.isEmpty && jobStore.catalogScope != .all {
@@ -413,13 +471,6 @@ private struct ScopeBar: View {
                 withAnimation(Theme.Motion.snappy) { proxy.scrollTo(scope, anchor: .center) }
             }
         }
-        // Kept to the bar's own frame: a colour background reaches into the
-        // safe area by default, and this one spread up over the large title,
-        // dimming "Companies" to near black.
-        .background(Color.paper.opacity(0.92), ignoresSafeAreaEdges: [])
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.hairline).frame(height: 1)
-        }
     }
 
     private func chip(_ scope: CatalogScope) -> some View {
@@ -429,22 +480,22 @@ private struct ScopeBar: View {
             guard !isOn else { return }
             onSelect(scope)
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: scope.systemImage)
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.semibold))
                 Text(scope.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                 if let count {
                     Text(count.formatted())
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(isOn ? Color.white.opacity(0.8) : Color.inkFaint)
                         .contentTransition(.numericText())
                 }
             }
             .foregroundStyle(isOn ? Color.white : Color.ink)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background {
                 if isOn {
                     Capsule().fill(Color.clay)
