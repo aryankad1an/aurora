@@ -143,7 +143,7 @@ struct SentMail {
 struct ActivityEntry: Identifiable {
     let id: String        // the send's id (unique per send)
     let company: String
-    let contact: Contact
+    var contact: Contact
     var date: Date? { contact.sentAt }
 }
 
@@ -264,6 +264,26 @@ struct Job: Identifiable, Decodable {
     var logoLink: URL? {
         guard let url = CompanyLink.url(logoURL), url.scheme?.lowercased() == "https" else { return nil }
         return url
+    }
+
+    /// Show `details` on this company at once, as Edit Company saved them. What the
+    /// server works out for itself (where a link came from) arrives with the
+    /// refetch that follows.
+    mutating func apply(_ details: CompanyDetails) {
+        func optional(_ text: String) -> String? { text.isEmpty ? nil : text }
+        company = details.name
+        sector = optional(details.sector)
+        domains = details.domains
+        website = optional(details.website)
+        careersURL = optional(details.careersURL)
+        logoURL = optional(details.logoURL)
+        isFresher = details.isFresher
+        isOpenNow = details.isOpenNow
+        companyType = optional(details.companyType)
+        hiringRouteValues = details.orderedRoutes.map(\.rawValue)
+        usuallyOpens = optional(details.usuallyOpens)
+        batches = details.batches
+        fresherRoles = details.fresherRoles
     }
 
     /// Everything Edit Company can change, as it stands.

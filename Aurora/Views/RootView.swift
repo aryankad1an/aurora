@@ -78,30 +78,8 @@ struct RootView: View {
         .environment(mailQueue)
         .environment(replySync)
         .environment(selectionChrome)
-        // Block interaction and show a loading state while a change is being
-        // written to the database and reloaded, so the two never drift.
-        .overlay {
-            if jobStore.isSaving || templateStore.isSaving {
-                ZStack {
-                    Color.black.opacity(0.12).ignoresSafeArea()
-                        .transition(.opacity)
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Saving…")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.ink)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 14)
-                    .glassEffect(.regular, in: .capsule)
-                    .transition(.glassPop)
-                }
-            }
-        }
         // A theme change spreads across the screen from the tapped card.
         .overlay { ThemeWashOverlay() }
-        .animation(Theme.Motion.liquid, value: jobStore.isSaving)
-        .animation(Theme.Motion.liquid, value: templateStore.isSaving)
         // A failed write is the one thing on this screen the user has to act on,
         // so it announces itself before the alert has finished animating in.
         .sensoryFeedback(trigger: activeError != nil) { _, hasError in

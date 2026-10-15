@@ -254,11 +254,27 @@ enum SupabaseAPI {
     /// columns only exist once the migration in the README has been run, and
     /// naming a column PostgREST doesn't have fails the whole request. With `*`
     /// the app runs either way and simply has no reply data until then.
+    ///
+    /// `limit: 0` is the whole history. The server answers no more than a thousand
+    /// rows to one request however many are asked for — the app used to take that
+    /// thousand for everything, so on an account with more, every older send was
+    /// missing: its contact looked unmailed, and could be mailed again. It now
+    /// reads a thousand at a time until a short page says that's all of them.
     static func fetchSends(userEmail: String, limit: Int = defaultPageSize, offset: Int = 0) async throws -> [MailSend] {
+        if limit == 0 {
+            let page = 1000
+            var all: [MailSend] = []
+            while true {
+                let batch = try await fetchSends(userEmail: userEmail, limit: page, offset: all.count)
+                all += batch
+                if batch.count < page { return all }
+            }
+        }
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "select", value: "*"),
             URLQueryItem(name: "user_email", value: "eq.\(userEmail)"),
-            URLQueryItem(name: "order", value: "sent_at.desc")
+            // `id` breaks ties, so a send isn't read twice or skipped between pages.
+            URLQueryItem(name: "order", value: "sent_at.desc,id.asc")
         ]
         if limit > 0 {
             queryItems.append(URLQueryItem(name: "limit", value: String(limit)))
@@ -286,9 +302,13 @@ enum SupabaseAPI {
     /// contact's name/position and company are resolved (even for companies the
     /// user no longer tracks, so history survives a Home removal). `sends` is the
     /// raw list from `fetchSends`, newest first.
-    static func fetchActivity(sends: [MailSend]) async throws -> [ActivityEntry] {
+    ///
+    /// `held` are contacts the app already has in memory, by id: they're used as
+    /// they are and only the rest are fetched. Nearly everyone mailed is on a
+    /// tracked company, so this is a request or two, not one per fifty people.
+    static func fetchActivity(sends: [MailSend], held: [String: HeldContact] = [:]) async throws -> [ActivityEntry] {
         guard !sends.isEmpty else { return [] }
-        let allIDs = Array(Set(sends.map(\.contactID)))
+        let allIDs = Array(Set(sends.map(\.contactID))).filter { held[$0] == nil }
 
         struct Row: Decodable {
             let id: String
@@ -314,22 +334,34 @@ enum SupabaseAPI {
             for request in requests { group.addTask { try await send(request) } }
             return try await group.reduce(into: [Data]()) { $0.append($1) }
         }
-        var byID: [String: Row] = [:]
+        var byID = held
         for page in pages {
-            for row in try decoder.decode([Row].self, from: page) { byID[row.id] = row }
+            for row in try decoder.decode([Row].self, from: page) {
+                byID[row.id] = HeldContact(name: row.name ?? "", email: row.email ?? "", position: row.position ?? "",
+                                           isValid: row.is_valid ?? true, company: row.companies?.name ?? "")
+            }
         }
 
         // One entry per send, keyed by the send's own id (unique per send).
         return sends.compactMap { send -> ActivityEntry? in
-            guard let row = byID[send.contactID] else { return nil }
-            let contact = Contact(id: row.id, email: row.email ?? "", name: row.name ?? "",
-                                  position: row.position ?? "", isValid: row.is_valid ?? true,
+            guard let info = byID[send.contactID] else { return nil }
+            let contact = Contact(id: send.contactID, email: info.email, name: info.name,
+                                  position: info.position, isValid: info.isValid,
                                   isSent: true, sentAt: send.sentAt,
                                   sentSubject: send.subject, sentBody: send.body,
                                   repliedAt: send.repliedAt, replyFrom: send.replyFrom,
                                   replySnippet: send.replySnippet)
-            return ActivityEntry(id: send.id, company: row.companies?.name ?? "", contact: contact)
+            return ActivityEntry(id: send.id, company: info.company, contact: contact)
         }
+    }
+
+    /// What the Activity feed needs of a contact, and of the company they're at.
+    struct HeldContact: Sendable {
+        let name: String
+        let email: String
+        let position: String
+        let isValid: Bool
+        let company: String
     }
 
     // MARK: - Company catalog writes

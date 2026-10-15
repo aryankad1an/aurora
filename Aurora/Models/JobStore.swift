@@ -3,9 +3,12 @@ import Observation
 
 /// The app's data layer. Companies and contacts are a shared catalog in
 /// Supabase; each Gmail user tracks a subset of companies (by id) and has their
-/// own per-user "sent" state, overlaid onto the catalog at load time. Every
-/// mutation writes to the database and then reloads, so on-screen state always
-/// mirrors what's stored.
+/// own per-user "sent" state, overlaid onto the catalog at load time.
+///
+/// A change is shown the instant it's made and written to the database in the
+/// background, put back if the database refuses it. It used to write and then
+/// reload everything behind a "Saving…" veil — over a second per change, with
+/// the whole app frozen.
 @Observable
 final class JobStore {
     /// The user's tracked companies, with contacts and sent state. Drives Home's
@@ -27,6 +30,11 @@ final class JobStore {
     /// Loaded from the send history, so it's independent of which companies are
     /// currently tracked on Home.
     private(set) var activity: [ActivityEntry] = []
+    /// True while the feed is being built. It's the slowest part of a load — a
+    /// request per fifty people mailed, six seconds on a long history — and only the
+    /// Activity tab shows it, so it's built after the rest has been shown.
+    private(set) var isLoadingActivity = false
+    @ObservationIgnored private var activityTask: Task<Void, Never>?
     /// This user's raw send rows, kept so reply syncing can work out which sends
     /// still need a thread id or a reply check.
     private(set) var sends: [MailSend] = []
@@ -82,10 +90,6 @@ final class JobStore {
 
     /// The connected Gmail address whose data we show. Set on sign-in.
     var userEmail: String?
-
-    private var inFlight = 0
-    /// True while a write and its confirming reload are in progress.
-    var isSaving: Bool { inFlight > 0 }
 
     // MARK: - Home selection (synced per account)
 
@@ -244,6 +248,8 @@ final class JobStore {
         var unnamed: [Contact] = []
         let outcome = await sync.run(forceFullCheck: forceFullCheck) {
             if reloadingFirst { await load() }
+            // Older sends' addresses come from the feed.
+            await activityTask?.value
             unnamed = await mailedContactsWithoutNames()
             return ReplySync.Inputs(sends: sends,
                                     emailByContact: emailByContact,
@@ -376,39 +382,66 @@ final class JobStore {
         await createCompany(details)
     }
 
-    /// Create a company with everything the form was given.
+    /// Create a company with everything the form was given. A new company belongs
+    /// in the sorted catalog, which only a reload can place, so it's fetched again
+    /// quietly; the screen it was made from stays usable meanwhile.
     func createCompany(_ details: CompanyDetails) async {
         let details = details.trimmed
         guard !details.name.isEmpty else { return }
-        await perform {
+        do {
             _ = try await SupabaseAPI.addCompany(details)
+        } catch {
+            report(error)
+            return
         }
+        await reloadQuietly()
         warnIfDomainsDropped(details.domains)
         warnIfFresherDetailsDropped(details, previous: nil)
     }
 
     /// Save a catalog company's details (upstream, for everyone), with a short
-    /// window to undo it.
+    /// window to undo it. The new details show at once.
     func updateCompany(id: String, details: CompanyDetails) async {
         let details = details.trimmed
         guard !details.name.isEmpty else { return }
         let previous = company(id: id)
 
-        let saved = await perform {
-            try await SupabaseAPI.updateCompany(id: id, details: details, previous: previous)
-        }
+        let saved = await saveCompany(id: id, details: details, previous: previous)
         if saved, details.domains != previous?.domains { warnIfDomainsDropped(details.domains) }
         if saved { warnIfFresherDetailsDropped(details, previous: previous) }
         // Only a write that landed has anything to undo.
         guard saved, let previous else { return }
         UndoCoordinator.shared.stage(message: "Company details updated") { [weak self] in
-            await self?.perform {
-                // Restored as it was — including where its links came from.
-                try await SupabaseAPI.updateCompany(id: id, details: previous.details, previous: nil)
-                try await SupabaseAPI.restoreLinkSources(id: id, website: previous.websiteSource,
-                                                         careers: previous.careersSource)
-            }
+            // Restored as it was — including where its links came from.
+            await self?.saveCompany(id: id, details: previous.details, previous: nil, restoringLinksOf: previous)
         }
+    }
+
+    /// Show `details` on the company now, write them, and put the company back as
+    /// it was if the database refuses. A rename moves the company in the sorted
+    /// lists, which only a reload can do; anything else needs just this company
+    /// fetched again, for what the server worked out itself.
+    @discardableResult
+    private func saveCompany(id: String, details: CompanyDetails, previous: Job?,
+                             restoringLinksOf original: Job? = nil) async -> Bool {
+        let renamed = previous.map { $0.company != details.name } ?? true
+        if var shown = previous ?? company(id: id) {
+            shown.apply(details)
+            replaceCompany(shown)
+        }
+        do {
+            try await SupabaseAPI.updateCompany(id: id, details: details, previous: previous)
+            if let original {
+                try await SupabaseAPI.restoreLinkSources(id: id, website: original.websiteSource,
+                                                         careers: original.careersSource)
+            }
+        } catch {
+            if let previous { replaceCompany(previous) }
+            report(error)
+            return false
+        }
+        if renamed { await reloadQuietly() } else { await refreshCompanies([id]) }
+        return true
     }
 
     /// Rename, re-sector, or change the domains of a catalog company (upstream,
@@ -437,12 +470,18 @@ final class JobStore {
         errorMessage = "The company was saved, but its mail domains weren't: the database needs a one-time update first. Run the “companies.domains” migration from the README in the Supabase SQL editor."
     }
 
-    /// Delete catalog companies (upstream, for everyone) in one request and one
-    /// reload. The reload reconciles the tracked cache against server truth, so
-    /// they drop off Home too.
+    /// Delete catalog companies (upstream, for everyone) in one request. They leave
+    /// every list at once; the reload after reconciles Home's cache and the
+    /// filter counts against the server.
     func deleteCompanies(_ ids: [String]) async {
         guard !ids.isEmpty else { return }
-        await perform { try await SupabaseAPI.deleteCompanies(ids: ids) }
+        removeCompanies(Set(ids))
+        do {
+            try await SupabaseAPI.deleteCompanies(ids: ids)
+        } catch {
+            report(error)
+        }
+        await reloadQuietly()
     }
 
     /// Every company already on file for a mail domain, with this user's sent
@@ -469,32 +508,57 @@ final class JobStore {
     /// person (the form shows it), not something to settle silently. That's how
     /// the domain list fills in on its own, and why a later contact at the same
     /// domain gets pointed at the right company instead of starting a duplicate.
+    ///
+    /// The new contact needs the id the database gives it, so it can't be shown
+    /// before the write lands; once it has, only that company is fetched again.
     func addContact(_ contact: Contact, to destination: ContactDestination) async {
         let domain = MailDomain.work(fromEmail: contact.email)
-        await perform {
+        do {
             switch destination {
             case .existing(let job):
                 try await SupabaseAPI.addContact(companyID: job.id, contact: contact)
-                guard let domain, !job.domains.contains(domain) else { return }
-                let owners = try await SupabaseAPI.companies(forDomain: domain)
-                guard owners.allSatisfy({ $0.id == job.id }) else { return }
-                try await SupabaseAPI.setDomains(companyID: job.id, domains: job.domains + [domain])
+                if let domain, !job.domains.contains(domain) {
+                    let owners = try await SupabaseAPI.companies(forDomain: domain)
+                    if owners.allSatisfy({ $0.id == job.id }) {
+                        try await SupabaseAPI.setDomains(companyID: job.id, domains: job.domains + [domain])
+                    }
+                }
+                await refreshCompanies([job.id])
             case .new(let name):
                 let id = try await SupabaseAPI.addCompany(name: name, sector: nil,
                                                           domains: domain.map { [$0] } ?? [])
                 try await SupabaseAPI.addContact(companyID: id, contact: contact)
+                // A company that didn't exist: it belongs in the sorted catalog, which
+                // only a reload can place.
+                await reloadQuietly()
             }
+        } catch {
+            report(error)
         }
     }
 
     /// Save an edited contact upstream, with a short window to undo it.
     func updateContact(_ contact: Contact) async {
         let previous = self.contact(id: contact.id)
-
-        let saved = await perform { try await SupabaseAPI.updateContact(contact) }
+        let saved = await saveContact(contact, replacing: previous)
         guard saved, let previous else { return }
         UndoCoordinator.shared.stage(message: "Contact details updated") { [weak self] in
-            await self?.perform { try await SupabaseAPI.updateContact(previous) }
+            await self?.saveContact(previous, replacing: contact)
+        }
+    }
+
+    /// Show `contact` everywhere it's held, write it, and put `previous` back if
+    /// the database refuses.
+    @discardableResult
+    private func saveContact(_ contact: Contact, replacing previous: Contact?) async -> Bool {
+        changeContacts([contact.id]) { $0 = contact }
+        do {
+            try await SupabaseAPI.updateContact(contact)
+            return true
+        } catch {
+            if let previous { changeContacts([contact.id]) { $0 = previous } }
+            report(error)
+            return false
         }
     }
 
@@ -503,10 +567,23 @@ final class JobStore {
     /// longer be mailed, but they're kept, with their send
     /// history, so the company screen can still show who was ruled out and why.
     /// Fully reversible, which is why it's offered instead of deleting.
+    ///
+    /// Shown at once; the write follows in the background. Nothing is reloaded,
+    /// because nothing else changed.
     @discardableResult
     func setValidity(_ ids: [Contact.ID], isValid: Bool) async -> Bool {
         guard !ids.isEmpty else { return false }
-        return await perform { try await SupabaseAPI.setContactValidity(ids: ids, isValid: isValid) }
+        let touched = Set(ids)
+        let before = heldContacts(touched)
+        changeContacts(touched) { $0.isValid = isValid }
+        do {
+            try await SupabaseAPI.setContactValidity(ids: ids, isValid: isValid)
+            return true
+        } catch {
+            changeContacts(touched) { if let old = before[$0.id] { $0.isValid = old.isValid } }
+            report(error)
+            return false
+        }
     }
 
     /// Delete a contact. Sent ones are kept as a record and can't be removed.
@@ -514,12 +591,19 @@ final class JobStore {
         await deleteContacts([contact])
     }
 
-    /// Delete several contacts in one request and one reload, skipping any that
-    /// have been mailed.
+    /// Delete several contacts in one request, skipping any that have been
+    /// mailed. They leave the screen at once; if the database refuses, the
+    /// reload that follows brings them back.
     func deleteContacts(_ contacts: [Contact]) async {
         let ids = contacts.filter { !$0.isSent }.map(\.id)
         guard !ids.isEmpty else { return }
-        await perform { try await SupabaseAPI.deleteContacts(ids: ids) }
+        removeContacts(Set(ids))
+        do {
+            try await SupabaseAPI.deleteContacts(ids: ids)
+        } catch {
+            report(error)
+            await reloadQuietly()
+        }
     }
 
     /// Append a send to this user's history for each contact. Does nothing
@@ -543,8 +627,10 @@ final class JobStore {
             report(error)
             return false
         }
+        // Only the sends changed, so only they are fetched again: the whole catalog
+        // came with every few mails of a background run, a second or more each time.
         do {
-            try await reloadAll()
+            try await reloadSendsOnly()
         } catch {
             report(error)
         }
@@ -566,20 +652,29 @@ final class JobStore {
     }
 
     /// Mark sources valid or invalid, for every user, with a short window to
-    /// undo it. An invalid source stops counting toward the stated package.
+    /// undo it. An invalid source stops counting toward the stated package. The
+    /// switch shows at once.
     func setSourceValidity(_ changed: [CompanySource], isValid: Bool) async {
         let ids = changed.map(\.id)
         guard let companyID = changed.first?.companyID, !ids.isEmpty else { return }
+        showSourceValidity(Set(ids), isValid, in: companyID)
         let saved = await performOnSources(companyID) {
             try await SupabaseAPI.setSourceValidity(ids: ids, isValid: isValid)
         }
         guard saved else { return }
         let noun = ids.count == 1 ? "Source" : "\(ids.count) sources"
         UndoCoordinator.shared.stage(message: "\(noun) marked \(isValid ? "valid" : "invalid")") { [weak self] in
+            self?.showSourceValidity(Set(ids), !isValid, in: companyID)
             await self?.performOnSources(companyID) {
                 try await SupabaseAPI.setSourceValidity(ids: ids, isValid: !isValid)
             }
         }
+    }
+
+    private func showSourceValidity(_ ids: Set<String>, _ isValid: Bool, in companyID: String) {
+        guard var held = sources[companyID] else { return }
+        for index in held.indices where ids.contains(held[index].id) { held[index].isValid = isValid }
+        sources[companyID] = held
     }
 
     /// Add a source, or save an edited one. Returns whether it landed.
@@ -606,12 +701,11 @@ final class JobStore {
     /// whole catalog, which a source never changes.
     @discardableResult
     private func performOnSources(_ companyID: String, _ operation: () async throws -> Void) async -> Bool {
-        inFlight += 1
-        defer { inFlight -= 1 }
         do {
             try await operation()
         } catch {
             report(error)
+            await loadSources(companyID: companyID)  // puts back what was shown early
             return false
         }
         await loadSources(companyID: companyID)
@@ -689,14 +783,14 @@ final class JobStore {
         let scope = catalogScope
         async let catalog = SupabaseAPI.fetchAllCompanies(limit: pageLimit, offset: 0, scope: scope)
         async let counts = Self.countScopes()
-        async let history = Self.fetchHistory(userEmail: email)
+        async let history = SupabaseAPI.fetchSends(userEmail: email, limit: 0)
         async let detached = Self.refetch(Array(detachedCompanies.keys))
         async let search: [Job] = query.isEmpty
             ? [] : ((try? await SupabaseAPI.searchCompanies(query: query)) ?? previousSearch)
 
         let companies = try await tracked
         let all = try await catalog
-        let (sends, activity) = try await history
+        let sends = try await history
         // Detached companies the catalog pages now cover are dropped from the
         // side table; one that came back nil was deleted (e.g. merged away).
         let catalogIDs = Set(all.map(\.id))
@@ -717,7 +811,8 @@ final class JobStore {
         detachedCompanies = refreshedDetached
         searchResults = refreshedSearch
         if !refreshedCounts.isEmpty { scopeCounts = refreshedCounts }
-        apply(sends: sends, activity: activity)
+        apply(sends: sends)
+        rebuildActivity(from: sends)
         warmScopes()
     }
 
@@ -807,14 +902,34 @@ final class JobStore {
     /// shared companies catalog from Supabase.
     private func reloadSendsOnly() async throws {
         guard let email = userEmail else { return }
-        let (sends, activity) = try await Self.fetchHistory(userEmail: email)
-        apply(sends: sends, activity: activity)
+        let sends = try await SupabaseAPI.fetchSends(userEmail: email, limit: 0)
+        apply(sends: sends)
+        rebuildActivity(from: sends)
     }
 
-    /// The whole send history and the Activity feed built from it.
-    private static func fetchHistory(userEmail: String) async throws -> ([MailSend], [ActivityEntry]) {
-        let sends = try await SupabaseAPI.fetchSends(userEmail: userEmail, limit: 0)
-        return (sends, try await SupabaseAPI.fetchActivity(sends: sends))
+    /// Build the Activity feed from the send history in the background. A newer
+    /// build replaces one still running, and a failed one leaves the feed as it was.
+    private func rebuildActivity(from sends: [MailSend]) {
+        activityTask?.cancel()
+        isLoadingActivity = true
+        // Contacts already in memory aren't fetched again.
+        var held: [String: SupabaseAPI.HeldContact] = [:]
+        for company in jobs + allCompanies + Array(detachedCompanies.values) {
+            for contact in company.contacts where held[contact.id] == nil {
+                held[contact.id] = SupabaseAPI.HeldContact(name: contact.name, email: contact.email,
+                                                           position: contact.position,
+                                                           isValid: contact.isValid, company: company.company)
+            }
+        }
+        activityTask = Task { [weak self, held] in
+            let entries = try? await SupabaseAPI.fetchActivity(sends: sends, held: held)
+            guard !Task.isCancelled, let self else { return }
+            // Activity is built from the send history (not the tracked list), so
+            // removing a company from Home leaves its sent records here untouched, and
+            // every send — including repeats to the same contact — is its own row.
+            if let entries { self.activity = entries.sorted { Self.newestFirst($0, $1) } }
+            self.isLoadingActivity = false
+        }
     }
 
     /// Fresh copies of companies held outside the catalog pages, fetched all at
@@ -831,18 +946,14 @@ final class JobStore {
     }
 
     /// Install a fresh send history: overlay it onto every company held in
-    /// memory, then rebuild everything derived from it.
-    private func apply(sends: [MailSend], activity: [ActivityEntry]) {
+    /// memory.
+    private func apply(sends: [MailSend]) {
         self.sends = sends
         let byContact = latestSendByContact
         overlaySends(byContact, into: &jobs)
         overlaySends(byContact, into: &allCompanies)
         overlaySends(byContact, into: &searchResults)
         detachedCompanies = detachedCompanies.mapValues { Self.overlaying(byContact, onto: $0) }
-        // Activity is built from the send history (not the tracked list), so
-        // removing a company from Home leaves its sent records here untouched, and
-        // every send — including repeats to the same contact — is its own row.
-        self.activity = activity.sorted { Self.newestFirst($0, $1) }
     }
 
     /// Look up, in the account's own mail, the tracked companies' contacts that
@@ -945,26 +1056,111 @@ final class JobStore {
         return result
     }
 
-    /// Run a write, then refresh from the database so local state stays in sync.
-    /// `inFlight` drives the app-wide "Saving…" state for the whole round-trip.
-    /// Returns whether the write itself succeeded (a failed reload afterwards is
-    /// reported, but doesn't un-happen the write).
-    @discardableResult
-    private func perform(_ operation: () async throws -> Void) async -> Bool {
-        inFlight += 1
-        defer { inFlight -= 1 }
-        do {
-            try await operation()
-        } catch {
-            report(error)
-            return false
+    // MARK: - Local-first changes
+    //
+    // Every copy of a company the store holds — Home, the catalog pages, search
+    // hits, companies opened directly, each scope's cached page, and the contacts
+    // inside the Activity feed — is changed together, each array assigned once
+    // (assigning `jobs` rebuilds the tracked-id set, and every assignment redraws
+    // what reads it).
+
+    /// Run `change` on every held company that `matches`.
+    private func forHeld(where matches: (Job) -> Bool, _ change: (inout Job) -> Void) {
+        func rewrite(_ companies: [Job]) -> [Job]? {
+            guard companies.contains(where: matches) else { return nil }
+            return companies.map { company in
+                guard matches(company) else { return company }
+                var copy = company
+                change(&copy)
+                return copy
+            }
         }
+        if let changed = rewrite(jobs) { jobs = changed }
+        if let changed = rewrite(allCompanies) { allCompanies = changed }
+        if let changed = rewrite(searchResults) { searchResults = changed }
+        for (id, company) in detachedCompanies where matches(company) {
+            var copy = company
+            change(&copy)
+            detachedCompanies[id] = copy
+        }
+        for scope in Array(scopePages.keys) {
+            guard var page = scopePages[scope], let changed = rewrite(page.companies) else { continue }
+            page.companies = changed
+            scopePages[scope] = page
+        }
+    }
+
+    /// Run `change` on every held copy of the contacts with these ids.
+    private func changeContacts(_ ids: Set<Contact.ID>, _ change: (inout Contact) -> Void) {
+        forHeld(where: { $0.contacts.contains { ids.contains($0.id) } }) { company in
+            for index in company.contacts.indices where ids.contains(company.contacts[index].id) {
+                change(&company.contacts[index])
+            }
+        }
+        if activity.contains(where: { ids.contains($0.contact.id) }) {
+            activity = activity.map { entry in
+                guard ids.contains(entry.contact.id) else { return entry }
+                var copy = entry
+                change(&copy.contact)
+                return copy
+            }
+        }
+    }
+
+    /// Take these contacts out of every held company.
+    private func removeContacts(_ ids: Set<Contact.ID>) {
+        forHeld(where: { $0.contacts.contains { ids.contains($0.id) } }) { company in
+            company.contacts.removeAll { ids.contains($0.id) }
+        }
+    }
+
+    /// One held copy of each contact with these ids, to put back if a write fails.
+    private func heldContacts(_ ids: Set<Contact.ID>) -> [Contact.ID: Contact] {
+        var found: [Contact.ID: Contact] = [:]
+        for company in jobs + allCompanies + searchResults + Array(detachedCompanies.values) {
+            for contact in company.contacts where ids.contains(contact.id) && found[contact.id] == nil {
+                found[contact.id] = contact
+            }
+            if found.count == ids.count { break }
+        }
+        return found
+    }
+
+    /// Replace the company with this id wherever it's held.
+    private func replaceCompany(_ company: Job) {
+        forHeld(where: { $0.id == company.id }) { $0 = company }
+        // A rename can change where it sits on Home.
+        if jobs.contains(where: { $0.id == company.id }) { jobs = jobs.sortedByName() }
+    }
+
+    /// Take these companies out of every held list, Home included.
+    private func removeCompanies(_ ids: Set<String>) {
+        jobs.removeAll { ids.contains($0.id) }
+        allCompanies.removeAll { ids.contains($0.id) }
+        searchResults.removeAll { ids.contains($0.id) }
+        for id in ids { detachedCompanies[id] = nil }
+        for scope in Array(scopePages.keys) {
+            scopePages[scope]?.companies.removeAll { ids.contains($0.id) }
+        }
+    }
+
+    /// Fetch just these companies again and put them in place, with this user's
+    /// sends laid over. For a change that touched nothing else.
+    private func refreshCompanies(_ ids: [String]) async {
+        let fresh = await Self.refetch(ids)
+        guard !fresh.isEmpty else { return }
+        let byContact = latestSendByContact
+        for company in fresh.values { replaceCompany(Self.overlaying(byContact, onto: company)) }
+    }
+
+    /// A full reload with no veil over the screen, for the few changes that can't
+    /// be shown locally (a new company, a rename). Failures are reported.
+    private func reloadQuietly() async {
         do {
             try await reloadAll()
         } catch {
             report(error)
         }
-        return true
     }
 
     /// Surface an error, ignoring cancellations from interrupted view reloads.

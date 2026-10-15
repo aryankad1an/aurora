@@ -47,7 +47,9 @@ struct ActivityView: View {
         NavigationStack {
             Group {
                 if jobStore.activity.isEmpty && mailQueue.batches.isEmpty {
-                    emptyState
+                    // The feed builds in the background after launch: until it has,
+                    // an empty list isn't "nothing sent", it's not here yet.
+                    if jobStore.isLoadingActivity { LoadingState() } else { emptyState }
                 } else {
                     content
                 }

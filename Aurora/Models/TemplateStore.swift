@@ -2,8 +2,9 @@ import Foundation
 import Observation
 
 /// The user's mail templates, stored in Supabase keyed by their Gmail address,
-/// so they load on any device after signing in. Every change writes through and
-/// then refetches, so on-screen state always mirrors the database.
+/// so they load on any device after signing in. A change shows at once and is
+/// written in the background, put back if the database refuses it — it used to
+/// write, refetch, and hold the whole app behind a "Saving…" veil meanwhile.
 @Observable
 final class TemplateStore {
     private(set) var templates: [MailTemplate] = []
@@ -13,12 +14,6 @@ final class TemplateStore {
     func clearError() { errorMessage = nil }
 
     private var email: String?
-
-    private var inFlight = 0
-    /// True while a write and its confirming reload are in progress. Drives the
-    /// app-wide "Saving…" overlay (see `RootView`) so a template isn't treated
-    /// as saved until it's actually round-tripped to the database.
-    var isSaving: Bool { inFlight > 0 }
 
     /// Load this user's templates from the database.
     func load(email: String) async {
@@ -42,25 +37,31 @@ final class TemplateStore {
     /// Create or update a template (both are an upsert on its id).
     func save(_ template: MailTemplate) async {
         guard let email else { return }
-        inFlight += 1
-        defer { inFlight -= 1 }
+        let before = templates
+        if let index = templates.firstIndex(where: { $0.id == template.id }) {
+            templates[index] = template
+        } else {
+            templates.append(template)
+        }
+        templates.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         do {
             try await SupabaseAPI.upsertTemplate(userEmail: email, template: template)
-            templates = try await SupabaseAPI.fetchTemplates(userEmail: email)
         } catch {
+            templates = before
             errorMessage = error.localizedDescription
         }
     }
 
-    /// Delete templates in one request and one refetch.
+    /// Delete templates in one request; they leave the list at once.
     func delete(_ doomed: [MailTemplate]) async {
-        guard let email, !doomed.isEmpty else { return }
-        inFlight += 1
-        defer { inFlight -= 1 }
+        guard email != nil, !doomed.isEmpty else { return }
+        let before = templates
+        let ids = Set(doomed.map(\.id))
+        templates.removeAll { ids.contains($0.id) }
         do {
             try await SupabaseAPI.deleteTemplates(ids: doomed.map(\.id))
-            templates = try await SupabaseAPI.fetchTemplates(userEmail: email)
         } catch {
+            templates = before
             errorMessage = error.localizedDescription
         }
     }
