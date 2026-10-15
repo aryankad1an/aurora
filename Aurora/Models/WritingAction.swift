@@ -31,72 +31,208 @@ enum WritingAction: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The instruction for this action.
+    /// The instruction for this action. Each says what to keep as well as what to
+    /// change: asked only to "rewrite", the on-device model drops greetings and
+    /// invents subject lines.
     var instruction: String {
         switch self {
         case .proofread:
-            "Fix spelling, grammar and punctuation only. Keep every word that is spelled correctly, including greetings, and do not change the tone or length."
+            "Fix spelling, grammar and punctuation only. Change nothing else."
         case .rewrite:
-            "Rewrite it so it reads more clearly and naturally, keeping the same meaning and roughly the same length."
+            "Rewrite the email so it is clearer and more natural. Keep the meaning and the length similar."
         case .friendlier:
-            "Rewrite it in a warmer, friendlier tone, keeping the same meaning and roughly the same length."
+            "Make the tone warmer and friendlier. Keep the meaning and the length similar."
         case .professional:
-            "Rewrite it in a more polished, professional tone, keeping the same meaning and roughly the same length."
+            "Make the tone more polished and professional. Keep the meaning and the length similar."
         case .shorter:
-            "Make it noticeably shorter and tighter without losing the main point."
+            "Make the email shorter and tighter. Keep every placeholder and the main point."
         case .longer:
-            "Expand it a little with more detail and smoother flow, using only what it already says."
+            "Make the email a little longer: add one or two natural sentences that elaborate on what it already says, such as why the sender is interested in the role. Do not claim anything the sender has done, and add no new facts about the sender or the company."
         }
     }
 
-    /// The rules every request carries, so the model treats the text as a mail
-    /// to leave intact in structure, not a chat to answer. `known` are the
-    /// placeholders the app understands; the model may add those if asked, and
-    /// no others.
-    static func rules(known: [String] = []) -> String {
+    /// How freely the model may vary, 0 to 1. Proofreading should read the same
+    /// every time; a rewrite that is asked for again should come out differently.
+    var temperature: Double {
+        switch self {
+        case .proofread: 0.1
+        case .rewrite, .friendlier, .professional, .shorter: 0.4
+        case .longer: 0.6
+        }
+    }
+
+    /// The rules every edit carries. Short and mostly positive: the on-device
+    /// model follows a few clear rules better than a long list of prohibitions.
+    ///
+    /// For a template, `known` placeholders are explained and shown in use, so
+    /// "mention my college" writes `{Sender-College}` instead of nothing. For a
+    /// mail that is already filled in, `senderFacts` are the real details to use.
+    /// `isLine` is for the company line, which is a sentence or two that sits in
+    /// the middle of a mail, not a mail: under the email rules the model wrapped
+    /// it in a greeting and a sign-off.
+    static func rules(known: [String] = [], senderFacts: String? = nil, isLine: Bool = false) -> String {
+        if isLine {
+            return """
+                You edit one or two sentences that go in the middle of a student's job-outreach email to a recruiter.
+                You receive the sentences and an instruction. Reply with the revised sentences only: no explanation, no quotation marks.
+                - Do exactly what the instruction says.
+                - Write in the first person.
+                - Do not add a greeting, a sign-off, a subject line or anything in curly braces.
+                - Do not invent facts, names, numbers or links.
+                - If nothing needs changing, return the sentences unchanged.
+                """
+        }
         var rules = """
-            You edit short emails that a student sends to recruiters. \
-            Reply with the edited text only: no preface, no quotation marks, no notes. \
-            Keep every placeholder in curly braces, such as {Receiver-Name}, exactly as written and in a sensible place. \
-            Keep line breaks and paragraphs. \
-            Keep the opening greeting and the closing line unless the instruction asks to change them. \
-            Do not delete words except to carry out the instruction. \
-            Never invent facts, names, numbers or links, and never add a greeting or sign-off that isn't already there \
-            unless the instruction asks for one.
+            You are a careful copy editor for short job-outreach emails written by a student.
+            You receive an email and an instruction. Reply with the revised email only: no explanation, no quotation marks, no code fences.
+            - Do exactly what the instruction says, including adding the detail it asks for. If it asks for several things, do every one of them.
+            - Keep each placeholder in curly braces, such as {Receiver-Name}, exactly as written.
+            - Keep the paragraph structure and line breaks.
+            - Keep the greeting and the closing line as they are, unless the instruction is about them.
+            - Do not add a subject line, a greeting or a sign-off unless the instruction asks for one.
+            - Do not invent facts, names, numbers or links.
+            - If nothing needs changing, return the email unchanged.
             """
         if !known.isEmpty {
-            rules += " If the instruction asks for a name, company, role or link to be included, you may use these placeholders and no others: "
-                + known.joined(separator: ", ") + "."
+            rules += """
+
+
+                To refer to a detail of the sender or recipient, write its placeholder: \
+                the recipient's first name {Receiver-Name}, their job title {Receiver-Position}, their company {Receiver-Company}, \
+                the sender's name {Sender-Name}, college {Sender-College}, employer {Sender-Company}, job title {Sender-Position}, \
+                resume link {Resume-Link}. Use only these placeholders: \(known.joined(separator: ", ")).
+                A request to mention, share, attach or point to the resume or CV means writing {Resume-Link} in a sentence. \
+                A request to introduce the sender means writing {Sender-Name}.
+                {Company-Personalised} is a whole sentence about the company, written separately for each recipient. \
+                Leave it where it is, as a sentence of its own; never use it as a name or part of a sentence.
+
+                Example
+                Instruction: Mention my college
+                Email:
+                Hi {Receiver-Name},
+
+                I'm interested in the analyst role.
+
+                Thanks for your time.
+                Revised:
+                Hi {Receiver-Name},
+
+                I'm a student at {Sender-College} and I'm interested in the analyst role.
+
+                Thanks for your time.
+
+                Example
+                Instruction: Point to my resume
+                Email:
+                Hello {Receiver-Name},
+
+                I'd like to join your team.
+
+                Regards
+                Revised:
+                Hello {Receiver-Name},
+
+                I'd like to join your team. My resume is here: {Resume-Link}
+
+                Regards
+                """
+        }
+        if let senderFacts, !senderFacts.isEmpty {
+            rules += """
+
+
+                Details about the sender, to use when the instruction asks for them: \(senderFacts)
+
+                Example
+                Details: studies at Anna University
+                Instruction: Mention my college
+                Email:
+                Hi Rahul,
+
+                I'm interested in the analyst role.
+                Revised:
+                Hi Rahul,
+
+                I'm a student at Anna University and I'm interested in the analyst role.
+                """
         }
         return rules
     }
 
-    func prompt(for text: String) -> String {
-        "\(instruction)\n\nText:\n\(text)"
-    }
-
-    /// The user's own instruction for the text, in their words.
-    static func customPrompt(_ instruction: String, for text: String) -> String {
-        """
-        Apply this instruction to the text: \(instruction.trimmingCharacters(in: .whitespacesAndNewlines))
-
-        Text:
-        \(text)
-        """
-    }
-
-    /// Instructions for drafting a company line from scratch.
-    static func draftPrompt(company: String, sector: String?, website: String?) -> String {
-        var facts = "Company: \(company)"
-        if let sector, !sector.isEmpty { facts += "\nSector: \(sector)" }
-        if let website, !website.isEmpty { facts += "\nWebsite: \(website)" }
-        return """
-            Write one or two sentences, in the first person, for a student's cold email to a recruiter at this company, \
-            saying genuine interest in the company. Use only the facts below; do not invent products, projects, news or numbers. \
-            If little is known, stay general about the sector.
-
-            \(facts)
+    /// The rules for writing a company line from scratch. Their own, because under
+    /// the editing rules the model answered with a whole email: a greeting, a
+    /// sign-off, and placeholders of its own invention.
+    ///
+    /// Two sets, by whether the student gave notes. With generic examples in the
+    /// rules the model copies them and ignores the notes, so notes get rules and
+    /// examples built around them alone.
+    static func draftRules(hasNotes: Bool) -> String {
+        let common = """
+            You write one or two sentences for a student's cold email to a recruiter at a company.
+            Reply with those sentences only: no greeting, no sign-off, no quotation marks, no curly braces.
+            Write in the first person. Use the company's name exactly as given, and never mention its website.
+            Never invent products, projects, news or numbers.
             """
+        if hasNotes {
+            return common + """
+
+
+                The student's notes are what the sentences are about. Say what the notes say, in natural words, \
+                and end by saying you'd like to learn more. Add no facts of your own.
+
+                Example
+                Company: Notion
+                Notes from the student: I use Notion daily and rebuilt my college's club wiki in it
+                Reply: I use Notion every day and rebuilt my college's club wiki in it, so I'd love to learn how your team approaches the product.
+
+                Example
+                Company: Razorpay
+                Sector: Payments
+                Notes from the student: built a checkout demo with their API, curious about fraud checks
+                Reply: I built a checkout demo with Razorpay's API and became curious about how fraud checks work, so I'd love to learn more about how your team approaches payments.
+                """
+        }
+        return common + """
+
+            Say the student is interested in the company and its work. Use only the facts given, and say nothing about the \
+            student's background, skills or experience.
+
+            Example
+            Company: Notion
+            Sector: Productivity software
+            Reply: I'm excited by the work Notion is doing in productivity software, and I'd love to learn more about how your team builds it.
+
+            Example
+            Company: Rippling
+            Reply: Rippling's work really interests me, and I'd welcome the chance to learn more about your team.
+            """
+    }
+
+    func prompt(for text: String, isLine: Bool = false) -> String {
+        Self.editPrompt(instruction, for: text, isLine: isLine)
+    }
+
+    /// An instruction and the text it applies to. For a company line the
+    /// instruction is worded for a sentence: "make the email shorter" reads as
+    /// a reason to write a whole email.
+    static func editPrompt(_ instruction: String, for text: String, isLine: Bool = false) -> String {
+        let task = isLine
+            ? instruction.replacingOccurrences(of: "the email", with: "the sentences")
+                .replacingOccurrences(of: "Keep every placeholder and ", with: "Keep ")
+            : instruction
+        return "Instruction: \(task.trimmingCharacters(in: .whitespacesAndNewlines))\n\n\(isLine ? "Sentences" : "Email"):\n\(text)"
+    }
+
+    /// What a company line is written from: the company, its sector if known, and
+    /// anything the student said they want it to say. The website is left out on
+    /// purpose — given it, the model announces that it found it.
+    static func draftPrompt(company: String, sector: String?, notes: String?) -> String {
+        var prompt = "Company: \(company)"
+        if let sector, !sector.isEmpty { prompt += "\nSector: \(sector)" }
+        if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            prompt += "\nNotes from the student: \(notes)"
+        }
+        return prompt + "\nReply:"
     }
 
     // MARK: - Checks
@@ -123,10 +259,35 @@ enum WritingAction: String, CaseIterable, Identifiable {
         return remaining.allSatisfy(known.contains)
     }
 
+    /// A drafted company line without anything that would not read as one in the
+    /// middle of a mail: a stray greeting or sign-off line from the email-shaped
+    /// answers the model leans towards, and braces of its own invention.
+    static func cleanedLine(_ text: String) -> String {
+        var kept: [Substring] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let lower = line.lowercased().trimmingCharacters(in: .whitespaces)
+            // Everything from a sign-off on is the signature, name included.
+            // Short only: "Thanks to its API, I built…" is a sentence, not a sign-off.
+            let isShort = lower.split(separator: " ").count <= 3
+            if isShort, ["best regards", "regards", "thanks", "thank you", "sincerely", "best,"].contains(where: lower.hasPrefix) { break }
+            if lower.hasPrefix("hi ") || lower.hasPrefix("hello") || lower.hasPrefix("dear ") { continue }
+            kept.append(line)
+        }
+        let joined = kept.joined(separator: " ")
+        // A line holding braces is the model improvising placeholders; nothing is
+        // better than a mail that prints "{company-name}".
+        return joined.contains("{") || joined.contains("}") ? "" : joined
+    }
+
     /// The model's reply without the wrapping it sometimes adds: surrounding
     /// whitespace, a code fence, or quotes around the whole text.
     static func cleaned(_ reply: String) -> String {
         var text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The worked examples in the rules end in "Revised:" and "Reply:", which
+        // the model sometimes echoes before its answer.
+        for label in ["Revised:", "Reply:"] where text.hasPrefix(label) {
+            text = String(text.dropFirst(label.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if text.hasPrefix("```"), text.hasSuffix("```"), text.count > 6 {
             text = String(text.dropFirst(3).dropLast(3))
             if let newline = text.firstIndex(of: "\n"), !text[..<newline].contains(" ") {

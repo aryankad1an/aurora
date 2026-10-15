@@ -4,7 +4,6 @@ import SwiftUI
 struct DraftSubject {
     let company: String
     let sector: String?
-    let website: String?
 }
 
 /// The sparkles button that opens on-device Apple Intelligence writing help
@@ -63,6 +62,7 @@ struct WritingAssistSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(ProfileStore.self) private var profileStore
     @State private var stage = Stage.compose
     /// The text as the sheet opened, which every comparison is made against.
     @State private var original = ""
@@ -71,6 +71,9 @@ struct WritingAssistSheet: View {
     /// What the answer was made from, and what was asked, for Try Again.
     @State private var lastSource = ""
     @State private var lastRequest: WritingRequest?
+    /// How many times the same request has been asked again, so each Try Again
+    /// varies more.
+    @State private var attempts = 0
     @State private var prompt = ""
     @State private var refinement = ""
     @State private var tab = Tab.changes
@@ -81,6 +84,20 @@ struct WritingAssistSheet: View {
     @FocusState private var refineFocused: Bool
 
     private var known: [String] { isTemplate ? MailPlaceholder.allCases.map(\.token) : [] }
+
+    /// The sender's real details, for a mail that is already filled in: "mention
+    /// my college" has nothing to stand for the college there but the college.
+    private var senderFacts: String? {
+        let profile = profileStore.profile
+        var facts: [String] = []
+        if !profile.name.isEmpty { facts.append("name: \(profile.name)") }
+        if profile.isStudying, !profile.college.isEmpty { facts.append("studies at \(profile.college)") }
+        if profile.isWorking, !profile.company.isEmpty {
+            facts.append("works at \(profile.company)" + (profile.position.isEmpty ? "" : " as \(profile.position)"))
+        }
+        if !profile.resumeLink.isEmpty { facts.append("resume link: \(profile.resumeLink)") }
+        return facts.isEmpty ? nil : facts.joined(separator: "; ")
+    }
     private var hasText: Bool { !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var unavailable: String? { WritingAssistant.unavailableReason }
 
@@ -134,13 +151,16 @@ struct WritingAssistSheet: View {
                     unavailableCard(unavailable)
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionLabel("Tell it what to do")
+                        sectionLabel(hasText ? "Tell it what to do" : (subject == nil ? "Tell it what to do" : "What should it say?"))
                         promptField(text: $prompt, focus: $promptFocused,
                                     placeholder: hasText ? "e.g. Mention I'm a final-year student"
-                                                         : "Nothing to change yet") {
-                            run(.custom(prompt), from: original)
+                                                         : (subject == nil ? "Nothing to change yet"
+                                                                           : "e.g. I built a project using their API")) {
+                            // With nothing written yet, what's typed is what the line should
+                            // say, not an instruction about text that doesn't exist.
+                            run(hasText ? .custom(prompt) : .draft(notes: prompt), from: original)
                         }
-                        .disabled(!hasText)
+                        .disabled(!hasText && subject == nil)
                         if hasText { suggestions }
                     }
 
@@ -217,8 +237,9 @@ struct WritingAssistSheet: View {
     private var quickActions: some View {
         AdaptiveFlow(spacing: 8) {
             if subject != nil {
-                actionChip(WritingRequest.draft.title, systemImage: "wand.and.stars", prominent: !hasText) {
-                    run(.draft, from: original)
+                actionChip(hasText ? "Write a new one" : "Write one for me",
+                           systemImage: "wand.and.stars", prominent: !hasText) {
+                    run(.draft(notes: nil), from: original)
                 }
             }
             ForEach(WritingAction.allCases) { action in
@@ -590,12 +611,15 @@ struct WritingAssistSheet: View {
         promptFocused = false
         refineFocused = false
         guard !(request.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { return }
+        attempts = (request == lastRequest && source == lastSource) ? attempts + 1 : 0
         lastRequest = request
         lastSource = source
+        let attempt = attempts
         withAnimation { stage = .working }
         job?.cancel()
         job = Task {
-            let result = await assistant.perform(request, on: source, subject: subject, known: known)
+            let result = await assistant.perform(request, on: source, subject: subject, known: known,
+                                                 senderFacts: isTemplate ? nil : senderFacts, attempt: attempt)
             guard !Task.isCancelled else { return }
             if let result {
                 candidate = result

@@ -47,6 +47,28 @@ struct WritingActionTests {
         expect(WritingAction.cleaned("```\nHello there.\n```"), "Hello there.", "code fence removed")
         expect(WritingAction.cleaned("```text\nHello there.\n```"), "Hello there.", "labelled code fence removed")
 
+        // Prompts and checks around the model
+        let line = WritingAction.draftPrompt(company: "Stripe", sector: "Financial technology", notes: nil)
+        expect(line, "Company: Stripe\nSector: Financial technology\nReply:", "a draft prompt names the company and sector only")
+        let noted = WritingAction.draftPrompt(company: "Stripe", sector: nil, notes: "  I built a payments demo  ")
+        expect(noted, "Company: Stripe\nNotes from the student: I built a payments demo\nReply:", "notes are trimmed and included")
+        expect(WritingAction.draftPrompt(company: "Stripe", sector: nil, notes: "   "), "Company: Stripe\nReply:", "blank notes are left out")
+        expect(WritingAction.draftRules(hasNotes: true).contains("Notes from the student"), true, "notes rules show notes")
+        expect(WritingAction.draftRules(hasNotes: true).contains("Rippling"), false, "notes rules carry no generic examples to copy")
+        expect(WritingAction.draftRules(hasNotes: false).contains("Rippling"), true, "no-notes rules carry generic examples")
+        expect(WritingAction.rules().contains("{Resume-Link}"), false, "a mail that is already filled in is told no placeholders")
+        expect(WritingAction.rules(known: ["{Resume-Link}"]).contains("{Resume-Link}"), true, "a template is told its placeholders")
+        expect(WritingAction.rules(senderFacts: "studies at IIT Delhi").contains("studies at IIT Delhi"), true, "sender facts reach the rules")
+        expect(WritingAction.rules(isLine: true).contains("greeting"), true, "a company line is told not to add a greeting")
+        expect(WritingAction.editPrompt("Make the email shorter.", for: "A.", isLine: true), "Instruction: Make the sentences shorter.\n\nSentences:\nA.", "a line's instruction speaks of sentences")
+        expect(WritingAction.editPrompt("Make the email shorter.", for: "A."), "Instruction: Make the email shorter.\n\nEmail:\nA.", "a mail's instruction speaks of the email")
+        expect(WritingAction.proofread.temperature < WritingAction.rewrite.temperature, true, "proofreading varies least")
+        expect(WritingAction.cleanedLine("Hi Priya,\nI love Stripe's work.\nBest regards,\nAryan"), "I love Stripe's work.", "a greeting and sign-off are stripped from a line")
+        expect(WritingAction.cleanedLine("Thanks to its API, I built a payments demo."), "Thanks to its API, I built a payments demo.", "a sentence that starts with Thanks is kept")
+        expect(WritingAction.cleanedLine("I follow {company-name} closely."), "", "a line with invented braces is refused")
+        expect(WritingAction.cleaned("Reply: I love Stripe."), "I love Stripe.", "an echoed Reply: label is removed")
+        expect(WritingAction.cleaned("Revised:\nHi Priya,"), "Hi Priya,", "an echoed Revised: label is removed")
+
         // What changed
         func render(_ d: TextDiff) -> String {
             d.segments.map { s in

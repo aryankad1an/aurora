@@ -54,7 +54,6 @@ struct PersonalisedLineCard: View {
 struct PersonalisedLineSheet: View {
     let company: String
     let sector: String?
-    let website: String?
 
     @Environment(PersonalisedLineStore.self) private var lines
     @Environment(\.dismiss) private var dismiss
@@ -92,7 +91,7 @@ struct PersonalisedLineSheet: View {
                         Text("Your line")
                         Spacer()
                         WritingAssistButton(text: $text,
-                                            subject: DraftSubject(company: company, sector: sector, website: website)) {
+                                            subject: DraftSubject(company: company, sector: sector)) {
                             aiFlash += 1
                         }
                         .font(.body.weight(.semibold))
