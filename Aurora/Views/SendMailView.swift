@@ -1233,6 +1233,7 @@ struct MailEditorView: View {
     @State private var subject: String
     @State private var messageBody: String
     @State private var aiFlash = 0
+    @FocusState private var bodyFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     fileprivate init(letter: MailPreview, face: LetterFace, onSave: @escaping (String, String) -> Void) {
@@ -1276,12 +1277,14 @@ struct MailEditorView: View {
                         .writingToolsBehavior(.complete)
                         .frame(minHeight: 260)
                         .font(.callout)
+                        .focused($bodyFocused)
+                        .reviewsWritingTools(text: $messageBody) { aiFlash += 1 }
                         .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8)
                 } header: {
                     HStack {
                         Text("Message")
                         Spacer()
-                        WritingAssistButton(text: $messageBody) { aiFlash += 1 }
+                        WritingToolsButton { bodyFocused = true }
                             .font(.body.weight(.semibold))
                             .textCase(nil)
                     }

@@ -225,10 +225,9 @@ struct TemplateEditorView: View {
                     .tracking(0.5)
                     .foregroundStyle(.inkMuted)
                 Spacer()
-                // On-device Apple Intelligence (Foundation Models): proofread,
-                // rewrite, or take the user's own instruction, with the changes
-                // shown for approval. It keeps {placeholders} intact.
-                WritingAssistButton(text: $content, isTemplate: true) { aiFlash += 1 }
+                // Apple's own Writing Tools on the message. When it closes having
+                // changed the text, the changes come up for review.
+                WritingToolsButton { focus = .content }
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.tint)
             }
@@ -253,6 +252,7 @@ struct TemplateEditorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .reviewsWritingTools(text: $content) { aiFlash += 1 }
                 .aiAppliedFlash(trigger: aiFlash, cornerRadius: 14,
                                 inset: EdgeInsets(top: 0, leading: 6, bottom: 12, trailing: 6))
         }

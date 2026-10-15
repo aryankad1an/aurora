@@ -302,7 +302,7 @@ struct JobDetailView: View {
         }
         .companyEditor(for: $editingCompany)
         .sheet(item: $editingLine) { job in
-            PersonalisedLineSheet(company: job.company, sector: job.sector)
+            PersonalisedLineSheet(company: job.company)
         }
         .sendChooser(for: $sendingTo) {}
         .addContactSheet(isPresented: $isAdding, initialCompany: job)

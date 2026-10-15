@@ -53,7 +53,6 @@ struct PersonalisedLineCard: View {
 /// Writing Tools on the text itself.
 struct PersonalisedLineSheet: View {
     let company: String
-    let sector: String?
 
     @Environment(PersonalisedLineStore.self) private var lines
     @Environment(\.dismiss) private var dismiss
@@ -73,6 +72,7 @@ struct PersonalisedLineSheet: View {
                         .writingToolsBehavior(.complete)
                         .focused($focused)
                         .frame(minHeight: 140)
+                        .reviewsWritingTools(text: $text) { aiFlash += 1 }
                         .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8,
                                         inset: EdgeInsets(top: -4, leading: -4, bottom: -4, trailing: -4))
                         .overlay(alignment: .topLeading) {
@@ -90,15 +90,12 @@ struct PersonalisedLineSheet: View {
                     HStack {
                         Text("Your line")
                         Spacer()
-                        WritingAssistButton(text: $text,
-                                            subject: DraftSubject(company: company, sector: sector)) {
-                            aiFlash += 1
-                        }
+                        WritingToolsButton { focused = true }
                         .font(.body.weight(.semibold))
                         .textCase(nil)
                     }
                 } footer: {
-                    Text("Goes into mails to people at \(company) wherever a template has the Company line placeholder. Use the sparkles button to draft or refine it with Apple Intelligence. It stays on this device.")
+                    Text("Goes into mails to people at \(company) wherever a template has the Company line placeholder. Use the sparkles button to proofread or rewrite it with Apple Intelligence. It stays on this device.")
                 }
             }
             .navigationTitle(company)
