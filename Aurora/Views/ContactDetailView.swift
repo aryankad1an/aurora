@@ -217,7 +217,7 @@ struct ContactDetailView: View {
                     .grayscale(isContactValid ? 0 : 1)
                 VStack(spacing: 3) {
                     Text(committed.displayName)
-                        .font(.display(24))
+                        .displayFont(24)
                         .foregroundStyle(.ink)
                         .multilineTextAlignment(.center)
                     Text([committed.position, company].filter { !$0.isEmpty }.joined(separator: " · "))

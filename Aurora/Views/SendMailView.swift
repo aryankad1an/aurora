@@ -940,7 +940,7 @@ private struct LetterCard<MenuItems: View>: View {
             if letter.templateID != nil || letter.isEdited {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(face.subject.isEmpty ? "No subject" : face.subject)
-                        .font(.display(18))
+                        .displayFont(18)
                         .foregroundStyle(face.subject.isEmpty ? Color.inkFaint : Color.ink)
                         .fixedSize(horizontal: false, vertical: true)
 

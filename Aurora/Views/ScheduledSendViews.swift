@@ -181,7 +181,7 @@ struct DueBatchSheet: View {
                     .symbolEffect(.bounce, options: .nonRepeating)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(batch.companiesLabel)
-                        .font(.display(20))
+                        .displayFont(20)
                         .foregroundStyle(.ink)
                         .lineLimit(2)
                     if let when = batch.scheduledFor {

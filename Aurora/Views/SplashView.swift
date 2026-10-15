@@ -35,6 +35,9 @@ struct SplashView: View {
     /// `progress`, eased, so each finished load draws its stretch of curve and
     /// pulls its droplet in over most of a second rather than snapping.
     @State private var shownProgress: Double = 0
+    /// Set after a long wait, so a slow connection says so instead of leaving a
+    /// splash that looks frozen for as long as the request takes to time out.
+    @State private var isSlow = false
 
     private static let wordmarkDelay: Duration = .milliseconds(260)
 
@@ -65,6 +68,18 @@ struct SplashView: View {
                     .blur(radius: phase == .settled ? 0 : 6)
             }
             .padding(.bottom, 96)
+            // An overlay, so the wordmark and tagline stay exactly where they were
+            // and the hint arrives beneath them without moving anything.
+            .overlay(alignment: .bottom) {
+                Text("Taking longer than usual — check your connection")
+                    .font(.footnote)
+                    .foregroundStyle(.inkFaint)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 44)
+                    .opacity(isSlow ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.6), value: isSlow)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Aurora is loading")
@@ -80,6 +95,9 @@ struct SplashView: View {
 
             try? await Task.sleep(for: Self.wordmarkDelay)
             withAnimation(.smooth(duration: 0.8)) { phase = .settled }
+
+            try? await Task.sleep(for: .seconds(10))
+            isSlow = true
         }
     }
 }

@@ -49,7 +49,7 @@ struct DataExportView: View {
                         IconTile(systemImage: "square.and.arrow.down.on.square.fill", tint: .clay, size: 52)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Export your data")
-                                .font(.display(20))
+                                .displayFont(20)
                                 .foregroundStyle(.ink)
                             Text("A copy of the database, saved where you choose. Nothing is changed or deleted.")
                                 .font(.caption)

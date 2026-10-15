@@ -74,7 +74,7 @@ private struct ThemeCard: View {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(theme.name)
-                        .font(.display(19))
+                        .displayFont(19)
                         .foregroundStyle(palette.ink)
                     Text(theme.tagline)
                         .font(.caption)

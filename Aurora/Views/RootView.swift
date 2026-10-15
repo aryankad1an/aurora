@@ -111,7 +111,27 @@ struct RootView: View {
         // here: template and profile failures used to set an `errorMessage` that
         // no view was bound to, so a save that never reached the database looked
         // exactly like one that did.
-        .messageAlert("Something went wrong", message: activeError) { clearErrors() }
+        //
+        // A dropped connection at launch used to leave an OK-only alert and an
+        // empty app; Try Again reloads everything the launch loads.
+        .alert("Something went wrong",
+               isPresented: Binding(get: { activeError != nil }, set: { if !$0 { clearErrors() } })) {
+            Button("Try Again") { retryLoads() }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(activeError ?? "")
+        }
+    }
+
+    /// Fetch again what the launch fetches, after a failure.
+    private func retryLoads() {
+        guard let email = gmailAuth.connectedEmail else { return }
+        Task {
+            async let profile: Void = profileStore.load(email: email)
+            async let templates: Void = templateStore.load(email: email)
+            async let companies: Void = jobStore.load()
+            _ = await (profile, templates, companies)
+        }
     }
 
     private var activeError: String? {

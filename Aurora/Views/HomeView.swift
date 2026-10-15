@@ -115,7 +115,17 @@ struct HomeView: View {
     @ViewBuilder
     private var trackingSection: some View {
         Section {
-            if jobStore.jobs.isEmpty {
+            if jobStore.jobs.isEmpty && jobStore.lastLoadFailed {
+                // A failed load isn't an empty account: saying "Nothing tracked
+                // yet" there tells someone their companies are gone.
+                InlineEmptyState(title: "Couldn't load your companies",
+                                 systemImage: "wifi.exclamationmark",
+                                 message: "Check your connection and try again. Nothing has been lost.",
+                                 actionTitle: "Try Again") {
+                    Task { await jobStore.load() }
+                }
+                .cardRow()
+            } else if jobStore.jobs.isEmpty {
                 InlineEmptyState(title: "Nothing tracked yet",
                                  systemImage: "pin",
                                  message: "Swipe right on a company in Companies, or open one and choose Track on Home.")

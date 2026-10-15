@@ -51,7 +51,7 @@ struct SendChooserView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(companies.count == 1 ? companies[0].company : "\(companies.count) companies")
-                    .font(.display(18))
+                    .displayFont(18)
                     .foregroundStyle(.ink)
                     .lineLimit(1)
                 Text("\(companies.reduce(0) { $0 + $1.validContacts.count }) people you can mail")

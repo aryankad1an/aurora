@@ -105,7 +105,7 @@ struct MailSummaryView: View {
             VStack(alignment: .leading, spacing: 10) {
                 let subject = contact.sentSubject.flatMap { $0.isEmpty ? nil : $0 }
                 Text(subject ?? "No subject recorded")
-                    .font(.display(20))
+                    .displayFont(20)
                     .foregroundStyle(subject == nil ? Color.inkFaint : Color.ink)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

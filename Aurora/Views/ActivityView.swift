@@ -362,6 +362,9 @@ private struct FeedDayHeader: View {
             Text(label.uppercased())
                 .font(.caption2.weight(.bold).monospaced())
                 .foregroundStyle(.inkMuted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .fixedSize(horizontal: true, vertical: false)
             Rectangle()
                 .fill(Color.hairline)
                 .frame(height: 1)
@@ -382,11 +385,21 @@ private struct FeedRow: View {
     let entry: ActivityEntry
     let isReplyOrdered: Bool
     let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var hasReplied: Bool { entry.contact.hasReplied }
 
+    /// The time gutter and axis give way at large text sizes: a 52-point column
+    /// can't hold "3:18 PM" there, and it left the card the width of a sliver.
+    /// The time moves into the card instead.
+    private var usesAxis: Bool { !typeSize.isAccessibilitySize }
+
     private var time: Date? {
         isReplyOrdered ? (entry.contact.repliedAt ?? entry.date) : entry.date
+    }
+
+    private var timeText: String {
+        time?.formatted(date: .omitted, time: .shortened) ?? "—"
     }
 
     private var subtitle: String {
@@ -397,29 +410,33 @@ private struct FeedRow: View {
     var body: some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: FeedAxis.spacing) {
-                Text(time?.formatted(date: .omitted, time: .shortened) ?? "—")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.inkFaint)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(width: FeedAxis.timeWidth, alignment: .trailing)
-                    .padding(.top, 14)
+                if usesAxis {
+                    Text(timeText)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.inkFaint)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .frame(width: FeedAxis.timeWidth, alignment: .trailing)
+                        .padding(.top, 14)
 
-                Circle()
-                    .fill(hasReplied ? Color.olive : Color.clay)
-                    .frame(width: FeedAxis.node, height: FeedAxis.node)
-                    .overlay(Circle().strokeBorder(Color.paper, lineWidth: 2))
-                    .padding(.top, 16)
+                    Circle()
+                        .fill(hasReplied ? Color.olive : Color.clay)
+                        .frame(width: FeedAxis.node, height: FeedAxis.node)
+                        .overlay(Circle().strokeBorder(Color.paper, lineWidth: 2))
+                        .padding(.top, 16)
+                }
 
                 card
             }
             .background(alignment: .topLeading) {
                 // The axis the nodes sit on.
-                Rectangle()
-                    .fill(Color.hairline)
-                    .frame(width: 1)
-                    .frame(maxHeight: .infinity)
-                    .offset(x: FeedAxis.center - 0.5)
+                if usesAxis {
+                    Rectangle()
+                        .fill(Color.hairline)
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                        .offset(x: FeedAxis.center - 0.5)
+                }
             }
             .contentShape(.rect)
         }
@@ -430,18 +447,24 @@ private struct FeedRow: View {
 
     private var card: some View {
         VStack(alignment: .leading, spacing: 5) {
+            if !usesAxis {
+                Text(timeText)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.inkFaint)
+            }
             HStack(spacing: 8) {
                 Text(entry.contact.displayName)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.ink)
-                    .lineLimit(1)
+                    .lineLimit(usesAxis ? 1 : 3)
                 Spacer(minLength: 0)
-                if hasReplied { RepliedPill(at: entry.contact.repliedAt) }
+                if hasReplied, usesAxis { RepliedPill(at: entry.contact.repliedAt) }
             }
+            if hasReplied, !usesAxis { RepliedPill(at: entry.contact.repliedAt) }
             Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(.inkMuted)
-                .lineLimit(1)
+                .lineLimit(usesAxis ? 1 : 2)
             // Exactly one third line, whatever is on file: what they said if
             // they answered, else what was sent. Each was optional and up to two
             // lines, so the feed's cards came in five different heights.

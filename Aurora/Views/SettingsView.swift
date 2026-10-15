@@ -8,6 +8,7 @@ import SwiftUI
 /// verb, and the button under your name — but the tab now holds the things you
 /// set rather than a page you read.
 struct SettingsView: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(ProfileStore.self) private var store
     @Environment(JobStore.self) private var jobStore
     @Environment(GmailAuthStore.self) private var gmail
@@ -71,24 +72,30 @@ struct SettingsView: View {
             ? [profile.position, profile.company].filter { !$0.isEmpty }.joined(separator: " at ")
             : (profile.isStudying && !profile.college.isEmpty ? "Student at \(profile.college)" : nil)
         return Section {
-            HStack(spacing: 14) {
+            // The avatar sits above the text at large sizes, where beside it the
+            // text ran to six lines against a 60-point circle.
+            (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+                                          : AnyLayout(HStackLayout(spacing: 14))) {
                 MonogramAvatar(text: name.isEmpty ? (gmail.connectedEmail ?? "?") : name, size: 60)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(name.isEmpty ? "Add your name" : name)
-                        .font(.display(22))
+                        .displayFont(22)
                         .foregroundStyle(name.isEmpty ? Color.inkMuted : Color.ink)
-                        .lineLimit(1)
+                        .lineLimit(2)
                     if let email = gmail.connectedEmail {
+                        // May wrap at large text sizes: an address cut to "realary…"
+                        // identifies nothing, and this is the one place it's shown.
                         Text(email)
                             .font(.subheadline)
                             .foregroundStyle(.inkMuted)
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
                     }
                     if let role {
                         Text(role)
                             .font(.caption)
                             .foregroundStyle(.inkFaint)
-                            .lineLimit(1)
+                            .lineLimit(2)
                     }
                 }
             }
@@ -188,7 +195,7 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     Image(systemName: "square.and.arrow.down.on.square")
                         .foregroundStyle(Color.clay)
-                        .frame(width: 24)
+                        .frame(minWidth: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Export Data")
                             .foregroundStyle(.ink)

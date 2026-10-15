@@ -31,6 +31,9 @@ final class JobStore {
     /// still need a thread id or a reply check.
     private(set) var sends: [MailSend] = []
     private(set) var isLoading = false
+    /// True when the last full load failed, so an empty list can say it couldn't
+    /// be fetched rather than that there's nothing in it.
+    private(set) var lastLoadFailed = false
     var errorMessage: String?
 
     // MARK: - Catalog paging
@@ -216,7 +219,9 @@ final class JobStore {
         errorMessage = nil
         do {
             try await reloadAll()
+            lastLoadFailed = false
         } catch {
+            if !error.isCancellation { lastLoadFailed = true }
             report(error)
         }
         isLoading = false

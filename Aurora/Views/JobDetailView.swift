@@ -455,7 +455,7 @@ struct JobDetailView: View {
                 Text(invalid == 0 ? "\(active) valid" : "\(active) valid · \(invalid) invalid")
                     .font(.caption)
                     .foregroundStyle(Color.inkMuted)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
             Spacer(minLength: 0)
         }
@@ -610,6 +610,7 @@ private struct ContactRow: View {
     /// Their last mail came back undelivered.
     var isBounced = false
     var onSend: (() -> Void)? = nil
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Always a second line, so every contact card is the same height: the job
     /// title, else the address — unless the address is already the headline.
@@ -622,6 +623,10 @@ private struct ContactRow: View {
         contact.position.isEmpty && contact.name.isEmpty
     }
 
+    /// At large text sizes the status chip drops under the name: beside it, the chip
+    /// and the send button left the address four letters ("ardu…").
+    private var stacksStatus: Bool { typeSize.isAccessibilitySize }
+
     var body: some View {
         HStack(spacing: 12) {
             MonogramAvatar(text: contact.displayName, size: Theme.Avatar.small)
@@ -632,7 +637,8 @@ private struct ContactRow: View {
                 Text(contact.displayName)
                     .font(.headline)
                     .foregroundStyle(contact.isValid ? Color.ink : Color.inkMuted)
-                    .lineLimit(1)
+                    .lineLimit(stacksStatus ? 3 : 1)
+                    .truncationMode(.middle)
                 if contact.isValid && !contact.isNameDetected {
                     NameNotDetectedLabel(detail: contact.position)
                 } else {
@@ -640,23 +646,16 @@ private struct ContactRow: View {
                         .font(.caption)
                         .foregroundStyle(contact.isValid && !subtitleIsPlaceholder
                                          ? Color.inkMuted : Color.inkFaint)
-                        .lineLimit(1)
+                        .lineLimit(stacksStatus ? 2 : 1)
                 }
+                if stacksStatus { status.padding(.top, 4) }
             }
             // Fills the row rather than sharing it with a Spacer, so the address
             // gets every point the chip and button leave.
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
-                if !contact.isValid {
-                    InvalidPill()
-                } else if isBounced {
-                    BouncedPill()
-                } else if contact.hasReplied {
-                    RepliedPill(at: contact.repliedAt)
-                } else {
-                    SentPill(sentAt: contact.sentAt)
-                }
+                if !stacksStatus { status }
                 if let onSend {
                     CircleIconButton(
                         systemImage: "paperplane.fill",
@@ -675,6 +674,19 @@ private struct ContactRow: View {
         .panelAccented(cardAccent)
         .animation(Theme.Motion.pop, value: contact.isValid)
         .animation(Theme.Motion.pop, value: contact.hasReplied)
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if !contact.isValid {
+            InvalidPill()
+        } else if isBounced {
+            BouncedPill()
+        } else if contact.hasReplied {
+            RepliedPill(at: contact.repliedAt)
+        } else {
+            SentPill(sentAt: contact.sentAt)
+        }
     }
 
     private var cardAccent: Color? {

@@ -54,13 +54,14 @@ struct ReplySyncBar: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let problem {
-                    Label {
+                    // Not a Label: when the message wraps, a Label sets its later
+                    // lines back under the icon instead of beside it.
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: problem.symbol).font(.caption)
                         Text(problem.message)
                             .font(.caption)
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: problem.symbol).font(.caption)
                     }
                     .foregroundStyle(.statusInvalid)
                 } else {

@@ -65,6 +65,36 @@ extension Theme {
     }
 }
 
+// MARK: - Scaling serif
+
+/// The editorial serif at a point size that follows Dynamic Type. `Font.display`
+/// is a fixed size, which suits figures and logos but left a heading small beside
+/// the body text around it at large sizes. Capped at twice its size, so a title
+/// stays a title.
+private struct DisplayFont: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+    private let base: CGFloat
+    private let weight: Font.Weight
+
+    init(size: CGFloat, weight: Font.Weight, relativeTo style: Font.TextStyle) {
+        _size = ScaledMetric(wrappedValue: size, relativeTo: style)
+        base = size
+        self.weight = weight
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.display(min(size, base * 2), weight: weight))
+    }
+}
+
+extension View {
+    /// A serif heading that scales with the reader's text size.
+    func displayFont(_ size: CGFloat, weight: Font.Weight = .semibold,
+                     relativeTo style: Font.TextStyle = .title3) -> some View {
+        modifier(DisplayFont(size: size, weight: weight, relativeTo: style))
+    }
+}
+
 // MARK: - Surfaces
 
 /// A raised surface: paper, a hairline, and — when the card's state is worth
@@ -695,6 +725,9 @@ struct InlineEmptyState: View {
     let systemImage: String
     var message: String?
     var tint: Color = .inkFaint
+    /// A button under the message, for a state the user can do something about.
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -702,13 +735,21 @@ struct InlineEmptyState: View {
                 .font(.title2)
                 .foregroundStyle(tint)
             Text(title)
-                .font(.display(17))
+                .displayFont(17)
                 .foregroundStyle(.ink)
             if let message {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.inkMuted)
                     .multilineTextAlignment(.center)
+            }
+            if let actionTitle, let action {
+                Button(actionTitle) {
+                    Haptics.tap()
+                    action()
+                }
+                .secondaryButton()
+                .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity)
@@ -740,14 +781,22 @@ struct WrappingHStack: Layout {
         for row in arrange(width: bounds.width, subviews: subviews) {
             var x = bounds.minX
             for index in row.indices {
-                var size = subviews[index].sizeThatFits(.unspecified)
-                size.width = min(size.width, bounds.width)
+                let size = Self.size(of: subviews[index], within: bounds.width)
                 subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
                                       proposal: ProposedViewSize(size))
                 x += size.width + spacing
             }
             y += row.height + lineSpacing
         }
+    }
+
+    /// A subview's size, one line wide if it fits and otherwise as wide as the row
+    /// with the height it then needs. Measuring a too-wide item at its one-line
+    /// height let a chip that wraps spill over the row beneath it.
+    private static func size(of subview: LayoutSubview, within width: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard ideal.width > width, width.isFinite else { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
     }
 
     private struct Row {
@@ -760,8 +809,7 @@ struct WrappingHStack: Layout {
         var rows: [Row] = []
         var current = Row()
         for index in subviews.indices {
-            var size = subviews[index].sizeThatFits(.unspecified)
-            size.width = min(size.width, width)
+            let size = Self.size(of: subviews[index], within: width)
             let needed = current.indices.isEmpty ? size.width : current.width + spacing + size.width
             if needed > width, !current.indices.isEmpty {
                 rows.append(current)

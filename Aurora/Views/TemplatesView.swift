@@ -213,6 +213,7 @@ private struct TemplateStatus {
 private struct TemplateCard: View {
     let template: MailTemplate
     let status: TemplateStatus
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var placeholders: [MailPlaceholder] {
         let text = template.subject + template.content
@@ -233,18 +234,21 @@ private struct TemplateCard: View {
                     .background(Color.clay.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(template.name)
-                        .font(.display(18))
+                        .displayFont(18)
                         .foregroundStyle(.ink)
-                        .lineLimit(1)
+                        .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
                     Text(template.subject.isEmpty
                          ? AttributedString("No subject")
                          : Self.highlighted(template.subject, font: .subheadline.weight(.medium)))
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(template.subject.isEmpty ? Color.inkFaint : Color.inkMuted)
-                        .lineLimit(1)
+                        .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                    // Under the name at large text sizes, where beside it the chip
+                    // left the subject "Explorin…".
+                    if typeSize.isAccessibilitySize { status.chip.padding(.top, 4) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                status.chip
+                if !typeSize.isAccessibilitySize { status.chip }
             }
 
             // The opening, as it reads, with its placeholders lit up.

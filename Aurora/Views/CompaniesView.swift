@@ -6,6 +6,7 @@ import SwiftUI
 /// toggle reveals the rest.
 struct CompaniesView: View {
     @Environment(JobStore.self) private var jobStore
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var searchText = ""
     @State private var showEmpty = false
@@ -182,7 +183,11 @@ struct CompaniesView: View {
                     Task { await jobStore.setScope(scope) }
                 }
             }
-            HStack(spacing: 10) {
+            // One line beside the switch, or stacked at large text sizes, where
+            // "127 tracked on Home" was cut to "127 t…".
+            let stacked = typeSize.isAccessibilitySize
+            (stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+                     : AnyLayout(HStackLayout(spacing: 10))) {
                 Group {
                     if !query.isEmpty {
                         Text(resultCount == 1 ? "1 match" : "\(resultCount.formatted()) matches")
@@ -195,8 +200,8 @@ struct CompaniesView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.inkMuted)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(2)
+                .frame(maxWidth: stacked ? nil : .infinity, alignment: .leading)
 
                 if query.isEmpty && jobStore.catalogScope == .all {
                     // Plain text, not a bordered toggle button: its chrome made

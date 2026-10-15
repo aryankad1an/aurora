@@ -18,6 +18,11 @@ struct CompanyCard: View {
     /// Home, in place of the chevron. Without it the card shows the chevron
     /// and, when tracked, a small pin by the name.
     var onToggleTrack: (() -> Void)? = nil
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// At accessibility sizes the name gets the whole line and wraps; the last-sent
+    /// chip moves under it. Beside it the name was cut to "ACK…".
+    private var wide: Bool { typeSize.isAccessibilitySize }
 
     private var subtitle: String {
         var parts = [job.contacts.isEmpty
@@ -42,12 +47,16 @@ struct CompanyCard: View {
                 .fresherBadge(for: job, size: 15)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                (wide ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+                      : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 6))) {
                     HStack(spacing: 5) {
                         Text(job.company)
                             .font(.headline)
                             .foregroundStyle(.ink)
-                            .lineLimit(1)
+                            .lineLimit(wide ? 3 : 1)
+                            // Take the height the wrapped name needs rather than the
+                            // one line the stack first offers.
+                            .fixedSize(horizontal: false, vertical: wide)
                         if isTracked && onToggleTrack == nil {
                             Image(systemName: "pin.fill")
                                 .font(.caption2)
@@ -75,7 +84,8 @@ struct CompanyCard: View {
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.inkMuted)
-                    .lineLimit(1)
+                    .lineLimit(wide ? 3 : 1)
+                    .fixedSize(horizontal: false, vertical: wide)
 
                 OutreachMeter(job: job)
                     .padding(.top, 6)

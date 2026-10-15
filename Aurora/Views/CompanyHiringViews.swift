@@ -39,24 +39,31 @@ struct TagChip: View {
     var systemImage: String?
     var tint: Color = .inkMuted
     var filled = true
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(spacing: 4) {
             if let systemImage { Image(systemName: systemImage) }
-            Text(text).lineLimit(1)
+            // One line at normal sizes. At accessibility sizes a long role or route
+            // wraps inside the chip: left to its full width it ran off the card.
+            Text(text)
+                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                .multilineTextAlignment(.leading)
         }
         .font(.caption.weight(.semibold))
         .foregroundStyle(tint)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background {
+            // A capsule's ends cut into the first line of a chip that wraps.
+            let shape = RoundedRectangle(cornerRadius: typeSize.isAccessibilitySize ? 14 : 100, style: .continuous)
             if filled {
-                Capsule().fill(tint.opacity(0.13))
+                shape.fill(tint.opacity(0.13))
             } else {
-                Capsule().strokeBorder(tint.opacity(0.45), lineWidth: 1)
+                shape.strokeBorder(tint.opacity(0.45), lineWidth: 1)
             }
         }
-        .fixedSize()
+        .fixedSize(horizontal: !typeSize.isAccessibilitySize, vertical: true)
     }
 }
 
@@ -161,16 +168,23 @@ struct HiringPanel: View {
         return "Stated package · from \(n) valid source\(n == 1 ? "" : "s")"
     }
 
+    /// The facts as (label, value, symbol), in the order they're shown.
+    private func factList(type: String, opens: String) -> [(label: String, value: String, symbol: String)] {
+        var list: [(String, String, String)] = []
+        if !type.isEmpty { list.append(("Type", type, "building.2")) }
+        if !opens.isEmpty { list.append(("Usually opens", opens, "calendar")) }
+        if !job.batches.isEmpty { list.append(("Batches", job.batches.joined(separator: " · "), "graduationcap")) }
+        return list
+    }
+
     @ViewBuilder
     private var facts: some View {
         let type = job.companyType?.trimmingCharacters(in: .whitespaces) ?? ""
         let opens = job.usuallyOpens?.trimmingCharacters(in: .whitespaces) ?? ""
         if !type.isEmpty || !opens.isEmpty || !job.batches.isEmpty || !job.fresherRoles.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                if !type.isEmpty { FactRow(label: "Type", value: type, systemImage: "building.2") }
-                if !opens.isEmpty { FactRow(label: "Usually opens", value: opens, systemImage: "calendar") }
-                if !job.batches.isEmpty {
-                    FactRow(label: "Batches", value: job.batches.joined(separator: " · "), systemImage: "graduationcap")
+                ForEach(factList(type: type, opens: opens), id: \.label) { fact in
+                    FactRow(label: fact.label, value: fact.value, systemImage: fact.symbol)
                 }
                 if !job.fresherRoles.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
@@ -189,24 +203,46 @@ struct HiringPanel: View {
     }
 }
 
-/// One fact: a muted label over its value.
+/// One fact: a muted label and its value. The labels share one column width, so
+/// the values start in the same place whatever their labels — with each label
+/// sized to itself, "Usually opens" pushed its value right of the others. At
+/// large text sizes the label sits over its value instead of beside it.
 private struct FactRow: View {
     let label: String
     let value: String
     let systemImage: String
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .caption) private var labelWidth: CGFloat = 132
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Label(label, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.inkMuted)
-                .frame(minWidth: 112, alignment: .leading)
-            Text(value)
-                .font(.subheadline)
-                .foregroundStyle(.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 2) {
+                labelView
+                valueView
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                labelView.frame(width: labelWidth, alignment: .leading)
+                valueView
+            }
+            .accessibilityElement(children: .combine)
         }
-        .accessibilityElement(children: .combine)
+    }
+
+    private var labelView: some View {
+        Label(label, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.inkMuted)
+            .lineLimit(1)
+    }
+
+    private var valueView: some View {
+        Text(value)
+            .font(.subheadline)
+            .foregroundStyle(.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -240,7 +276,9 @@ private struct LinkTile: View {
                         .font(.caption)
                         .foregroundStyle(url == nil ? Color.inkFaint : Color.inkMuted)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        // The host leads and the path is what gives way: cut in the
+                        // middle, a careers link read "adobe…ienced".
+                        .truncationMode(.tail)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if url != nil {
@@ -288,12 +326,16 @@ struct SourcesPreview: View {
     let sources: [CompanySource]?
     var onShowAll: () -> Void
     var onAdd: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let valid = (sources ?? []).filter(\.isValid).sortedForDisplay()
         let invalid = (sources ?? []).count - valid.count
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
+            // The action drops under the heading at accessibility sizes, where beside
+            // it "See All" was cut to "See…".
+            (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                                          : AnyLayout(HStackLayout(spacing: 12))) {
                 Image(systemName: "doc.text.magnifyingglass")
                     .font(.body)
                     .foregroundStyle(Color.clay)
@@ -306,7 +348,7 @@ struct SourcesPreview: View {
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                 }
-                Spacer(minLength: 0)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
                 if sources == nil {
                     ProgressView().controlSize(.small)
                 } else if (sources ?? []).isEmpty {
