@@ -61,6 +61,7 @@ struct PersonalisedLineSheet: View {
     @State private var text = ""
     @State private var saved = ""
     @State private var loaded = false
+    @State private var aiFlash = 0
     @FocusState private var focused: Bool
 
     private var hasChanges: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines) != saved }
@@ -73,6 +74,8 @@ struct PersonalisedLineSheet: View {
                         .writingToolsBehavior(.complete)
                         .focused($focused)
                         .frame(minHeight: 140)
+                        .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8,
+                                        inset: EdgeInsets(top: -4, leading: -4, bottom: -4, trailing: -4))
                         .overlay(alignment: .topLeading) {
                             if text.isEmpty {
                                 Text("e.g. I've been following your work on the Atlas launch.")
@@ -82,6 +85,19 @@ struct PersonalisedLineSheet: View {
                                     .allowsHitTesting(false)
                             }
                         }
+                } header: {
+                    // In the header, not the toolbar: a third bar item squeezes
+                    // the company's name out of the title.
+                    HStack {
+                        Text("Your line")
+                        Spacer()
+                        WritingAssistButton(text: $text,
+                                            subject: DraftSubject(company: company, sector: sector, website: website)) {
+                            aiFlash += 1
+                        }
+                        .font(.body.weight(.semibold))
+                        .textCase(nil)
+                    }
                 } footer: {
                     Text("Goes into mails to people at \(company) wherever a template has the Company line placeholder. Use the sparkles button to draft or refine it with Apple Intelligence. It stays on this device.")
                 }
@@ -90,13 +106,6 @@ struct PersonalisedLineSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .discardableEdits(hasChanges)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    WritingAssistMenu(text: $text,
-                                      subject: DraftSubject(company: company, sector: sector, website: website))
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         Haptics.success()

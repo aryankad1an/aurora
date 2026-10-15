@@ -1232,6 +1232,7 @@ struct MailEditorView: View {
     private let original: (subject: String, body: String)
     @State private var subject: String
     @State private var messageBody: String
+    @State private var aiFlash = 0
     @Environment(\.dismiss) private var dismiss
 
     fileprivate init(letter: MailPreview, face: LetterFace, onSave: @escaping (String, String) -> Void) {
@@ -1275,11 +1276,12 @@ struct MailEditorView: View {
                         .writingToolsBehavior(.complete)
                         .frame(minHeight: 260)
                         .font(.callout)
+                        .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8)
                 } header: {
                     HStack {
                         Text("Message")
                         Spacer()
-                        WritingAssistMenu(text: $messageBody)
+                        WritingAssistButton(text: $messageBody) { aiFlash += 1 }
                             .font(.body.weight(.semibold))
                             .textCase(nil)
                     }

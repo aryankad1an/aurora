@@ -37,6 +37,8 @@ struct TemplateEditorView: View {
     @State private var pickedSample: (contact: Contact, company: String)?
     @State private var confirmingTestSend = false
     @State private var confirmingSaveWithErrors = false
+    /// Bumped when an approved AI change lands in the message, to ring it in colour.
+    @State private var aiFlash = 0
     @State private var testSendResult: String?
     @State private var isTestSending = false
     @FocusState private var focus: Field?
@@ -224,12 +226,13 @@ struct TemplateEditorView: View {
                     .foregroundStyle(.inkMuted)
                 Spacer()
                 // On-device Apple Intelligence (Foundation Models): proofread,
-                // rewrite, change tone. It keeps {placeholders} intact.
-                WritingAssistMenu(text: $content)
+                // rewrite, or take the user's own instruction, with the changes
+                // shown for approval. It keeps {placeholders} intact.
+                WritingAssistButton(text: $content, isTemplate: true) { aiFlash += 1 }
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.tint)
             }
-            .padding(.horizontal, 26)
+            .padding(.horizontal, 17)
             .padding(.top, 10)
 
             TextEditor(text: $content, selection: $contentSelection)
@@ -250,6 +253,8 @@ struct TemplateEditorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .aiAppliedFlash(trigger: aiFlash, cornerRadius: 14,
+                                inset: EdgeInsets(top: 0, leading: 6, bottom: 12, trailing: 6))
         }
     }
 

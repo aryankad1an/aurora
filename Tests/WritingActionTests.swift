@@ -4,7 +4,7 @@ import Foundation
 // when a rewrite is refused for having touched a {placeholder}. The model call
 // itself needs Apple Intelligence and isn't exercised here.
 //
-//   swiftc -parse-as-library Aurora/Models/WritingAction.swift \
+//   swiftc -parse-as-library Aurora/Models/WritingAction.swift Aurora/Models/TextDiff.swift \
 //     Tests/WritingActionTests.swift -o /tmp/wa && /tmp/wa
 
 @main
@@ -31,6 +31,12 @@ struct WritingActionTests {
                false, "a renamed placeholder is refused")
         expect(WritingAction.keepsPlaceholders(original: "Plain text.", result: "Plain text {Sender-Name}."),
                false, "an invented placeholder is refused")
+        expect(WritingAction.keepsPlaceholders(original: "Hi,", result: "Hi {Receiver-Name},", allowing: ["{Receiver-Name}"]),
+               true, "adding a known placeholder is allowed when asked for")
+        expect(WritingAction.keepsPlaceholders(original: "Hi,", result: "Hi {Reciever-Name},", allowing: ["{Receiver-Name}"]),
+               false, "adding a misspelt one is not")
+        expect(WritingAction.keepsPlaceholders(original: "{A} and {A}", result: "{A}", allowing: ["{A}"]),
+               false, "dropping one of two copies is refused")
         expect(WritingAction.keepsPlaceholders(original: "No tokens.", result: "No tokens at all."),
                true, "text without placeholders passes")
 
@@ -40,6 +46,31 @@ struct WritingActionTests {
         expect(WritingAction.cleaned("\"Hi,\" she said, \"bye.\""), "\"Hi,\" she said, \"bye.\"", "inner quotes kept")
         expect(WritingAction.cleaned("```\nHello there.\n```"), "Hello there.", "code fence removed")
         expect(WritingAction.cleaned("```text\nHello there.\n```"), "Hello there.", "labelled code fence removed")
+
+        // What changed
+        func render(_ d: TextDiff) -> String {
+            d.segments.map { s in
+                switch s.kind {
+                case .same: s.text
+                case .added: "[+\(s.text)]"
+                case .removed: "[-\(s.text)]"
+                }
+            }.joined()
+        }
+        let d1 = TextDiff(from: "Hi {Receiver-Name}, I like your work.", to: "Hello {Receiver-Name}, I really like your work.")
+        expect(render(d1), "[-Hi][+Hello] {Receiver-Name}, I[+ really] like your work.", "word changes and insertions")
+        expect(d1.addedWords, 2, "added word count")
+        expect(d1.removedWords, 1, "removed word count")
+        let same = TextDiff(from: "No change here.", to: "No change here.")
+        expect(same.hasChanges, false, "identical text has no changes")
+        expect(same.segments.count, 1, "identical text is one segment")
+        let d2 = TextDiff(from: "One two three", to: "One three")
+        expect(render(d2), "One [-two ]three", "a deletion")
+        let d3 = TextDiff(from: "", to: "Brand new.")
+        expect(render(d3), "[+Brand new.]", "from empty")
+        let d4 = TextDiff(from: "Line one\nLine two", to: "Line one\n\nLine two")
+        expect(d4.addedWords, 0, "extra line break adds no words")
+        expect(d4.hasChanges, true, "but is still a change")
 
         print(failures == 0 ? "all passed" : "\(failures) failed")
         exit(failures == 0 ? 0 : 1)

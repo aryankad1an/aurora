@@ -35,7 +35,7 @@ enum WritingAction: String, CaseIterable, Identifiable {
     var instruction: String {
         switch self {
         case .proofread:
-            "Fix spelling, grammar and punctuation only. Do not change the wording, tone or length otherwise."
+            "Fix spelling, grammar and punctuation only. Keep every word that is spelled correctly, including greetings, and do not change the tone or length."
         case .rewrite:
             "Rewrite it so it reads more clearly and naturally, keeping the same meaning and roughly the same length."
         case .friendlier:
@@ -50,17 +50,39 @@ enum WritingAction: String, CaseIterable, Identifiable {
     }
 
     /// The rules every request carries, so the model treats the text as a mail
-    /// to leave intact in structure, not a chat to answer.
-    static let rules = """
-        You edit short emails that a student sends to recruiters. \
-        Reply with the edited text only: no preface, no quotation marks, no notes. \
-        Keep every placeholder in curly braces, such as {Receiver-Name}, exactly as written and in a sensible place. \
-        Keep line breaks and paragraphs. \
-        Never invent facts, names, numbers or links, and never add a greeting or sign-off that isn't already there.
-        """
+    /// to leave intact in structure, not a chat to answer. `known` are the
+    /// placeholders the app understands; the model may add those if asked, and
+    /// no others.
+    static func rules(known: [String] = []) -> String {
+        var rules = """
+            You edit short emails that a student sends to recruiters. \
+            Reply with the edited text only: no preface, no quotation marks, no notes. \
+            Keep every placeholder in curly braces, such as {Receiver-Name}, exactly as written and in a sensible place. \
+            Keep line breaks and paragraphs. \
+            Keep the opening greeting and the closing line unless the instruction asks to change them. \
+            Do not delete words except to carry out the instruction. \
+            Never invent facts, names, numbers or links, and never add a greeting or sign-off that isn't already there \
+            unless the instruction asks for one.
+            """
+        if !known.isEmpty {
+            rules += " If the instruction asks for a name, company, role or link to be included, you may use these placeholders and no others: "
+                + known.joined(separator: ", ") + "."
+        }
+        return rules
+    }
 
     func prompt(for text: String) -> String {
         "\(instruction)\n\nText:\n\(text)"
+    }
+
+    /// The user's own instruction for the text, in their words.
+    static func customPrompt(_ instruction: String, for text: String) -> String {
+        """
+        Apply this instruction to the text: \(instruction.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        Text:
+        \(text)
+        """
     }
 
     /// Instructions for drafting a company line from scratch.
@@ -88,11 +110,17 @@ enum WritingAction: String, CaseIterable, Identifiable {
             .sorted()
     }
 
-    /// Whether `result` carries exactly the placeholders `original` did. A
-    /// rewrite that drops, renames or invents one would send a mail with a
-    /// blank where a name goes, or a token printed as text.
-    static func keepsPlaceholders(original: String, result: String) -> Bool {
-        placeholders(in: original) == placeholders(in: result)
+    /// Whether `result` still carries every placeholder `original` did, and
+    /// adds none the app doesn't know. A rewrite that drops, renames or invents
+    /// one would send a mail with a blank where a name goes, or a token
+    /// printed as text.
+    static func keepsPlaceholders(original: String, result: String, allowing known: [String] = []) -> Bool {
+        var remaining = placeholders(in: result)
+        for token in placeholders(in: original) {
+            guard let index = remaining.firstIndex(of: token) else { return false }
+            remaining.remove(at: index)
+        }
+        return remaining.allSatisfy(known.contains)
     }
 
     /// The model's reply without the wrapping it sometimes adds: surrounding
