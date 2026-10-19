@@ -228,9 +228,10 @@ struct TemplateEditorView: View {
                     .tracking(0.5)
                     .foregroundStyle(.inkMuted)
                 Spacer()
-                // Apple's own Writing Tools on the message. When it closes having
-                // changed the text, the changes come up for review.
-                WritingToolsButton(target: writingTools)
+                // Apple Intelligence's cloud model on the message, with the system's
+                // Writing Tools a tap away in the same sheet. Either way, what
+                // changed comes up for review before it's kept.
+                WritingAssistButton(text: $content, isTemplate: true, writingTools: writingTools) { aiFlash += 1 }
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.tint)
             }

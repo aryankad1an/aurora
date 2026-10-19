@@ -3,8 +3,8 @@ import SwiftUI
 // MARK: - Apple Intelligence look
 //
 // The AI features share one visual language: a slowly turning ring of soft
-// colour around whatever Apple Intelligence changed, and a burst of sparkles
-// when a change is kept. All of it holds still
+// colour around whatever the model is working on or changed, a shimmer across
+// text it is reading, and a burst of sparkles when a change is kept. All of it holds still
 // when Reduce Motion is on, and none of it blurs — a blur redrawn every frame
 // is the cost the rest of the app's motion avoids (see LiquidMotion.swift).
 
@@ -58,7 +58,39 @@ struct AIGlowBorder: View {
     }
 }
 
+/// A band of light drifting across whatever it's applied to — "reading".
+struct AIShimmer: ViewModifier {
+    var isActive = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if !isActive || reduceMotion {
+            content.opacity(isActive ? 0.6 : 1)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                let seconds = context.date.timeIntervalSinceReferenceDate
+                let phase = (seconds / 1.5).truncatingRemainder(dividingBy: 1)
+                content
+                    .opacity(0.35)
+                    .overlay {
+                        content
+                            .mask {
+                                GeometryReader { geometry in
+                                    LinearGradient(colors: [.clear, .black, .clear],
+                                                   startPoint: .leading, endPoint: .trailing)
+                                        .frame(width: geometry.size.width * 0.55)
+                                        .offset(x: (phase * 1.55 - 0.45) * geometry.size.width)
+                                }
+                            }
+                    }
+            }
+        }
+    }
+}
+
 extension View {
+    func aiShimmer(_ isActive: Bool = true) -> some View { modifier(AIShimmer(isActive: isActive)) }
+
     /// A glow that rings this view for a moment each time `trigger` changes —
     /// the host's acknowledgement that a change from the AI just landed in it.
     func aiAppliedFlash(trigger: Int, cornerRadius: CGFloat = Theme.Radius.card,
@@ -140,6 +172,23 @@ struct AISparkleBurst: View {
                     LinearKeyframe(0, duration: 0.5)
                 }
             }
+        }
+    }
+}
+
+/// Chips that wrap onto as many lines as they need, becoming a stack of
+/// full-width rows at the accessibility text sizes, where a chip's own label
+/// is wider than the screen.
+struct AdaptiveFlow<Content: View>: View {
+    var spacing: CGFloat = 8
+    @ViewBuilder var content: Content
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: spacing) { content }
+        } else {
+            WrappingHStack(spacing: spacing, lineSpacing: spacing) { content }
         }
     }
 }

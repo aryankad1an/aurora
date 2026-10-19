@@ -1,34 +1,17 @@
 import SwiftUI
 import UIKit
-import FoundationModels
 
-/// The system's Writing Tools (Apple Intelligence) as the app's way of editing
-/// text: the button opens Apple's own panel on the text it's paired with, and
-/// when the panel closes having changed the text, `reviewsWritingTools` shows
-/// what changed and asks whether to keep it.
-///
-/// A screen pairs the two through a `WritingToolsTarget`:
-///
-///     @State private var writingTools = WritingToolsTarget()
-///     WritingToolsButton(target: writingTools)
-///     TextEditor(text: $body).reviewsWritingTools(text: $body, target: writingTools)
-enum WritingTools {
-    /// Nil when Writing Tools can be used; otherwise why not, for the user.
-    static var unavailableReason: String? {
-        switch SystemLanguageModel.default.availability {
-        case .available:
-            nil
-        case .unavailable(.deviceNotEligible):
-            "This iPhone doesn't support Apple Intelligence."
-        case .unavailable(.appleIntelligenceNotEnabled):
-            "Turn on Apple Intelligence in Settings to use this."
-        case .unavailable(.modelNotReady):
-            "Apple Intelligence is still getting ready. Try again in a little while."
-        case .unavailable:
-            "Apple Intelligence isn't available right now."
-        }
-    }
-}
+// The system's Writing Tools alongside the app's own writing help: "Use Writing
+// Tools instead" opens Apple's panel on the text a sparkles button is paired with,
+// and when the panel closes having changed the text (however it was opened),
+// `reviewsWritingTools` shows what changed and asks whether to keep it.
+//
+// A screen pairs an editor with its sparkles button through a
+// `WritingToolsTarget`, so "Use Writing Tools instead" opens on the right text:
+//
+//     @State private var writingTools = WritingToolsTarget()
+//     WritingAssistButton(text: $body, writingTools: writingTools)
+//     TextEditor(text: $body).reviewsWritingTools(text: $body, target: writingTools)
 
 extension UIView {
     /// Every view below this one of a given type.
@@ -43,48 +26,29 @@ extension UIView {
     }
 }
 
-// MARK: - Button
+// MARK: - Target
 
-/// The text view a sparkles button opens Writing Tools on, found by the editor's
+/// The text view Writing Tools is opened on, found by the editor's
 /// `reviewsWritingTools`. Held directly, not looked up as "whatever has the
-/// keyboard" when tapped: with the Subject field focused, that opened Writing
-/// Tools on the subject while the review watched the message.
+/// keyboard": with the Subject field focused, that opened Writing Tools on the
+/// subject while the review watched the message.
 @MainActor
 final class WritingToolsTarget {
     fileprivate weak var textView: UITextView?
-}
 
-/// The sparkles button: Writing Tools on the text it's paired with.
-struct WritingToolsButton: View {
-    let target: WritingToolsTarget
-    @State private var message: String?
-
-    var body: some View {
-        Button {
-            Haptics.tap()
-            if let reason = WritingTools.unavailableReason {
-                message = reason
-                return
-            }
-            guard let textView = target.textView else {
-                message = "Tap in the text first, then try again."
-                return
-            }
-            Task {
-                // Writing Tools opens on the text view with the keyboard: put it
-                // there, and give it a few frames to take it if it hadn't.
-                if !textView.isFirstResponder { textView.becomeFirstResponder() }
-                for _ in 0..<10 where !textView.isFirstResponder {
-                    try? await Task.sleep(for: .milliseconds(30))
-                }
-                textView.showWritingTools(textView)
-            }
-        } label: {
-            Image(systemName: "sparkles")
+    /// Open Writing Tools on the paired text. False when the text hasn't been
+    /// found yet (the editor isn't on screen).
+    @discardableResult
+    func open() async -> Bool {
+        guard let textView else { return false }
+        // Writing Tools opens on the text view with the keyboard: put it there,
+        // and give it a few frames to take it if it hadn't.
+        if !textView.isFirstResponder { textView.becomeFirstResponder() }
+        for _ in 0..<10 where !textView.isFirstResponder {
+            try? await Task.sleep(for: .milliseconds(30))
         }
-        .accessibilityLabel("Edit with Apple Intelligence")
-        .accessibilityHint("Opens Writing Tools: proofread, rewrite, or describe a change")
-        .messageAlert("Apple Intelligence", message: message) { message = nil }
+        textView.showWritingTools(textView)
+        return true
     }
 }
 
@@ -94,7 +58,7 @@ extension View {
     /// After Writing Tools changes this text, shows what changed and lets the user
     /// keep it or put the old text back. Applies to the `TextEditor` it's on, and
     /// also catches Writing Tools opened from the text's own selection menu.
-    /// `target` is how a `WritingToolsButton` finds this text.
+    /// `target` is how a sparkles button finds this text.
     func reviewsWritingTools(text: Binding<String>, target: WritingToolsTarget,
                              onKept: @escaping () -> Void = {}) -> some View {
         modifier(ReviewsWritingTools(text: text, target: target, onKept: onKept))

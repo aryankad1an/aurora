@@ -1287,7 +1287,7 @@ struct MailEditorView: View {
                     HStack {
                         Text("Message")
                         Spacer()
-                        WritingToolsButton(target: writingTools)
+                        WritingAssistButton(text: $messageBody, writingTools: writingTools) { aiFlash += 1 }
                             .font(.body.weight(.semibold))
                             .textCase(nil)
                     }

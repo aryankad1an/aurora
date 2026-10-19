@@ -48,10 +48,13 @@ struct PersonalisedLineCard: View {
     }
 }
 
-/// Where the line is written: a text box with the system's Writing Tools behind
-/// the sparkles button, and its changes shown for review before they're kept.
+/// Where the line is written: a text box with Apple Intelligence behind the
+/// sparkles button — to draft a line from notes or refine one — and its changes
+/// shown for review before they're kept.
 struct PersonalisedLineSheet: View {
     let company: String
+    /// For drafting a line from scratch.
+    var sector: String?
 
     @Environment(PersonalisedLineStore.self) private var lines
     @Environment(\.dismiss) private var dismiss
@@ -90,12 +93,13 @@ struct PersonalisedLineSheet: View {
                     HStack {
                         Text("Your line")
                         Spacer()
-                        WritingToolsButton(target: writingTools)
+                        WritingAssistButton(text: $text, subject: DraftSubject(company: company, sector: sector),
+                                            writingTools: writingTools) { aiFlash += 1 }
                         .font(.body.weight(.semibold))
                         .textCase(nil)
                     }
                 } footer: {
-                    Text("Goes into mails to people at \(company) wherever a template has the Company line placeholder. Use the sparkles button to proofread or rewrite it with Apple Intelligence. It stays on this device.")
+                    Text("Goes into mails to people at \(company) wherever a template has the Company line placeholder. Use the sparkles button to draft or refine it with Apple Intelligence. The line itself is kept on this device.")
                 }
             }
             .navigationTitle(company)
