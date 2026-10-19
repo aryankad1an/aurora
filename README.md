@@ -60,8 +60,8 @@ sent and read through the Gmail API under Google OAuth.
 | **Reply tracking** | Each send records its Gmail thread. The app reads those threads to find replies, skipping auto-replies and bounces. |
 | **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. Answers saying the address is no longer in service, or the person has left, count too. Any sent mail can be checked on its own from Activity. |
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
-| **Themes** | Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and Gilded. Each changes the colours, the chart that moves behind every screen, the launch screen and the app icon. |
-| **Send animation** | Sending plays a short full-screen motion graphic over film grain: the screen washes over from where Send sits, envelopes drop onto a stack while its count ticks up, "Queued" (or "Scheduled", with the time) rises in, and the curtain lifts away. A tap lifts it early; Reduce Motion fades it in and out. |
+| **Look** | Retro motion graphics: a warm black ground under film grain, cream type and one burnt-orange accent, with a seventies striped sun drifting faintly in the corner of every screen. The launch screen is an ident: the sun rises over a horizon while four stripes (mustard, orange, vermilion, rust) run out under it as the launch loads, then it lifts away. |
+| **Curtains** | The big moments play as short full-screen motion graphics over film grain: the screen washes over, a figure acts in the middle, a serif title rises in, and the curtain lifts away. Sending drops envelopes onto a stack while its count ticks up under "Queued" (or "Scheduled", with the time); accepting a writing-help or Writing Tools change inks new lines across a page under "Rewritten". While writing help works, the sheet sits on the same grainy ground, and the splash and sign-in screen open on it. A tap lifts a curtain early; Reduce Motion fades it in and out. |
 | **Fresher hiring** | Every company in the Fresher Hiring Ledger is flagged, with a cap on its logo. Filter chips over Companies list freshers, ones hiring now, and each hiring route (off-campus, campus & intern, unclear), with counts. A company's screen shows its website and careers page, the package its sources state, the routes it hires freshers by, when it usually opens, batches and roles. |
 | **Sources** | Each fact rests on a source: a job post, an offer write-up, a placement page, each with its link, date and the package it states. Any source can be opened, edited, added or marked invalid (shared, with Undo); invalid ones stop counting toward the stated package. |
 | **Logos** | A company's own logo, found on its website, in place of the monogram everywhere it appears. Edit Company can find one on the website, or take a link. |
@@ -391,7 +391,7 @@ updates it rather than starting another. One a previous launch left up is
 taken over. It ends showing how the run finished (a clean run stays on the
 Lock Screen for 15 minutes).
 
-- **Lock Screen and Notification Center:** the status in the theme's colour
+- **Lock Screen and Notification Center:** the status in the app's colour
   ("Sending mail 4 of 6", "Connection lost · retrying in 0:05", "Paused",
   "All sent · waiting a minute for bounces", "All 6 sent · 1 bounced",
   "Scheduled for 7:00 PM", "Ready to send"), the company the mail
@@ -410,8 +410,8 @@ Lock Screen for 15 minutes).
 Tapping it opens Activity's Queued lane. It's drawn by the `AuroraLive` widget
 extension from `SendActivityAttributes` (in `Shared/`, compiled into both
 targets), and `SendLiveActivity` in the app starts, updates and ends it as the
-queue changes. The extension can't read the app's theme, so the theme's colours
-and mark travel with the activity. iOS asks once whether to allow Live
+queue changes. The extension can't read the app's palette, so its colours travel
+with the activity. iOS asks once whether to allow Live
 Activities from Aurora; they can be turned off in Settings › Aurora.
 
 ### Rate limits
@@ -687,8 +687,9 @@ someone's address can't quietly put them back in circulation.
 
 ## Design system
 
-Dark only: a near-black background ruled as faint graph paper, light text, thin
-rules, one accent colour (clay). Colours and type are in
+Dark only: a warm black ground under still film grain with a faint striped
+sun in the corner (`Support/RetroGround.swift`), cream text, thin rules, one
+accent colour (burnt orange, `clay` in code). Colours and type are in
 `Support/Palette.swift`; surfaces, list styles, buttons, chips, metrics and
 selection mode are in `Support/DesignSystem.swift`. Screens use those rather
 than choosing their own colours or corner radii.
@@ -750,7 +751,7 @@ notice. The Python scripts below have their own `unittest` suites.
 | [`scripts/fresher_ledger/`](scripts/fresher_ledger/README.md) | Imports the Fresher Hiring Ledger: matches each of its companies to the catalog (or adds it), flags it, and loads its links, routes and sources; crawls company websites for logos and careers pages. Dry run first; backs up before writing. |
 | [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. Backs up before every change. |
 | `scripts/app_icon/make_icon.swift` | Draws the app icon, one rising curve from rose to amber with a glow behind it, and its tinted variant. Usage is at the top of the file. |
-| `scripts/app_icons/make_theme_icons.swift` | Draws the app icon for each theme. |
+| `scripts/app_icons/make_icons.swift` | Draws the app icon and the README logo from the app's mark. |
 
 ## Project layout
 
@@ -768,7 +769,7 @@ Tests/                         Standalone Swift test programs
 scripts/fresher_ledger/        Fresher Hiring Ledger import and website crawl (Python)
 scripts/company_verification/  Catalog verification pipeline (Python)
 scripts/app_icon/              Draws the app icon (Swift, Core Graphics)
-scripts/app_icons/             Draws each theme's app icon (Swift, Core Graphics)
+scripts/app_icons/             Draws the app icon from the mark (Swift)
 docs/screenshots/              Screenshots used in this README and SCREENSHOTS.md
 ```
 

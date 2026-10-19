@@ -1,28 +1,19 @@
 import SwiftUI
 
-/// Aurora's mark: a dawn. A hairline horizon with the sun's arc on it, and one
-/// stroke rising out of it to a bead — the outreach curve, the shape the app
-/// exists to bend upward, breaking clear of the arc.
+/// Aurora's mark: a dawn, as a seventies ident would draw it. A hairline
+/// horizon with a striped sun on it, and one stroke rising out of it to a bead:
+/// the outreach curve, the shape the app exists to bend upward, breaking clear
+/// of the sun.
 ///
-/// Every theme draws the same mark in its own colours and changes one detail,
-/// so the six read as one family: Tide's horizon is a swell, Phosphor's bead a
-/// cursor, Neon's sun is striped, Bloom's bead a blossom, Gilded's arc a dial.
-///
-/// The app icons are drawn from the same geometry by
-/// `scripts/app_icons/make_theme_icons.swift`; change both together. Shared with
-/// the widget extension, which draws it in the Live Activity.
+/// The app icon is drawn from the same view by
+/// `scripts/app_icons/make_theme_icons.swift`. Shared with the widget
+/// extension, which draws it in the Live Activity.
 struct AuroraMark: View {
-    /// Which theme's version. The raw values are the theme IDs.
-    enum Variant: String, Codable, Hashable, Sendable {
-        case aurora, tide, phosphor, neon, bloom, gilded
-    }
-
-    var variant: Variant = .aurora
-    /// The rising stroke.
+    /// The rising stroke, and the sun's colour.
     var accent: Color
     /// The bead at its tip.
     var bead: Color
-    /// The horizon and the arc.
+    /// The horizon.
     var line: Color
 
     var body: some View {
@@ -108,60 +99,32 @@ struct AuroraMark: View {
         let center = p(0.5, Self.horizonY)
         let radius = Self.sunRadius * side
 
-        // The sun.
+        // The sun: a half disc cut by slits that thicken toward the horizon,
+        // brighter at its foot.
         if !small {
-            let arc = Path { path in
-                path.addArc(center: center, radius: radius, startAngle: .degrees(180), endAngle: .degrees(360),
-                            clockwise: false)
+            var disc = Path()
+            disc.addArc(center: center, radius: radius, startAngle: .degrees(180), endAngle: .degrees(360),
+                        clockwise: false)
+            disc.closeSubpath()
+            var sunContext = context
+            sunContext.clip(to: disc)
+            var sun = disc
+            for k in 0..<3 {
+                let y = Self.horizonY - 0.05 - Double(k) * 0.065
+                sun.addRect(CGRect(origin: p(0.1, y),
+                                   size: CGSize(width: 0.8 * side, height: (0.03 - 0.008 * Double(k)) * side)))
             }
-            switch variant {
-            case .neon:
-                var disc = Path()
-                disc.addPath(arc)
-                disc.closeSubpath()
-                // Slits cut across the sun, clipped to it.
-                var sunContext = context
-                sunContext.clip(to: disc)
-                var sun = disc
-                for k in 0..<3 {
-                    let y = Self.horizonY - 0.05 - Double(k) * 0.065
-                    sun.addRect(CGRect(origin: p(0.1, y), size: CGSize(width: 0.8 * side, height: (0.022 + 0.008 * Double(k)) * side)))
-                }
-                sunContext.fill(sun, with: .linearGradient(Gradient(colors: [accent.opacity(0.1), accent.opacity(0.42)]),
-                                                        startPoint: p(0.5, Self.horizonY - Self.sunRadius),
-                                                        endPoint: center),
-                             style: FillStyle(eoFill: true))
-            case .gilded:
-                context.stroke(arc, with: .color(line), lineWidth: hairline)
-                var ticks = Path()
-                for k in 0...8 {
-                    let angle = Double.pi + Double(k) * .pi / 8
-                    let inner = radius + side * 0.035, outer = radius + side * (k % 2 == 0 ? 0.075 : 0.055)
-                    ticks.move(to: CGPoint(x: center.x + inner * cos(angle), y: center.y + inner * sin(angle)))
-                    ticks.addLine(to: CGPoint(x: center.x + outer * cos(angle), y: center.y + outer * sin(angle)))
-                }
-                context.stroke(ticks, with: .color(line), style: StrokeStyle(lineWidth: hairline, lineCap: .round))
-            default:
-                context.stroke(arc, with: .color(line), lineWidth: hairline)
-            }
+            sunContext.fill(sun, with: .linearGradient(Gradient(colors: [accent.opacity(0.14), accent.opacity(0.5)]),
+                                                    startPoint: p(0.5, Self.horizonY - Self.sunRadius),
+                                                    endPoint: center),
+                            style: FillStyle(eoFill: true))
         }
 
         // The horizon.
         var horizon = Path()
-        if variant == .tide {
-            for i in 0...60 {
-                let t = Double(i) / 60
-                let x = Self.horizon.from + (Self.horizon.to - Self.horizon.from) * t
-                let point = p(x, Self.horizonY + 0.018 * sin(t * .pi * 4))
-                if i == 0 { horizon.move(to: point) } else { horizon.addLine(to: point) }
-            }
-        } else {
-            horizon.move(to: p(Self.horizon.from, Self.horizonY))
-            horizon.addLine(to: p(Self.horizon.to, Self.horizonY))
-        }
-        let dash: [CGFloat] = variant == .phosphor && !small ? [side * 0.045, side * 0.03] : []
-        context.stroke(horizon, with: .color(line),
-                       style: StrokeStyle(lineWidth: hairline, lineCap: dash.isEmpty ? .round : .butt, dash: dash))
+        horizon.move(to: p(Self.horizon.from, Self.horizonY))
+        horizon.addLine(to: p(Self.horizon.to, Self.horizonY))
+        context.stroke(horizon, with: .color(line), style: StrokeStyle(lineWidth: hairline, lineCap: .round))
 
         // The rise.
         let outline = small
@@ -173,27 +136,8 @@ struct AuroraMark: View {
 
         // The bead.
         let tip = p(Self.riseEnd)
-        switch variant {
-        case .phosphor:
-            let s = beadRadius * 1.8
-            context.fill(Path(roundedRect: CGRect(x: tip.x - s / 2, y: tip.y - s / 2, width: s, height: s),
-                              cornerRadius: s * 0.22, style: .continuous), with: .color(bead))
-        case .bloom where !small:
-            for k in 0..<5 {
-                var petal = context
-                petal.translateBy(x: tip.x, y: tip.y)
-                petal.rotate(by: .radians(Double(k) * 2 * .pi / 5 - .pi / 2))
-                petal.fill(Path(ellipseIn: CGRect(x: beadRadius * 0.15, y: -beadRadius * 0.42,
-                                                  width: beadRadius * 1.05, height: beadRadius * 0.84)),
-                           with: .color(bead))
-            }
-            context.fill(Path(ellipseIn: CGRect(x: tip.x - beadRadius * 0.32, y: tip.y - beadRadius * 0.32,
-                                                width: beadRadius * 0.64, height: beadRadius * 0.64)),
-                         with: .color(accent))
-        default:
-            context.fill(Path(ellipseIn: CGRect(x: tip.x - beadRadius, y: tip.y - beadRadius,
-                                                width: beadRadius * 2, height: beadRadius * 2)),
-                         with: .color(bead))
-        }
+        context.fill(Path(ellipseIn: CGRect(x: tip.x - beadRadius, y: tip.y - beadRadius,
+                                            width: beadRadius * 2, height: beadRadius * 2)),
+                     with: .color(bead))
     }
 }

@@ -40,14 +40,3 @@ extension Transition where Self == LiquidMaterialize {
         LiquidMaterialize(scale: 0.88)
     }
 }
-
-/// The splash leaving: it swells, softens and dissolves, so the app surfaces
-/// through it rather than having it wiped off.
-struct LiquidDissolve: Transition {
-    func body(content: Content, phase: TransitionPhase) -> some View {
-        content
-            .scaleEffect(phase.isIdentity ? 1 : 1.14)
-            .blur(radius: phase.isIdentity ? 0 : 24)
-            .opacity(phase.isIdentity ? 1 : 0)
-    }
-}

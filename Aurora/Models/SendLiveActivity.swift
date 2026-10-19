@@ -86,11 +86,9 @@ final class SendLiveActivity {
             Task { await activity.update(content) }
             return
         }
-        let palette = ThemeStore.shared.current.palette
-        let attributes = SendActivityAttributes(accent: Self.rgb(palette.accent),
-                                                reply: Self.rgb(palette.reply),
-                                                attention: Self.rgb(palette.attention),
-                                                mark: ThemeStore.shared.current.mark)
+        let attributes = SendActivityAttributes(accent: Self.rgb(Palette.clay),
+                                                reply: Self.rgb(Palette.olive),
+                                                attention: Self.rgb(Palette.kraft))
         do {
             activity = try Activity.request(attributes: attributes, content: content, pushType: nil)
             shown = content

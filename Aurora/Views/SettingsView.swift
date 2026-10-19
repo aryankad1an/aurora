@@ -23,13 +23,10 @@ struct SettingsView: View {
     /// trip to Shortcuts and back.
     @State private var shortcutTest = ShortcutTest()
 
-    private enum Route: Hashable { case theme }
-
     var body: some View {
         NavigationStack {
             PaperForm {
                 accountSection
-                appearanceSection
                 if gmail.isConnected { gmailSection }
                 dataSection
                 helpSection
@@ -37,7 +34,6 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
-            .navigationDestination(for: Route.self) { _ in ThemePickerView() }
             .topBarActions(
                 TopBarPrimary(title: "Edit Profile", systemImage: "pencil") { isEditingProfile = true }
             ) {
@@ -119,36 +115,6 @@ struct SettingsView: View {
             if profile.resumeLink.isEmpty {
                 Text("Add your resume link in Edit Profile — templates using {Resume-Link} send with a blank space until you do.")
             }
-        }
-    }
-
-    // MARK: - Appearance
-
-    private var appearanceSection: some View {
-        let theme = ThemeStore.shared.current
-        return Section {
-            NavigationLink(value: Route.theme) {
-                HStack(spacing: 12) {
-                    Image(theme.iconPreview)
-                        .resizable()
-                        .frame(width: 34, height: 34)
-                        .clipShape(.rect(cornerRadius: 8, style: .continuous))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Theme")
-                            .foregroundStyle(.ink)
-                        Text(theme.name)
-                            .font(.caption)
-                            .foregroundStyle(.inkMuted)
-                            .contentTransition(.opacity)
-                    }
-                    Spacer(minLength: 8)
-                    ThemeSwatches(palette: theme.palette)
-                }
-            }
-        } header: {
-            Text("Appearance")
-        } footer: {
-            Text("Changes the colours, the chart behind every screen, the launch screen and the app icon.")
         }
     }
 
@@ -350,24 +316,5 @@ private struct EditProfileSheet: View {
                 store.profile = original
             }
         }
-    }
-}
-
-/// A theme's four working colours, as dots: accent, reply, waiting, attention.
-struct ThemeSwatches: View {
-    let palette: ThemePalette
-    var size: CGFloat = 10
-
-    var body: some View {
-        HStack(spacing: -size * 0.3) {
-            ForEach(Array([palette.accent, palette.reply, palette.waiting, palette.attention].enumerated()),
-                    id: \.offset) { _, color in
-                Circle()
-                    .fill(color)
-                    .frame(width: size, height: size)
-                    .overlay(Circle().strokeBorder(palette.paper, lineWidth: 1.5))
-            }
-        }
-        .accessibilityHidden(true)
     }
 }

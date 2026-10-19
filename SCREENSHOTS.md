@@ -28,7 +28,4 @@ Back to the [README](README.md).
     <td align="center" width="50%"><img src="docs/screenshots/status.png" alt="Status" width="300"><br><sub><b>Status.</b> The latest check as a timeline: done, running, still to come.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/live-activity-lock.png" alt="Live Activity on the Lock Screen" width="300"><br><sub><b>Lock Screen.</b> The company the mail is going to, and who.</sub></td>
   </tr>
-  <tr>
-    <td align="center" colspan="2"><img src="docs/screenshots/themes.png" alt="Themes" width="300"><br><sub><b>Themes.</b> Each one live, with its own chart, colours and icon.</sub></td>
-  </tr>
 </table>

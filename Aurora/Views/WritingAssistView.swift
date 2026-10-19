@@ -107,7 +107,6 @@ final class WritingHelpSession {
     var refinement = ""
     var tab = ChangeComparison.Tab.changes
     var job: Task<Void, Never>?
-    var burst: Date?
     var loaded = false
     var showingShortcutSetup = false
     let shortcutTest = ShortcutTest()
@@ -142,7 +141,6 @@ struct WritingAssistSheet: View {
     private var refinement: String { get { session.refinement } nonmutating set { session.refinement = newValue } }
     private var tab: Tab { get { session.tab } nonmutating set { session.tab = newValue } }
     private var job: Task<Void, Never>? { get { session.job } nonmutating set { session.job = newValue } }
-    private var burst: Date? { get { session.burst } nonmutating set { session.burst = newValue } }
 
     /// Read here so the sheet redraws when the shortcut is switched on or off.
     @AppStorage(ShortcutsWriter.enabledKey) private var viaShortcuts = false
@@ -194,7 +192,6 @@ struct WritingAssistSheet: View {
             }
             .animation(.easeInOut(duration: 0.2), value: stage)
             .paperScreen()
-            .overlay { acceptedSeal }
             .navigationTitle("Writing Help")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -577,14 +574,16 @@ struct WritingAssistSheet: View {
                     .panel()
                     .overlay { AIGlowBorder() }
 
-                    HStack(spacing: 8) {
+                    HStack(spacing: 10) {
                         Image(systemName: "sparkles")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(AIStyle.linear)
                             .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
                         Text(assistant.isInShortcuts ? "Writing in Shortcuts…" : assistant.streamed.isEmpty ? "Reading…" : "Writing…")
+                            .font(.system(.title2, design: .serif).weight(.semibold))
+                            .foregroundStyle(Color.ink)
                             .contentTransition(.opacity)
                     }
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Color.inkMuted)
 
                     Button("Stop") {
                         Haptics.tap()
@@ -600,6 +599,9 @@ struct WritingAssistSheet: View {
             }
             .defaultScrollAnchor(.bottom)
         }
+        // The lights go down while it works: the curtains' grainy ground, lit by
+        // the accent, so a wait on the model reads as part of the same film.
+        .background { CinemaGround(glow: 0.22).ignoresSafeArea() }
         .animation(Theme.Motion.snappy, value: assistant.streamed.isEmpty)
     }
 
@@ -708,25 +710,6 @@ struct WritingAssistSheet: View {
         .disabled(!diff.hasChanges)
     }
 
-    // MARK: - Accepted
-
-    /// A tick and a burst of sparkles over the sheet as the change is written in.
-    @ViewBuilder
-    private var acceptedSeal: some View {
-        if burst != nil {
-            ZStack {
-                Color.paper.opacity(0.9).ignoresSafeArea()
-                AISparkleBurst()
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 64))
-                    .foregroundStyle(AIStyle.linear)
-                    .symbolEffect(.bounce, options: .nonRepeating)
-                    .transition(.scale(scale: 0.4).combined(with: .opacity))
-            }
-            .transition(.opacity)
-        }
-    }
-
     // MARK: - Actions
 
     private func run(_ request: WritingRequest, from source: String) {
@@ -759,16 +742,14 @@ struct WritingAssistSheet: View {
         }
     }
 
+    /// Writes the change in and closes, under a curtain that says where it went.
     private func accept() {
         Haptics.success()
         assistant.accepted(replacing: original)
         text = candidate
         onApplied()
-        burst = .now
-        Task {
-            try? await Task.sleep(for: .milliseconds(reduceMotion ? 300 : 950))
-            dismiss()
-        }
+        WrittenCurtain.show(rewrote: hasText, landing: place.landing)
+        dismiss()
     }
 
     private func close() {

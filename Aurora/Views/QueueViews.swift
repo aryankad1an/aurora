@@ -492,7 +492,7 @@ private struct QueueNote: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.paperSunken, in: .rect(cornerRadius: Theme.Radius.inner, style: .continuous))
+        .insetPanel()
     }
 }
 

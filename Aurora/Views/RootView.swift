@@ -40,7 +40,7 @@ struct RootView: View {
     /// three loads in a couple of hundred milliseconds, and a launch screen that
     /// appears and vanishes inside one is a flicker, not a screen.
     private static let minimumSplash: Duration = .milliseconds(1_150)
-    /// A beat after the last load, for the splash's final droplet to land.
+    /// A beat after the last load, for the splash's stripes to reach the edge.
     private static let settleBeat: Duration = .milliseconds(380)
 
     /// How stale a check has to be before returning to the app runs another.
@@ -65,10 +65,10 @@ struct RootView: View {
         // The window's own background is black; paper behind everything means no
         // transition, scale or blur anywhere can ever reveal it.
         .background(Color.paper.ignoresSafeArea())
-        // One appearance: every theme's palette is dark, so every piece of
+        // One appearance: the palette is dark, so every piece of
         // system chrome (sheets, alerts, keyboards, glass) is told to match it.
         .preferredColorScheme(.dark)
-        // System controls take the theme's accent, and change with it.
+        // System controls take the app's accent.
         .tint(Color.clay)
         .environment(jobStore)
         .environment(profileStore)
@@ -78,8 +78,6 @@ struct RootView: View {
         .environment(mailQueue)
         .environment(replySync)
         .environment(selectionChrome)
-        // A theme change spreads across the screen from the tapped card.
-        .overlay { ThemeWashOverlay() }
         // A failed write is the one thing on this screen the user has to act on,
         // so it announces itself before the alert has finished animating in.
         .sensoryFeedback(trigger: activeError != nil) { _, hasError in
@@ -138,7 +136,8 @@ struct RootView: View {
             }
             if !isBooted {
                 SplashView(progress: Double(bootDone) / Double(Self.bootUnits))
-                    .transition(LiquidDissolve())
+                    // Lifts off the top, like the app's curtains.
+                    .transition(.asymmetric(insertion: .identity, removal: .move(edge: .top)))
                     .zIndex(1)
             }
         }
@@ -208,7 +207,13 @@ struct RootView: View {
         try? await Task.sleep(for: Self.settleBeat)
 
         Haptics.success()
-        withAnimation(.smooth(duration: 0.75)) { isBooted = true }
+        withAnimation(.timingCurve(0.7, 0, 0.3, 1, duration: 0.7)) { isBooted = true }
+
+        // The alternate icons went with the themes: anyone still on one goes
+        // back to the app's own.
+        if UIApplication.shared.alternateIconName != nil {
+            UIApplication.shared.setAlternateIconName(nil) { _ in }
+        }
 
         // A notification tapped to open the app: its batch is asked about now.
         openTappedBatch()

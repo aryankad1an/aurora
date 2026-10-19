@@ -10,13 +10,11 @@ import Foundation
 /// per batch, so a long send is one thing on the Lock Screen that keeps
 /// counting, not a pile of finished ones.
 nonisolated struct SendActivityAttributes: ActivityAttributes {
-    /// The theme's colours when the run started. The extension can't read the
-    /// app's theme, so they travel with the activity.
+    /// The app's colours. The extension can't read the app's palette, so they
+    /// travel with the activity.
     var accent: RGB
     var reply: RGB
     var attention: RGB
-    /// The theme's version of the mark, drawn while a mail is on its way.
-    var mark: AuroraMark.Variant
 
     struct RGB: Codable, Hashable {
         var red: Double

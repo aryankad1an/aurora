@@ -134,6 +134,12 @@ extension View {
         modifier(Panel(accent: nil, radius: radius))
     }
 
+    /// A recessed block inside a panel: a group of related facts set apart
+    /// from the rest of the card, the way the link tiles are.
+    func insetPanel() -> some View {
+        background(Color.paperSunken, in: .rect(cornerRadius: Theme.Radius.inner, style: .continuous))
+    }
+
     /// A raised surface whose leading rule states the row's condition.
     func panel(accent: Color, radius: CGFloat = Theme.Radius.card) -> some View {
         modifier(Panel(accent: accent, radius: radius))
@@ -250,13 +256,13 @@ extension View {
 // MARK: - Screens and lists
 
 extension View {
-    /// The ground behind a whole screen, edge to edge: the theme's paper, ruled
-    /// as graph paper, with its chart drifting across it. Every state of a
+    /// The ground behind a whole screen, edge to edge: the paper under film
+    /// grain, with the striped sun drifting in its corner (``RetroGround``). Every state of a
     /// screen sits on it — a spinner while searching, an empty state, a list —
     /// so none of them can show the bare window instead.
     func paperScreen() -> some View {
         background {
-            ChartGround()
+            RetroGround()
                 .ignoresSafeArea()
         }
     }
@@ -309,7 +315,7 @@ private struct CardListEdges: ViewModifier {
 }
 
 extension View {
-    /// Content scrolling under the tab bar dissolves into the graph paper,
+    /// Content scrolling under the tab bar dissolves into the paper,
     /// in place of the system's scroll-edge backdrop, which on this ground
     /// is a plain dark band. Apply it to the scroll view; `cardList`,
     /// `PaperForm` and `PaperList` already have it.
@@ -320,11 +326,8 @@ extension View {
 }
 
 /// The strip of paper under the tab bar: as tall as the bar's safe area,
-/// fading in over its top few points and opaque below.
-///
-/// The ground's tile starts at the top of the screen, and this strip starts
-/// wherever the bar does, so the tile inside it is shifted by the difference
-/// (mod one tile) to keep the grid unbroken across the seam.
+/// fading in over its top few points and opaque below, grained like the
+/// ground it covers.
 private struct PaperFloor: View {
     private static let fade: CGFloat = 24
 
@@ -332,13 +335,9 @@ private struct PaperFloor: View {
         GeometryReader { proxy in
             let height = proxy.safeAreaInsets.bottom
             if height > Self.fade {
-                let frame = proxy.frame(in: .global)
-                let phase = frame.maxY.truncatingRemainder(dividingBy: GraphPaper.tileSide)
-                GraphPaper()
-                    .frame(width: frame.width, height: height + GraphPaper.tileSide)
-                    .offset(y: -phase)
-                    .frame(width: frame.width, height: height, alignment: .top)
-                    .clipped()
+                FilmGrain(boils: false)
+                    .opacity(0.5)
+                    .frame(width: proxy.size.width, height: height)
                     .background(Color.paper)
                     .mask {
                         LinearGradient(stops: [

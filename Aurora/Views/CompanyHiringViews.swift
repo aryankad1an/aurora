@@ -82,10 +82,11 @@ extension HiringRoute {
 
 // MARK: - The company screen's hiring card
 
-/// Where to apply and what it pays: the company's website and careers page,
-/// the package its valid sources state, the routes it hires freshers by, and
-/// when. Every part is optional; the card shows what's known and offers to add
-/// the links when they're missing.
+/// Where to apply and what it pays: the company's website and careers page as
+/// two tiles, then, in one quiet block under them, the package its valid
+/// sources state, how it hires freshers, and what it is. The block is plain
+/// label and value rows (no icons, chips or headings), so it reads at a
+/// glance; everything that's unknown is simply left out.
 struct HiringPanel: View {
     let job: Job
     let sources: [CompanySource]?
@@ -98,7 +99,9 @@ struct HiringPanel: View {
         // Side by side, until the text is too large for two tiles to share a row.
         let links = typeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
-        VStack(alignment: .leading, spacing: 14) {
+        let facts = factList
+        let showsPackage = job.isFresher || !package.isEmpty
+        VStack(alignment: .leading, spacing: 12) {
             links {
                 LinkTile(title: "Website", systemImage: "globe", url: job.websiteLink,
                          provenance: LinkProvenance.label(job.websiteSource), onAdd: onEdit)
@@ -106,145 +109,105 @@ struct HiringPanel: View {
                          provenance: LinkProvenance.label(job.careersSource), onAdd: onEdit)
             }
 
-            if job.isFresher || !package.isEmpty {
-                Divider().overlay(Color.hairline)
-                packageRow(package)
-            }
-
-            if !job.hiringRoutes.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionLabel(title: "Hiring routes")
-                    WrappingHStack(spacing: 6, lineSpacing: 6) {
-                        ForEach(job.hiringRoutes) { route in
-                            TagChip(text: route.title, systemImage: route.systemImage, tint: route.tint)
-                                .accessibilityHint(route.detail)
-                        }
+            if showsPackage || !facts.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    if showsPackage { packageRow(package) }
+                    ForEach(facts, id: \.label) { fact in
+                        FactRow(label: fact.label) { fact.value }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .insetPanel()
             }
-
-            facts
         }
         .padding(16)
         .panel()
     }
 
-    @ViewBuilder
+    /// The package, which opens the sources it comes from.
     private func packageRow(_ package: StatedPackage) -> some View {
         Button(action: onShowSources) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(package.headline ?? "Not stated")
-                        .font(.display(24))
-                        .foregroundStyle(package.isEmpty ? Color.inkFaint : Color.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    Text(packageCaption(package))
-                        .font(.caption)
-                        .foregroundStyle(.inkMuted)
-                        .lineLimit(2)
+            // Centred: a spinner has no baseline, and on one it stood the row up taller.
+            HStack(alignment: .center, spacing: 8) {
+                FactRow(label: "Package") {
+                    if let headline = package.headline {
+                        let count = package.sources.count
+                        Text("\(Text(headline).font(.display(17)).foregroundStyle(Color.ink))  \(Text("\(count) source\(count == 1 ? "" : "s")").font(.caption).foregroundStyle(Color.inkFaint))")
+                    } else {
+                        Text("Not stated").foregroundStyle(Color.inkFaint)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 if sources == nil {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.inkFaint)
                 }
             }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Stated package, \(package.headline ?? "not stated"). \(packageCaption(package))")
+        .accessibilityLabel("Package, \(package.headline ?? "not stated")")
         .accessibilityHint("Shows the sources")
     }
 
-    private func packageCaption(_ package: StatedPackage) -> String {
-        guard let sources else { return "Stated package" }
-        if package.isEmpty {
-            return sources.isEmpty ? "Stated package · no sources yet" : "No valid source states a package"
-        }
-        let n = package.sources.count
-        return "Stated package · from \(n) valid source\(n == 1 ? "" : "s")"
-    }
-
-    /// The facts as (label, value, symbol), in the order they're shown.
-    private func factList(type: String, opens: String) -> [(label: String, value: String, symbol: String)] {
-        var list: [(String, String, String)] = []
-        if !type.isEmpty { list.append(("Type", type, "building.2")) }
-        if !opens.isEmpty { list.append(("Usually opens", opens, "calendar")) }
-        if !job.batches.isEmpty { list.append(("Batches", job.batches.joined(separator: " · "), "graduationcap")) }
-        return list
-    }
-
-    @ViewBuilder
-    private var facts: some View {
-        let type = job.companyType?.trimmingCharacters(in: .whitespaces) ?? ""
-        let opens = job.usuallyOpens?.trimmingCharacters(in: .whitespaces) ?? ""
-        let roles = RoleTitle.cleaned(job.fresherRoles)
-        if !type.isEmpty || !opens.isEmpty || !job.batches.isEmpty || !roles.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(factList(type: type, opens: opens), id: \.label) { fact in
-                    FactRow(label: fact.label, value: fact.value, systemImage: fact.symbol)
-                }
-                if !roles.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("Roles", systemImage: "person.text.rectangle")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.inkMuted)
-                        WrappingHStack(spacing: 6, lineSpacing: 6) {
-                            ForEach(roles, id: \.self) { role in
-                                TagChip(text: role, tint: .ink, filled: false)
-                            }
-                        }
-                    }
-                }
+    /// The rest, in the order they're shown: how it hires, when, what it is,
+    /// which batches and which roles.
+    private var factList: [(label: String, value: Text)] {
+        var list: [(String, Text)] = []
+        if !job.hiringRoutes.isEmpty {
+            // Each route in its own colour (off-campus in the reply green), as words.
+            let routes = job.hiringRoutes.enumerated().map { index, route in
+                Text("\(index == 0 ? "" : ", ")\(Text(route.title).foregroundStyle(route.tint))")
             }
+            list.append(("Hiring", routes.reduce(Text("")) { Text("\($0)\($1)") }))
         }
+        if let opens = job.usuallyOpens?.trimmingCharacters(in: .whitespaces), !opens.isEmpty {
+            list.append(("Opens", Text(opens)))
+        }
+        if let type = job.companyType?.trimmingCharacters(in: .whitespaces), !type.isEmpty {
+            list.append(("Type", Text(type)))
+        }
+        if !job.batches.isEmpty {
+            list.append(("Batches", Text(job.batches.joined(separator: " · "))))
+        }
+        let roles = RoleTitle.cleaned(job.fresherRoles)
+        if !roles.isEmpty {
+            list.append(("Roles", Text(roles.joined(separator: ", "))))
+        }
+        return list
     }
 }
 
-/// One fact: a muted label and its value. The labels share one column width, so
-/// the values start in the same place whatever their labels — with each label
-/// sized to itself, "Usually opens" pushed its value right of the others. At
-/// large text sizes the label sits over its value instead of beside it.
-private struct FactRow: View {
+/// One fact: a muted label and its value. The labels share one column width,
+/// so the values start in the same place; at large text sizes the label sits
+/// over its value instead.
+private struct FactRow<Value: View>: View {
     let label: String
-    let value: String
-    let systemImage: String
+    @ViewBuilder var value: Value
     @Environment(\.dynamicTypeSize) private var typeSize
-    @ScaledMetric(relativeTo: .caption) private var labelWidth: CGFloat = 132
+    @ScaledMetric(relativeTo: .footnote) private var labelWidth: CGFloat = 72
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 2) {
-                labelView
-                valueView
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                labelView.frame(width: labelWidth, alignment: .leading)
-                valueView
-            }
-            .accessibilityElement(children: .combine)
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 10))
+        layout {
+            Text(label)
+                .font(.footnote)
+                .foregroundStyle(.inkMuted)
+                .lineLimit(1)
+                .frame(width: typeSize.isAccessibilitySize ? nil : labelWidth, alignment: .leading)
+            value
+                .font(.subheadline)
+                .foregroundStyle(.ink)
+                .lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private var labelView: some View {
-        Label(label, systemImage: systemImage)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.inkMuted)
-            .lineLimit(1)
-    }
-
-    private var valueView: some View {
-        Text(value)
-            .font(.subheadline)
-            .foregroundStyle(.ink)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 

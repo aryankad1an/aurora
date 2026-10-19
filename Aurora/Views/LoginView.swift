@@ -10,8 +10,8 @@ struct LoginView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            // The theme's mark, on a raised tile like the app icon's.
-            AuroraMark(theme: ThemeStore.shared.current)
+            // The mark, on a raised tile like the app icon's.
+            AuroraMark(accent: .clay, bead: .ink, line: .inkFaint)
                 .padding(12)
                 .frame(width: 88, height: 88)
                 .background(Color.paperRaised, in: .rect(cornerRadius: 22, style: .continuous))
@@ -64,6 +64,8 @@ struct LoginView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Grain on the ground, under the controls, like the splash before it.
+        .background { FilmGrain().ignoresSafeArea() }
         .paperScreen()
         // Connecting hands off to a Google sheet and comes back minutes later in
         // the worst case, so the outcome is announced rather than only shown.

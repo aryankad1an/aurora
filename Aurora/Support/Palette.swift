@@ -3,61 +3,58 @@ import UIKit
 
 /// The app's colours, in one place.
 ///
-/// Black, like a chart on a trading terminal: a near-black ground, cards one
-/// step up, light ink, hairline rules — and a single accent that carries every
-/// action. Colour is scarce on purpose: when almost nothing is coloured, the one
-/// thing that is (a reply, a warning, the accent on a button) is read first.
-/// `grid` is the faint graph-paper rule the whole app is drawn on.
+/// Retro motion graphics: a warm near-black ground like a dark film frame,
+/// cream ink, and the burnt orange of a seventies ident carrying every action.
+/// Colour is scarce on purpose: when almost nothing is coloured, the one thing
+/// that is (a reply, a warning, the accent on a button) is read first. The
+/// stripes are the one place the warm colours appear together, in motion.
 ///
-/// The values come from the current ``AppTheme``. Reading one inside a view's
-/// body subscribes that view to the theme, so a theme change repaints exactly
-/// the views that draw colour — and, inside an animation, blends them.
-///
-/// There is one appearance. The app forces dark (`RootView`), and every theme
-/// is dark, so system chrome agrees with these values everywhere.
+/// There is one appearance. The app forces dark (`RootView`), so system
+/// chrome agrees with these values everywhere.
 enum Palette {
-    private static var theme: ThemePalette { ThemeStore.shared.current.palette }
-
     // MARK: - Ground and surfaces
 
     /// The page. Everything else sits on this.
-    static var paper: Color { theme.paper }
+    static let paper = Color(hex: 0x0D0B09)
 
     /// A raised surface: cards, panels, rows.
-    static var paperRaised: Color { theme.paperRaised }
+    static let paperRaised = Color(hex: 0x17140F)
 
     /// A recessed surface: the trough of a control, a segmented track. Lighter
     /// than the ground, not darker — on black, a well has to be lit to be seen.
-    static var paperSunken: Color { theme.paperSunken }
+    static let paperSunken = Color(hex: 0x221E18)
 
     // MARK: - Ink
 
-    /// Primary text.
-    static var ink: Color { theme.ink }
+    /// Primary text: cream, like print on film.
+    static let ink = Color(hex: 0xF4EADB)
     /// Secondary text: captions, subtitles, the second line of a row.
-    static var inkMuted: Color { theme.inkMuted }
+    static let inkMuted = Color(hex: 0xB3A794)
     /// Tertiary text: chevrons, timestamps, anything you should be able to ignore.
-    static var inkFaint: Color { theme.inkFaint }
+    static let inkFaint = Color(hex: 0x7C7262)
 
     /// Hairline rules and card borders. Carries structure so shadows don't have to.
-    static var hairline: Color { theme.hairline }
+    static let hairline = Color(hex: 0x2A241C)
 
-    /// Graph-paper rules behind every screen and inside every chart.
-    static var grid: Color { theme.grid }
+    /// The faintest rule, inside charts.
+    static let grid = Color(hex: 0x15120E)
 
     // MARK: - Accent and status
 
-    /// The one accent (clay in the original theme). Buttons, selection, the
-    /// active state, the curve.
-    static var clay: Color { theme.accent }
+    /// The one accent: burnt orange. Buttons, selection, the active state.
+    static let clay = Color(hex: 0xF26A3D)
     /// A reply landed.
-    static var olive: Color { theme.reply }
+    static let olive = Color(hex: 0x74C3A5)
     /// Sent, waiting, in progress. Cool enough to read as neutral beside the accent.
-    static var slate: Color { theme.waiting }
+    static let slate = Color(hex: 0x8DA7C2)
     /// Set aside or needs attention: bounced, invalid, unmigrated.
-    static var kraft: Color { theme.attention }
+    static let kraft = Color(hex: 0xF2B441)
     /// Destructive and broken: delete, a template that won't render.
-    static var danger: Color { theme.danger }
+    static let danger = Color(hex: 0xE5483B)
+
+    /// The ident's stripes, top to bottom: mustard, orange, vermilion, rust.
+    static let stripes: [Color] = [Color(hex: 0xF2B441), Color(hex: 0xF28A3A),
+                                   Color(hex: 0xE5583A), Color(hex: 0xB53F2E)]
 }
 
 /// The palette as `Color` members, so `Color.clay` reads naturally in a fill.

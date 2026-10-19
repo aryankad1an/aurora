@@ -13,7 +13,6 @@ struct WritingToolsReviewSheet: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var tab = ChangeComparison.Tab.changes
-    @State private var sealed = false
 
     var body: some View {
         let diff = change.diff
@@ -25,7 +24,7 @@ struct WritingToolsReviewSheet: View {
 
                     if !damage.isEmpty { damageNote(damage) }
 
-                    ChangeComparison(before: change.before, after: change.after, tab: $tab, isTurning: !sealed)
+                    ChangeComparison(before: change.before, after: change.after, tab: $tab, isTurning: true)
                 }
                 .padding(.horizontal, Theme.Space.gutter)
                 .padding(.top, 22)
@@ -35,7 +34,6 @@ struct WritingToolsReviewSheet: View {
             actions
         }
         .paperScreen()
-        .overlay { seal }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         // A choice, not a dismissal: swiping away would leave unsaid whether
@@ -106,12 +104,9 @@ struct WritingToolsReviewSheet: View {
     private var keepButton: some View {
         Button {
             Haptics.success()
-            sealed = true
             onKeep()
-            Task {
-                try? await Task.sleep(for: .milliseconds(reduceMotion ? 250 : 900))
-                dismiss()
-            }
+            WrittenCurtain.show(rewrote: !change.before.isEmpty, landing: "Apple Intelligence's change is in your text.")
+            dismiss()
         } label: {
             Label("Keep changes", systemImage: "checkmark")
                 .lineLimit(1)
@@ -119,23 +114,6 @@ struct WritingToolsReviewSheet: View {
                 .frame(maxWidth: .infinity, minHeight: 28)
         }
         .primaryButton()
-    }
-
-    /// A tick and a burst of sparkles as the change is kept.
-    @ViewBuilder
-    private var seal: some View {
-        if sealed {
-            ZStack {
-                Color.paper.opacity(0.9).ignoresSafeArea()
-                AISparkleBurst()
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 64))
-                    .foregroundStyle(AIStyle.linear)
-                    .symbolEffect(.bounce, options: .nonRepeating)
-                    .transition(.scale(scale: 0.4).combined(with: .opacity))
-            }
-            .transition(.opacity)
-        }
     }
 }
 

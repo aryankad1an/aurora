@@ -76,7 +76,7 @@ struct ReplyCheckHistoryView: View {
         // The paper is the sheet's own background, edge to edge. Drawn inside
         // it instead, it stopped short of the floating sheet's sides and left
         // a strip of the system's glass down each edge.
-        .presentationBackground { ChartGround() }
+        .presentationBackground { RetroGround() }
     }
 
     /// While a check runs, keep the step it's on in view.

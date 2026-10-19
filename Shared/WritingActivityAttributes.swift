@@ -6,7 +6,7 @@ import Foundation
 /// with the user's Aurora Writer shortcut: the app is behind Shortcuts then, so
 /// the Dynamic Island is where it says it's still waiting for the answer.
 nonisolated struct WritingActivityAttributes: ActivityAttributes {
-    /// The theme's accent when the request went out.
+    /// The app's accent, which the extension can't read for itself.
     var accent: SendActivityAttributes.RGB
 
     struct ContentState: Codable, Hashable {

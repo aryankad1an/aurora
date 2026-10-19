@@ -95,18 +95,16 @@ struct SendLiveActivityWidget: Widget {
     }
 }
 
-/// The theme's colours, as the activity carried them.
+/// The app's colours, as the activity carried them.
 private struct Style {
     let accent: Color
     let reply: Color
     let attention: Color
-    let mark: AuroraMark.Variant
 
     init(_ attributes: SendActivityAttributes) {
         accent = Color(attributes.accent)
         reply = Color(attributes.reply)
         attention = Color(attributes.attention)
-        mark = attributes.mark
     }
 
     func tint(_ phase: SendActivityAttributes.ContentState.Phase) -> Color {
@@ -390,7 +388,7 @@ private struct Tile: View {
 }
 
 /// The mark for what's happening. While a mail is on its way it's Aurora's
-/// own mark, the line rising to its bead, in the theme's version.
+/// own mark, the line rising out of its striped sun to its bead.
 private struct Glyph: View {
     let phase: SendActivityAttributes.ContentState.Phase
     let style: Style
@@ -400,7 +398,7 @@ private struct Glyph: View {
         if phase == .sending {
             // A touch larger than a symbol at the same point size, whose ink
             // doesn't fill its box the way the mark's square does.
-            AuroraMark(variant: style.mark, accent: style.accent, bead: .white, line: .white.opacity(0.4))
+            AuroraMark(accent: style.accent, bead: .white, line: .white.opacity(0.4))
                 .frame(width: size * 1.45, height: size * 1.45)
         } else {
             Image(systemName: symbol)

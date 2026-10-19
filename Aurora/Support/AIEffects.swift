@@ -10,7 +10,7 @@ import SwiftUI
 
 enum AIStyle {
     /// Pink through violet to blue: the colours Apple Intelligence glows with,
-    /// read as the app's own because they sit beside the theme's accent.
+    /// read as the app's own because they sit beside the app's accent.
     static let colors: [Color] = [
         Color(red: 1.00, green: 0.42, blue: 0.55),
         Color(red: 1.00, green: 0.66, blue: 0.36),

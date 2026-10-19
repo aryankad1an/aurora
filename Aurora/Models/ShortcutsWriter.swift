@@ -175,7 +175,7 @@ final class ShortcutsWriter {
         for leftover in Activity<WritingActivityAttributes>.activities {
             Task { await leftover.end(nil, dismissalPolicy: .immediate) }
         }
-        let attributes = WritingActivityAttributes(accent: SendLiveActivity.rgb(ThemeStore.shared.current.palette.accent))
+        let attributes = WritingActivityAttributes(accent: SendLiveActivity.rgb(Palette.clay))
         let state = WritingActivityAttributes.ContentState(request: title, startedAt: .now)
         return try? Activity.request(attributes: attributes, content: .init(state: state, staleDate: nil),
                                      pushType: nil)
