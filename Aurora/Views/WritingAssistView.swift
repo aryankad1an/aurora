@@ -7,18 +7,15 @@ struct DraftSubject {
 }
 
 /// The sparkles button: Apple Intelligence's cloud model (see `WritingAssistant`)
-/// on the text it's bound to — quick fixes, the user's own instruction, and, when
-/// given a `subject`, a first draft — with every answer shown as a comparison and
+/// on the text it's bound to — quick fixes, the user's own instruction, and, for
+/// a company line, a first draft — with every answer shown as a comparison and
 /// applied only once approved. The system's own Writing Tools stay one tap away
-/// in the same sheet, through `writingTools`.
+/// in the same sheet, through `writingTools`. After a change is accepted, Undo
+/// sits beside the button until the text is edited again.
 struct WritingAssistButton: View {
     @Binding var text: String
-    var subject: DraftSubject?
-    /// Whether the text is a template, where the model may be asked to add
-    /// placeholders such as {Receiver-Name}.
-    var isTemplate = false
-    /// The company a single mail is going to, for prompt ideas that name it.
-    var company: String?
+    /// What the text is and where it goes, which the model is told.
+    let place: WritingPlace
     /// The paired editor, for opening the system's Writing Tools on it instead.
     var writingTools: WritingToolsTarget?
     /// Called when an approved change has been written into `text`.
@@ -36,23 +33,43 @@ struct WritingAssistButton: View {
     @State private var applied: String?
 
     var body: some View {
-        Button {
-            Haptics.tap()
-            session = WritingHelpSession()
-            showing = true
-        } label: {
-            Image(systemName: "sparkles")
-                .symbolEffect(.bounce, value: assistant.previous)
+        HStack(spacing: 12) {
+            if assistant.previous != nil {
+                Button {
+                    guard let old = assistant.undo() else { return }
+                    Haptics.tap()
+                    withAnimation(Theme.Motion.snappy) { text = old }
+                    onApplied()
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.clay.opacity(0.14), in: Capsule())
+                        .foregroundStyle(Color.clay)
+                }
+                .buttonStyle(BouncyPress(scale: 0.92))
+                .accessibilityLabel("Undo the writing help change")
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+            Button {
+                Haptics.tap()
+                session = WritingHelpSession()
+                showing = true
+            } label: {
+                Image(systemName: "sparkles")
+                    .symbolEffect(.bounce, value: assistant.previous)
+            }
+            .accessibilityLabel("Writing help")
+            .accessibilityHint("Apple Intelligence: proofread, rewrite, or tell it what to change")
         }
-        .accessibilityLabel("Writing help")
-        .accessibilityHint("Apple Intelligence: proofread, rewrite, or tell it what to change")
+        .animation(Theme.Motion.snappy, value: assistant.previous != nil)
         .sheet(isPresented: $showing, onDismiss: {
             guard openWritingToolsAfter else { return }
             openWritingToolsAfter = false
             Task { await writingTools?.open() }
         }) {
-            WritingAssistSheet(text: $text, subject: subject, isTemplate: isTemplate, company: company,
-                               assistant: assistant, session: session, onApplied: {
+            WritingAssistSheet(text: $text, place: place, assistant: assistant, session: session, onApplied: {
                 applied = text
                 onApplied()
             }, onUseWritingTools: writingTools == nil ? nil : {
@@ -73,8 +90,6 @@ struct WritingAssistButton: View {
 @MainActor @Observable
 final class WritingHelpSession {
     enum Stage: Equatable { case compose, working, review }
-    enum Tab: Hashable { case changes, result }
-
     var stage = Stage.compose
     /// The text as the sheet opened, which every comparison is made against.
     var original = ""
@@ -88,7 +103,7 @@ final class WritingHelpSession {
     var attempts = 0
     var prompt = ""
     var refinement = ""
-    var tab = Tab.changes
+    var tab = ChangeComparison.Tab.changes
     var job: Task<Void, Never>?
     var burst: Date?
     var loaded = false
@@ -99,10 +114,7 @@ final class WritingHelpSession {
 /// The writing-help sheet: ask → watch it work → review what changed → approve.
 struct WritingAssistSheet: View {
     @Binding var text: String
-    let subject: DraftSubject?
-    let isTemplate: Bool
-    /// The company a single mail is going to, for prompt ideas that name it.
-    var company: String?
+    let place: WritingPlace
     let assistant: WritingAssistant
     @Bindable var session: WritingHelpSession
     let onApplied: () -> Void
@@ -110,7 +122,7 @@ struct WritingAssistSheet: View {
     var onUseWritingTools: (() -> Void)?
 
     private typealias Stage = WritingHelpSession.Stage
-    private typealias Tab = WritingHelpSession.Tab
+    private typealias Tab = ChangeComparison.Tab
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -132,9 +144,13 @@ struct WritingAssistSheet: View {
 
     /// Read here so the sheet redraws when the shortcut is switched on or off.
     @AppStorage(ShortcutsWriter.enabledKey) private var viaShortcuts = false
+    /// One column for the icons beside what the model is told.
+    @ScaledMetric(relativeTo: .footnote) private var factIconWidth = 20.0
     @FocusState private var promptFocused: Bool
     @FocusState private var refineFocused: Bool
 
+    private var subject: DraftSubject? { place.draftSubject }
+    private var isTemplate: Bool { place.isTemplate }
     private var known: [String] { isTemplate ? MailPlaceholder.allCases.map(\.token) : [] }
 
     /// The sender's real details, for a mail that is already filled in: "mention
@@ -183,7 +199,9 @@ struct WritingAssistSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .interactiveDismissDisabled(stage == .working)
+        // Out of compose, a swipe would leave a change undecided: it's Accept
+        // or Discard (or the close button, which discards).
+        .interactiveDismissDisabled(stage != .compose)
     }
 
     /// One stage leaves quickly and the next arrives just behind it, so the two
@@ -224,11 +242,9 @@ struct WritingAssistSheet: View {
                         quickActions
                     }
 
-                    if hasText {
-                        VStack(alignment: .leading, spacing: 10) {
-                            sectionLabel("Your text")
-                            sourceCard(glow: false)
-                        }
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionLabel("What it's working with")
+                        context
                     }
 
                     if assistant.previous != nil { undoRow }
@@ -282,23 +298,42 @@ struct WritingAssistSheet: View {
             .foregroundStyle(Color.inkMuted)
     }
 
-    /// The text the request will work on, as a quiet card.
-    private func sourceCard(glow: Bool) -> some View {
-        Group {
-            if hasText {
-                Text(original)
-                    .font(.callout)
-                    .foregroundStyle(Color.ink)
-                    .lineLimit(2)
-            } else {
-                Text("Nothing written yet.")
-                    .font(.callout)
-                    .foregroundStyle(Color.inkFaint)
+    /// The text the request works on and what the model is told about it, so
+    /// it's plain what the answer is written for.
+    private var context: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Group {
+                if hasText {
+                    Text(original)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(3)
+                } else {
+                    Text("Nothing written yet.")
+                        .foregroundStyle(Color.inkFaint)
+                }
             }
+            .font(.callout)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(place.facts(hasProfile: senderFacts != nil), id: \.text) { fact in
+                    Label {
+                        Text(fact.text).fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: fact.systemImage)
+                            .foregroundStyle(Color.clay)
+                            .frame(width: factIconWidth)
+                    }
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(Color.inkMuted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .panel(radius: Theme.Radius.inner)
+        .accessibilityElement(children: .combine)
     }
 
     private var quickActions: some View {
@@ -338,15 +373,10 @@ struct WritingAssistSheet: View {
         .buttonStyle(BouncyPress(scale: 0.92))
     }
 
-    private var ideaKind: PromptIdeas.Kind {
-        if let subject { return .line(company: subject.company, sector: subject.sector) }
-        return isTemplate ? .template : .mail(company: company)
-    }
-
     /// Prompts written out in full: a tap puts one in the box to send as it is or
     /// reword first.
     private var suggestions: some View {
-        let ideas = PromptIdeas.ideas(for: ideaKind, text: original, profile: profileStore.profile)
+        let ideas = PromptIdeas.ideas(for: place.ideaKind, text: original, profile: profileStore.profile)
         return VStack(alignment: .leading, spacing: 6) {
             Label("Tap an idea to fill it in, then edit or send", systemImage: "text.insert")
                 .font(.caption2)
@@ -486,49 +516,58 @@ struct WritingAssistSheet: View {
     // MARK: - Working
 
     private var working: some View {
-        VStack(spacing: 18) {
-            Spacer(minLength: 0)
-            VStack(alignment: .leading, spacing: 12) {
-                if let lastRequest {
-                    Label(lastRequest.title, systemImage: "sparkles")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.clay)
-                        .lineLimit(1)
-                }
-                Group {
-                    if assistant.streamed.isEmpty {
-                        Text(lastSource.isEmpty ? "Thinking of something to say…" : lastSource)
-                            .aiShimmer()
-                    } else {
-                        Text(assistant.streamed)
+        // Scrolls, held to the bottom, so a long answer streams in where it can
+        // be read and Stop stays in reach.
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(spacing: 18) {
+                    Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let lastRequest {
+                            Label(lastRequest.title, systemImage: "sparkles")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.clay)
+                                .lineLimit(1)
+                        }
+                        Group {
+                            if assistant.streamed.isEmpty {
+                                Text(lastSource.isEmpty ? "Thinking of something to say…" : lastSource)
+                                    .aiShimmer()
+                            } else {
+                                Text(assistant.streamed)
+                            }
+                        }
+                        .font(.callout)
+                        .foregroundStyle(Color.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentTransition(.opacity)
                     }
+                    .padding(16)
+                    .panel()
+                    .overlay { AIGlowBorder() }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+                        Text(assistant.isInShortcuts ? "Writing in Shortcuts…" : assistant.streamed.isEmpty ? "Reading…" : "Writing…")
+                            .contentTransition(.opacity)
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.inkMuted)
+
+                    Button("Stop") {
+                        Haptics.tap()
+                        job?.cancel()
+                        stage = .compose
+                    }
+                    .secondaryButton()
+                    Spacer(minLength: 0)
                 }
-                .font(.callout)
-                .foregroundStyle(Color.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentTransition(.opacity)
+                .padding(.horizontal, Theme.Space.gutter)
+                .padding(.vertical, 16)
+                .frame(minHeight: proxy.size.height)
             }
-            .padding(16)
-            .panel()
-            .overlay { AIGlowBorder() }
-            .padding(.horizontal, Theme.Space.gutter)
-
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
-                Text(assistant.isInShortcuts ? "Writing in Shortcuts…" : assistant.streamed.isEmpty ? "Reading…" : "Writing…")
-                    .contentTransition(.opacity)
-            }
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(Color.inkMuted)
-
-            Button("Stop") {
-                Haptics.tap()
-                job?.cancel()
-                stage = .compose
-            }
-            .secondaryButton()
-            Spacer(minLength: 0)
+            .defaultScrollAnchor(.bottom)
         }
         .animation(Theme.Motion.snappy, value: assistant.streamed.isEmpty)
     }
@@ -550,7 +589,7 @@ struct WritingAssistSheet: View {
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
-                        summary(diff)
+                        ChangeTally(diff: diff)
                     }
 
                     if let notice = assistant.notice {
@@ -559,25 +598,7 @@ struct WritingAssistSheet: View {
                             .foregroundStyle(Color.inkMuted)
                     }
 
-                    SegmentedSelector(segments: [(Tab.changes, "Changes"), (Tab.result, "Result")], selection: $session.tab)
-
-                    Group {
-                        if tab == .changes {
-                            Text(diff.attributed)
-                        } else {
-                            Text(candidate)
-                        }
-                    }
-                    .font(.callout)
-                    .foregroundStyle(Color.ink)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .panel()
-                    .overlay { AIGlowBorder(isTurning: false, halo: 0.10).opacity(0.7) }
-                    .contentTransition(.opacity)
-
-                    if tab == .changes, diff.hasChanges { legend(diff) }
+                    ChangeComparison(before: original, after: candidate, tab: $session.tab)
 
                     VStack(alignment: .leading, spacing: 8) {
                         sectionLabel("Not quite? Say what to adjust")
@@ -597,44 +618,23 @@ struct WritingAssistSheet: View {
         }
     }
 
-    private func summary(_ diff: TextDiff) -> some View {
-        Group {
-            if diff.hasChanges {
-                HStack(spacing: 8) {
-                    Text("+\(diff.addedWords)").foregroundStyle(Color.olive)
-                    Text("−\(diff.removedWords)").foregroundStyle(Color.danger)
-                }
-                .font(.caption.weight(.semibold).monospacedDigit())
-                .contentTransition(.numericText())
-            } else {
-                Text("No changes")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.inkMuted)
-            }
-        }
-    }
-
-    private func legend(_ diff: TextDiff) -> some View {
-        HStack(spacing: 14) {
-            if diff.addedWords > 0 { legendKey("Added", color: Color.olive) }
-            if diff.removedWords > 0 { legendKey("Removed", color: Color.danger) }
-            Spacer(minLength: 0)
-        }
-        .font(.caption)
-        .foregroundStyle(Color.inkMuted)
-    }
-
-    private func legendKey(_ title: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.35)).frame(width: 12, height: 12)
-            Text(title)
-        }
-    }
-
     private func reviewBar(_ diff: TextDiff) -> some View {
         let stacked = typeSize.isAccessibilitySize
         let layout = stacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
-        return layout {
+        return VStack(alignment: .leading, spacing: 8) {
+            Label(place.destination, systemImage: "arrow.down.doc")
+                .font(.caption)
+                .foregroundStyle(Color.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            buttons(diff, stacked: stacked, layout: layout)
+        }
+        .padding(.horizontal, Theme.Space.gutter)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func buttons(_ diff: TextDiff, stacked: Bool, layout: AnyLayout) -> some View {
+        layout {
             if stacked { acceptButton(diff) }
             Button {
                 Haptics.tap()
@@ -666,9 +666,6 @@ struct WritingAssistSheet: View {
 
             if !stacked { acceptButton(diff) }
         }
-        .padding(.horizontal, Theme.Space.gutter)
-        .padding(.vertical, 10)
-        .background(.bar)
     }
 
     private func acceptButton(_ diff: TextDiff) -> some View {
@@ -715,7 +712,9 @@ struct WritingAssistSheet: View {
         job?.cancel()
         job = Task {
             let result = await assistant.perform(request, on: source, subject: subject, known: known,
-                                                 senderFacts: isTemplate ? nil : senderFacts, attempt: attempt)
+                                                 senderFacts: isTemplate ? nil : senderFacts,
+                                                 brief: place.brief(senderName: profileStore.profile.name),
+                                                 attempt: attempt)
             guard !Task.isCancelled else { return }
             if let result {
                 candidate = result

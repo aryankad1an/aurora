@@ -1232,6 +1232,9 @@ struct MailEditorView: View {
     let email: String
     let company: String
     let missing: [MailPlaceholder]
+    /// Who it's to, for writing help: the name as filed (blank when there's
+    /// none) and their role.
+    private let recipient: WritingPlace.Recipient
     let onSave: (_ subject: String, _ body: String) -> Void
 
     private let original: (subject: String, body: String)
@@ -1239,6 +1242,7 @@ struct MailEditorView: View {
     @State private var messageBody: String
     @State private var aiFlash = 0
     @State private var writingTools = WritingToolsTarget()
+    @State private var subjectTools = WritingToolsTarget()
     @Environment(\.dismiss) private var dismiss
 
     fileprivate init(letter: MailPreview, face: LetterFace, onSave: @escaping (String, String) -> Void) {
@@ -1246,6 +1250,7 @@ struct MailEditorView: View {
         self.email = letter.email
         self.company = letter.company
         self.missing = face.missing
+        self.recipient = .init(name: letter.contact.name, position: letter.contact.position, company: letter.company)
         self.onSave = onSave
         original = (face.subject, face.body)
         _subject = State(initialValue: face.subject)
@@ -1277,6 +1282,8 @@ struct MailEditorView: View {
                 }
                 Section("Subject") {
                     TextField("Subject", text: $subject, axis: .vertical)
+                        .writingToolsBehavior(.complete)
+                        .reviewsWritingTools(text: $subject, target: subjectTools) { aiFlash += 1 }
                 }
                 Section {
                     TextEditor(text: $messageBody)
@@ -1289,7 +1296,8 @@ struct MailEditorView: View {
                     HStack {
                         Text("Message")
                         Spacer()
-                        WritingAssistButton(text: $messageBody, company: company, writingTools: writingTools) { aiFlash += 1 }
+                        WritingAssistButton(text: $messageBody, place: .mail(subject: subject, recipient: recipient),
+                                            writingTools: writingTools) { aiFlash += 1 }
                             .font(.body.weight(.semibold))
                             .textCase(nil)
                     }

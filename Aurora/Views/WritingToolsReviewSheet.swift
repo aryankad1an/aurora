@@ -9,12 +9,10 @@ struct WritingToolsReviewSheet: View {
     let onRevert: () -> Void
     let onKeep: () -> Void
 
-    private enum Tab: Hashable { case changes, result }
-
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var tab = Tab.changes
+    @State private var tab = ChangeComparison.Tab.changes
     @State private var sealed = false
 
     var body: some View {
@@ -27,25 +25,7 @@ struct WritingToolsReviewSheet: View {
 
                     if !damage.isEmpty { damageNote(damage) }
 
-                    SegmentedSelector(segments: [(Tab.changes, "Changes"), (Tab.result, "Result")], selection: $tab)
-
-                    Group {
-                        if tab == .changes {
-                            Text(diff.attributed)
-                        } else {
-                            Text(change.after)
-                        }
-                    }
-                    .font(.callout)
-                    .foregroundStyle(Color.ink)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .panel()
-                    .overlay { AIGlowBorder(isTurning: !sealed, halo: 0.10).opacity(0.8) }
-                    .contentTransition(.opacity)
-
-                    if tab == .changes { legend(diff) }
+                    ChangeComparison(before: change.before, after: change.after, tab: $tab, isTurning: !sealed)
                 }
                 .padding(.horizontal, Theme.Space.gutter)
                 .padding(.top, 22)
@@ -79,11 +59,7 @@ struct WritingToolsReviewSheet: View {
                     .foregroundStyle(Color.inkMuted)
             }
             Spacer(minLength: 0)
-            HStack(spacing: 8) {
-                Text("+\(diff.addedWords)").foregroundStyle(Color.olive)
-                Text("−\(diff.removedWords)").foregroundStyle(Color.danger)
-            }
-            .font(.caption.weight(.semibold).monospacedDigit())
+            ChangeTally(diff: diff)
         }
     }
 
@@ -102,23 +78,6 @@ struct WritingToolsReviewSheet: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.kraft.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.inner, style: .continuous))
-    }
-
-    private func legend(_ diff: TextDiff) -> some View {
-        HStack(spacing: 14) {
-            if diff.addedWords > 0 { key("Added", Color.olive) }
-            if diff.removedWords > 0 { key("Removed", Color.danger) }
-            Spacer(minLength: 0)
-        }
-        .font(.caption)
-        .foregroundStyle(Color.inkMuted)
-    }
-
-    private func key(_ title: String, _ color: Color) -> some View {
-        HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 3).fill(color.opacity(0.35)).frame(width: 12, height: 12)
-            Text(title)
-        }
     }
 
     private var actions: some View {

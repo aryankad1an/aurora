@@ -57,6 +57,7 @@ struct PersonalisedLineSheet: View {
     var sector: String?
 
     @Environment(PersonalisedLineStore.self) private var lines
+    @Environment(TemplateStore.self) private var templates
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var saved = ""
@@ -64,6 +65,14 @@ struct PersonalisedLineSheet: View {
     @State private var aiFlash = 0
     @State private var writingTools = WritingToolsTarget()
     @FocusState private var focused: Bool
+
+    /// Where the line goes: the first template with a place for it, so the
+    /// model can write it to fit there.
+    private var place: WritingPlace {
+        let token = MailPlaceholder.companyPersonalised.token
+        let template = templates.templates.first { $0.content.contains(token) }
+        return .companyLine(company: company, sector: sector, template: template?.content)
+    }
 
     private var hasChanges: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines) != saved }
 
@@ -93,8 +102,7 @@ struct PersonalisedLineSheet: View {
                     HStack {
                         Text("Your line")
                         Spacer()
-                        WritingAssistButton(text: $text, subject: DraftSubject(company: company, sector: sector),
-                                            writingTools: writingTools) { aiFlash += 1 }
+                        WritingAssistButton(text: $text, place: place, writingTools: writingTools) { aiFlash += 1 }
                         .font(.body.weight(.semibold))
                         .textCase(nil)
                     }

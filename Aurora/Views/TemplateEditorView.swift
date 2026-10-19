@@ -40,6 +40,7 @@ struct TemplateEditorView: View {
     /// Bumped when an approved AI change lands in the message, to ring it in colour.
     @State private var aiFlash = 0
     @State private var writingTools = WritingToolsTarget()
+    @State private var subjectTools = WritingToolsTarget()
     @State private var testSendResult: String?
     @State private var isTestSending = false
     @FocusState private var focus: Field?
@@ -215,6 +216,7 @@ struct TemplateEditorView: View {
                         .focused($focus, equals: .subject)
                         .lineLimit(1...4)
                         .writingToolsBehavior(.complete)
+                        .reviewsWritingTools(text: $subject, target: subjectTools) { aiFlash += 1 }
                 }
             }
             .panel()
@@ -231,7 +233,7 @@ struct TemplateEditorView: View {
                 // Apple Intelligence's cloud model on the message, with the system's
                 // Writing Tools a tap away in the same sheet. Either way, what
                 // changed comes up for review before it's kept.
-                WritingAssistButton(text: $content, isTemplate: true, writingTools: writingTools) { aiFlash += 1 }
+                WritingAssistButton(text: $content, place: .template(subject: subject), writingTools: writingTools) { aiFlash += 1 }
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.tint)
             }

@@ -131,16 +131,19 @@ final class WritingAssistant {
     ///     template.
     ///   - senderFacts: the sender's real details, for text that is already
     ///     filled in and so has no placeholders to stand for them.
+    ///   - brief: what the text is and where it goes (see `WritingPlace`), put
+    ///     ahead of the request so the model writes for that spot.
     ///   - attempt: how many times this same request has already been tried. The
     ///     model is nudged to vary more each time, or "Try again" would give back
     ///     the same words.
     func perform(_ request: WritingRequest, on text: String, subject: DraftSubject? = nil,
-                 known: [String] = [], senderFacts: String? = nil, attempt: Int = 0) async -> String? {
+                 known: [String] = [], senderFacts: String? = nil, brief: String? = nil,
+                 attempt: Int = 0) async -> String? {
         failure = nil
         notice = nil
         shortcutFailed = false
         let original = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt: String
+        var prompt: String
         let instructions: String
         var temperature: Double
         var checking: String?
@@ -167,6 +170,7 @@ final class WritingAssistant {
             instructions = WritingAction.draftRules(hasNotes: hasNotes)
             temperature = 0.6
         }
+        if let brief, !brief.isEmpty { prompt = brief + "\n\n" + prompt }
         temperature = min(temperature + 0.2 * Double(attempt), 1.0)
         if let reason = Self.unavailableReason {
             failure = reason
