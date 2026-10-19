@@ -23,9 +23,10 @@ enum WritingRequest: Equatable {
 
 /// Rewrites, proofreads and drafts text with Apple's larger cloud model — the one
 /// Siri and Apple Intelligence hand their harder requests to — through Private
-/// Cloud Compute. The on-device model was tried first and wasn't up to it: it
-/// dropped greetings, ignored notes and copied its examples. Private Cloud
-/// Compute keeps the request private to Apple's servers and isn't stored.
+/// Cloud Compute, once the app holds Apple's entitlement for it (see `usesCloud`);
+/// until then with the on-device model, which is weaker: it can drop greetings,
+/// ignore notes and copy its examples. Private Cloud Compute keeps the request
+/// private to Apple's servers and isn't stored.
 ///
 /// One assistant per editor: it streams the answer as it's written, and
 /// remembers the text before an accepted change so the editor can offer Undo.
@@ -43,17 +44,39 @@ final class WritingAssistant {
     /// The cloud model, shared: creating one is cheap, but there's no reason to.
     static let model = PrivateCloudComputeLanguageModel()
 
+    /// Whether requests go to the cloud model. It needs a managed entitlement Apple
+    /// grants on request, and without it Foundation Models doesn't throw: it stops
+    /// the app with an assertion on the first request. So the app checks its own
+    /// signature, and until the entitlement is there it writes on the device.
+    static let usesCloud: Bool = {
+        #if targetEnvironment(simulator)
+        // The Simulator can't reach Private Cloud Compute, entitlement or not.
+        return false
+        #else
+        return Entitlements.allowsPrivateCloudCompute
+        #endif
+    }()
+
     /// How long an answer may take before the request is given up. A cloud call
     /// that never answers otherwise leaves the sheet spinning for good.
     static let timeout: Duration = .seconds(45)
 
     /// Nil when the model can be used; otherwise why not, in words for the user.
     static var unavailableReason: String? {
-        #if targetEnvironment(simulator)
-        // The Simulator reports the cloud model as available, then any request to
-        // it trips an assertion inside Foundation Models and the app is gone.
-        return "Apple Intelligence's cloud model doesn't run in the Simulator. Try it on an iPhone."
-        #else
+        guard usesCloud else {
+            switch SystemLanguageModel.default.availability {
+            case .available:
+                return nil
+            case .unavailable(.deviceNotEligible):
+                return "This iPhone doesn't support Apple Intelligence."
+            case .unavailable(.appleIntelligenceNotEnabled):
+                return "Turn on Apple Intelligence in Settings to use this."
+            case .unavailable(.modelNotReady):
+                return "Apple Intelligence is still getting ready. Try again in a little while."
+            case .unavailable:
+                return "Apple Intelligence isn't available right now."
+            }
+        }
         switch model.availability {
         case .available:
             if model.quotaUsage.isLimitReached { return quotaMessage(resetDate: model.quotaUsage.resetDate) }
@@ -65,18 +88,14 @@ final class WritingAssistant {
         case .unavailable:
             return "Apple Intelligence isn't available right now."
         }
-        #endif
     }
 
     /// Whether the account is close to its share of cloud requests, for a quiet
     /// note in the sheet before it runs out.
     static var isApproachingLimit: Bool {
-        #if targetEnvironment(simulator)
-        return false
-        #else
+        guard usesCloud else { return false }
         if case .belowLimit(let below) = model.quotaUsage.status { return below.isApproachingLimit }
         return false
-        #endif
     }
 
     private static func quotaMessage(resetDate: Date?) -> String {
@@ -170,6 +189,8 @@ final class WritingAssistant {
                 failure = Self.quotaMessage(resetDate: limit.resetDate)
             case .serviceUnavailable:
                 failure = "Apple Intelligence's cloud model is busy right now. Try again in a moment."
+            @unknown default:
+                failure = "Apple Intelligence couldn't do that. Try again."
             }
             return nil
         } catch is TimedOut {
@@ -218,7 +239,9 @@ final class WritingAssistant {
     private func write(_ prompt: String, instructions: String, temperature: Double) async throws -> String {
         try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask { @MainActor [self] in
-                let session = LanguageModelSession(model: Self.model, instructions: instructions)
+                let session = Self.usesCloud
+                    ? LanguageModelSession(model: Self.model, instructions: instructions)
+                    : LanguageModelSession(model: SystemLanguageModel.default, instructions: instructions)
                 var latest = ""
                 for try await snapshot in session.streamResponse(to: prompt, options: GenerationOptions(temperature: temperature)) {
                     latest = snapshot.content

@@ -17,6 +17,8 @@ struct WritingAssistButton: View {
     /// Whether the text is a template, where the model may be asked to add
     /// placeholders such as {Receiver-Name}.
     var isTemplate = false
+    /// The company a single mail is going to, for prompt ideas that name it.
+    var company: String?
     /// The paired editor, for opening the system's Writing Tools on it instead.
     var writingTools: WritingToolsTarget?
     /// Called when an approved change has been written into `text`.
@@ -45,7 +47,7 @@ struct WritingAssistButton: View {
             openWritingToolsAfter = false
             Task { await writingTools?.open() }
         }) {
-            WritingAssistSheet(text: $text, subject: subject, isTemplate: isTemplate,
+            WritingAssistSheet(text: $text, subject: subject, isTemplate: isTemplate, company: company,
                                assistant: assistant, onApplied: {
                 applied = text
                 onApplied()
@@ -65,6 +67,8 @@ struct WritingAssistSheet: View {
     @Binding var text: String
     let subject: DraftSubject?
     let isTemplate: Bool
+    /// The company a single mail is going to, for prompt ideas that name it.
+    var company: String?
     let assistant: WritingAssistant
     let onApplied: () -> Void
     /// Closes the sheet and opens the system's Writing Tools on the text instead.
@@ -176,7 +180,7 @@ struct WritingAssistSheet: View {
                             run(hasText ? .custom(prompt) : .draft(notes: prompt), from: original)
                         }
                         .disabled(!hasText && subject == nil)
-                        if hasText { suggestions }
+                        if hasText || subject != nil { suggestions }
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
@@ -221,7 +225,9 @@ struct WritingAssistSheet: View {
                     .font(.headline)
                     .padding(.top, 2)
                     .foregroundStyle(Color.ink)
-                Text("Apple's larger cloud model, the one Siri uses. Private Cloud Compute keeps your text private to the request.")
+                Text(WritingAssistant.usesCloud
+                     ? "Apple's larger cloud model, the one Siri uses. Private Cloud Compute keeps your text private to the request."
+                     : "The model on your iPhone. It's smaller than Siri's, so check what it changes. Writing Tools can use the larger one.")
                     .font(.footnote)
                     .foregroundStyle(Color.inkMuted)
             }
@@ -293,27 +299,38 @@ struct WritingAssistSheet: View {
         .buttonStyle(BouncyPress(scale: 0.92))
     }
 
+    private var ideaKind: PromptIdeas.Kind {
+        if let subject { return .line(company: subject.company, sector: subject.sector) }
+        return isTemplate ? .template : .mail(company: company)
+    }
+
+    /// Prompts written out in full: a tap puts one in the box to send as it is or
+    /// reword first.
     private var suggestions: some View {
-        let ideas = isTemplate
-            ? ["Add a greeting with their name", "Mention I'm a final-year student", "End with a thank-you"]
-            : ["Make it sound more confident", "Mention I'm a final-year student", "Add a thank-you line"]
-        return AdaptiveFlow(spacing: 6) {
-            ForEach(ideas, id: \.self) { idea in
-                Button {
-                    Haptics.select()
-                    withAnimation(Theme.Motion.snappy) { prompt = idea }
-                    promptFocused = true
-                } label: {
-                    Text(idea)
-                        .font(.caption)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.paperSunken, in: Capsule())
-                        .foregroundStyle(Color.inkMuted)
+        let ideas = PromptIdeas.ideas(for: ideaKind, text: original, profile: profileStore.profile)
+        return VStack(alignment: .leading, spacing: 6) {
+            Label("Tap an idea to fill it in, then edit or send", systemImage: "text.insert")
+                .font(.caption2)
+                .foregroundStyle(Color.inkFaint)
+            AdaptiveFlow(spacing: 6) {
+                ForEach(ideas, id: \.self) { idea in
+                    Button {
+                        Haptics.select()
+                        withAnimation(Theme.Motion.snappy) { prompt = idea }
+                        promptFocused = true
+                    } label: {
+                        Text(idea)
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(prompt == idea ? Color.clay.opacity(0.14) : Color.paperSunken, in: Capsule())
+                            .foregroundStyle(prompt == idea ? Color.clay : Color.inkMuted)
+                    }
+                    .buttonStyle(BouncyPress(scale: 0.94))
+                    .accessibilityHint("Puts this in the box to edit or send")
                 }
-                .buttonStyle(BouncyPress(scale: 0.94))
             }
         }
     }

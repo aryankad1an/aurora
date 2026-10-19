@@ -1230,6 +1230,7 @@ private struct LetterBatch {
 struct MailEditorView: View {
     let name: String
     let email: String
+    let company: String
     let missing: [MailPlaceholder]
     let onSave: (_ subject: String, _ body: String) -> Void
 
@@ -1243,6 +1244,7 @@ struct MailEditorView: View {
     fileprivate init(letter: MailPreview, face: LetterFace, onSave: @escaping (String, String) -> Void) {
         self.name = letter.name
         self.email = letter.email
+        self.company = letter.company
         self.missing = face.missing
         self.onSave = onSave
         original = (face.subject, face.body)
@@ -1287,7 +1289,7 @@ struct MailEditorView: View {
                     HStack {
                         Text("Message")
                         Spacer()
-                        WritingAssistButton(text: $messageBody, writingTools: writingTools) { aiFlash += 1 }
+                        WritingAssistButton(text: $messageBody, company: company, writingTools: writingTools) { aiFlash += 1 }
                             .font(.body.weight(.semibold))
                             .textCase(nil)
                     }
