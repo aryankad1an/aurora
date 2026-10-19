@@ -2,9 +2,8 @@ import ActivityKit
 import SwiftUI
 import UIKit
 
-/// Writing help through the user's own "Aurora Writer" shortcut, for when the app
-/// can't call Apple's cloud model itself (that needs an entitlement Apple grants
-/// to paid developer accounts). Shortcuts' Use Model action can call it, so the
+/// Writing help through the user's own "Aurora Writer" shortcut, the app's only
+/// source of written text. Shortcuts' Use Model action does the writing: the
 /// app hands the request to the shortcut with an x-callback-url, Shortcuts runs
 /// it and opens `aurora://writing/<id>/done?result=…` with the answer, and
 /// `RootView` passes that link to `receive(_:)`.

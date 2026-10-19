@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// What a suggested change does to a text, for deciding whether to keep it: the
-/// word-level comparison, or the result as it would read. Shared by writing
-/// help and the Writing Tools review, so both show a change the same way.
+/// word-level comparison, or the result as it would read, in writing help.
 ///
 /// A new answer arrives as plain text (what was just written) and the markup
 /// then fades in over it, rather than appearing all at once, struck-through
@@ -91,5 +90,32 @@ struct ChangeTally: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension TextDiff {
+    /// The comparison as one string: removed words struck through in red, added
+    /// ones shaded green.
+    var attributed: AttributedString {
+        var out = AttributedString()
+        var previous: Kind?
+        for segment in segments {
+            // A word and its replacement would otherwise touch ("HiHello").
+            if previous == .removed, segment.kind == .added { out += AttributedString("\u{2009}") }
+            previous = segment.kind
+            var piece = AttributedString(segment.text)
+            switch segment.kind {
+            case .same:
+                break
+            case .added:
+                piece.backgroundColor = Color.olive.opacity(0.28)
+            case .removed:
+                piece.backgroundColor = Color.danger.opacity(0.16)
+                piece.foregroundColor = Color.danger
+                piece.strikethroughStyle = .single
+            }
+            out += piece
+        }
+        return out
     }
 }

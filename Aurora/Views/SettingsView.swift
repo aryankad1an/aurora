@@ -209,7 +209,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Make the \(ShortcutsWriter.shortcutName) Shortcut")
                             .foregroundStyle(.ink)
-                        Text("Step by step, so writing help can use Siri's larger model")
+                        Text("Step by step, to connect writing help")
                             .font(.caption)
                             .foregroundStyle(.inkMuted)
                     }

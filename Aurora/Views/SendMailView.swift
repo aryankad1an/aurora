@@ -1241,8 +1241,6 @@ struct MailEditorView: View {
     @State private var subject: String
     @State private var messageBody: String
     @State private var aiFlash = 0
-    @State private var writingTools = WritingToolsTarget()
-    @State private var subjectTools = WritingToolsTarget()
     @Environment(\.dismiss) private var dismiss
 
     fileprivate init(letter: MailPreview, face: LetterFace, onSave: @escaping (String, String) -> Void) {
@@ -1282,22 +1280,19 @@ struct MailEditorView: View {
                 }
                 Section("Subject") {
                     TextField("Subject", text: $subject, axis: .vertical)
-                        .writingToolsBehavior(.complete)
-                        .reviewsWritingTools(text: $subject, target: subjectTools) { aiFlash += 1 }
+                        .writingToolsBehavior(.disabled)
                 }
                 Section {
                     TextEditor(text: $messageBody)
-                        .writingToolsBehavior(.complete)
+                        .writingToolsBehavior(.disabled)
                         .frame(minHeight: 260)
                         .font(.callout)
-                        .reviewsWritingTools(text: $messageBody, target: writingTools) { aiFlash += 1 }
                         .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8)
                 } header: {
                     HStack {
                         Text("Message")
                         Spacer()
-                        WritingAssistButton(text: $messageBody, place: .mail(subject: subject, recipient: recipient),
-                                            writingTools: writingTools) { aiFlash += 1 }
+                        WritingAssistButton(text: $messageBody, place: .mail(subject: subject, recipient: recipient)) { aiFlash += 1 }
                             .font(.body.weight(.semibold))
                             .textCase(nil)
                     }

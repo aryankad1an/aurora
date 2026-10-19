@@ -39,8 +39,6 @@ struct TemplateEditorView: View {
     @State private var confirmingSaveWithErrors = false
     /// Bumped when an approved AI change lands in the message, to ring it in colour.
     @State private var aiFlash = 0
-    @State private var writingTools = WritingToolsTarget()
-    @State private var subjectTools = WritingToolsTarget()
     @State private var testSendResult: String?
     @State private var isTestSending = false
     @FocusState private var focus: Field?
@@ -103,9 +101,13 @@ struct TemplateEditorView: View {
         let errorCount = findings.count { $0.severity == .error }
         NavigationStack {
             VStack(spacing: 0) {
-                modePicker
-                Divider()
-                statusStrip(findings, errorCount: errorCount)
+                // While the message is being written, everything above it steps
+                // aside so the editor has the screen above the keyboard.
+                if !isWritingMessage {
+                    modePicker
+                    Divider()
+                    statusStrip(findings, errorCount: errorCount)
+                }
 
                 switch mode {
                 case .write: writePane
@@ -138,6 +140,7 @@ struct TemplateEditorView: View {
             // pane it swaps into is a different height.
             .animation(Theme.Motion.bouncy, value: mode)
             .animation(Theme.Motion.bouncy, value: showingIssues)
+            .animation(Theme.Motion.snappy, value: isWritingMessage)
             .onAppear(perform: gatherCatalog)
         }
     }
@@ -188,40 +191,42 @@ struct TemplateEditorView: View {
             }
             .disabled(!isValid)
         }
-        // Placeholder chips live on the keyboard, so they're present exactly when
-        // you're typing and cost no layout when you aren't.
-        ToolbarItemGroup(placement: .keyboard) {
-            if focus == .subject || focus == .content {
-                placeholderBar
-            }
-        }
     }
+
+    /// The message has the keyboard: the screen gives the editor all the room.
+    private var isWritingMessage: Bool { mode == .write && focus == .content }
 
     // MARK: - Write
 
     private var writePane: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                fieldRow("Name") {
-                    TextField("e.g. Cold Outreach", text: $name)
-                        .focused($focus, equals: .name)
+            if !isWritingMessage {
+                VStack(spacing: 0) {
+                    fieldRow("Name") {
+                        TextField("e.g. Cold Outreach", text: $name)
+                            .focused($focus, equals: .name)
+                    }
+                    Divider().padding(.leading, 14)
+                    fieldRow("Subject") {
+                        // Vertical axis so a long subject wraps instead of scrolling
+                        // out of sight — a mail's subject carries the credentials
+                        // and you need to read all of it while editing.
+                        TextField("Subject", text: $subject, selection: $subjectSelection,
+                                  axis: .vertical)
+                            .focused($focus, equals: .subject)
+                            .lineLimit(1...4)
+                            // Held at its full height: with the keyboard up the message
+                            // below wanted the room, and squeezed the subject to one
+                            // line that had to be scrolled.
+                            .fixedSize(horizontal: false, vertical: true)
+                            .writingToolsBehavior(.disabled)
+                    }
                 }
-                Divider().padding(.leading, 14)
-                fieldRow("Subject") {
-                    // Vertical axis so a long subject wraps instead of scrolling
-                    // out of sight — a mail's subject carries the credentials
-                    // and you need to read all of it while editing.
-                    TextField("Subject", text: $subject, selection: $subjectSelection,
-                              axis: .vertical)
-                        .focused($focus, equals: .subject)
-                        .lineLimit(1...4)
-                        .writingToolsBehavior(.complete)
-                        .reviewsWritingTools(text: $subject, target: subjectTools) { aiFlash += 1 }
-                }
+                .panel()
+                .padding(.horizontal)
+                .padding(.top, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .panel()
-            .padding(.horizontal)
-            .padding(.top, 12)
 
             HStack {
                 Text("Message")
@@ -230,10 +235,9 @@ struct TemplateEditorView: View {
                     .tracking(0.5)
                     .foregroundStyle(.inkMuted)
                 Spacer()
-                // Apple Intelligence's cloud model on the message, with the system's
-                // Writing Tools a tap away in the same sheet. Either way, what
-                // changed comes up for review before it's kept.
-                WritingAssistButton(text: $content, place: .template(subject: subject), writingTools: writingTools) { aiFlash += 1 }
+                // Writing help on the message; what it changes comes up for review
+                // before it's kept.
+                WritingAssistButton(text: $content, place: .template(subject: subject)) { aiFlash += 1 }
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.tint)
             }
@@ -242,15 +246,14 @@ struct TemplateEditorView: View {
 
             TextEditor(text: $content, selection: $contentSelection)
                 .focused($focus, equals: .content)
-                // Apple Intelligence Writing Tools: proofread, rewrite, change tone.
-                .writingToolsBehavior(.complete)
-                .font(.callout)
+                .writingToolsBehavior(.disabled)
+                .font(.body)
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 12)
                 .overlay(alignment: .topLeading) {
                     if content.isEmpty {
-                        Text("Write your mail. Tap a placeholder below the keyboard to drop in a name, company, or your resume link.")
-                            .font(.callout)
+                        Text("Write your mail. Tap a placeholder above the keyboard to drop in a name, company, or your resume link.")
+                            .font(.body)
                             .foregroundStyle(.inkFaint)
                             .padding(.horizontal, 17)
                             .padding(.top, 8)
@@ -258,9 +261,17 @@ struct TemplateEditorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .reviewsWritingTools(text: $content, target: writingTools) { aiFlash += 1 }
                 .aiAppliedFlash(trigger: aiFlash, cornerRadius: 14,
                                 inset: EdgeInsets(top: 0, leading: 6, bottom: 12, trailing: 6))
+        }
+        // The placeholder chips ride on top of the keyboard on a solid bar of
+        // their own: the system's keyboard toolbar is see-through glass, and the
+        // message showing through it made the chips hard to read.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if focus == .subject || focus == .content {
+                placeholderBar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
     }
 
@@ -284,11 +295,11 @@ struct TemplateEditorView: View {
         .padding(.vertical, 10)
     }
 
-    /// The placeholder chips, sitting on the keyboard accessory bar.
+    /// The placeholder chips, on a solid bar just above the keyboard.
     private var placeholderBar: some View {
         HStack(spacing: 0) {
             ScrollView(.horizontal) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ForEach(MailPlaceholder.allCases) { placeholder in
                         Button {
                             // A placeholder lands in text the user can't see the
@@ -304,22 +315,31 @@ struct TemplateEditorView: View {
                                     Text(placeholder.shortLabel)
                                 }
                             }
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 10)
-                                .frame(height: 30)
-                                .background(Color.clay.opacity(0.14), in: Capsule())
-                                .foregroundStyle(.tint)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 34)
+                                .background(Color.clay.opacity(0.22), in: Capsule())
+                                .overlay { Capsule().strokeBorder(Color.clay.opacity(0.55), lineWidth: 1) }
+                                .foregroundStyle(Color.ink)
                         }
                         .buttonStyle(BouncyPress(scale: 0.9))
+                        .accessibilityLabel("Insert \(placeholder.shortLabel)")
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
             .scrollIndicators(.hidden)
 
             Button("Done") { focus = nil }
                 .font(.subheadline.weight(.semibold))
-                .padding(.leading, 12)
+                .foregroundStyle(Color.clay)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
         }
+        .background(Color.paperSunken)
+        .overlay(alignment: .top) { Divider() }
     }
 
     // MARK: - Preview

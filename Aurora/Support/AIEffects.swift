@@ -128,54 +128,6 @@ private struct AIAppliedFlash: ViewModifier {
     }
 }
 
-/// Stars flying outward from the centre and fading, once, as a change lands.
-struct AISparkleBurst: View {
-    var count = 14
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private struct Values {
-        var distance = 0.0
-        var scale = 0.2
-        var opacity = 1.0
-    }
-
-    var body: some View {
-        if reduceMotion {
-            EmptyView()
-        } else {
-            KeyframeAnimator(initialValue: Values(), repeating: false) { values in
-                GeometryReader { geometry in
-                    let reach = min(geometry.size.width, geometry.size.height) * 0.42
-                    ZStack {
-                        ForEach(0..<count, id: \.self) { index in
-                            let turn = Double(index) / Double(count) * 2 * .pi + (index.isMultiple(of: 2) ? 0.18 : -0.1)
-                            let far = index.isMultiple(of: 3) ? 0.78 : 1.0
-                            Image(systemName: "sparkle")
-                                .font(.system(size: index.isMultiple(of: 2) ? 26 : 16, weight: .bold))
-                                .foregroundStyle(AIStyle.colors[index % AIStyle.colors.count])
-                                .scaleEffect(values.scale)
-                                .opacity(values.opacity)
-                                .offset(x: cos(turn) * reach * values.distance * far,
-                                        y: sin(turn) * reach * values.distance * far)
-                        }
-                    }
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                }
-            } keyframes: { _ in
-                KeyframeTrack(\.distance) { CubicKeyframe(1, duration: 0.95) }
-                KeyframeTrack(\.scale) {
-                    CubicKeyframe(1.0, duration: 0.25)
-                    CubicKeyframe(0.3, duration: 0.7)
-                }
-                KeyframeTrack(\.opacity) {
-                    LinearKeyframe(1, duration: 0.45)
-                    LinearKeyframe(0, duration: 0.5)
-                }
-            }
-        }
-    }
-}
-
 /// Chips that wrap onto as many lines as they need, becoming a stack of
 /// full-width rows at the accessibility text sizes, where a chip's own label
 /// is wider than the screen.

@@ -1,9 +1,9 @@
 import Foundation
 
-/// What the user can ask the on-device model to do with a piece of writing, and
-/// the checks that keep it from damaging a mail. Kept apart from the model call
-/// itself (`WritingAssistant`) so the rules can be tested without Apple
-/// Intelligence.
+/// What the user can ask writing help to do with a piece of writing, and the
+/// checks that keep it from damaging a mail. Kept apart from the call to the
+/// Aurora Writer shortcut (`WritingAssistant`) so the rules can be tested
+/// without it.
 enum WritingAction: String, CaseIterable, Identifiable {
     case proofread, rewrite, friendlier, professional, shorter, longer
 
@@ -42,7 +42,7 @@ enum WritingAction: String, CaseIterable, Identifiable {
     }
 
     /// The instruction for this action. Each says what to keep as well as what to
-    /// change: asked only to "rewrite", the on-device model drops greetings and
+    /// change: asked only to "rewrite", a model drops greetings and
     /// invents subject lines.
     var instruction: String {
         switch self {
@@ -65,17 +65,7 @@ enum WritingAction: String, CaseIterable, Identifiable {
     /// the text is going, which the brief ahead of it says.
     static let polishInstruction = "Polish the email for where it is going: fix any mistakes, make awkward sentences clearer and more natural, and tighten anything wordy. Keep the meaning, every fact and roughly the same length."
 
-    /// How freely the model may vary, 0 to 1. Proofreading should read the same
-    /// every time; a rewrite that is asked for again should come out differently.
-    var temperature: Double {
-        switch self {
-        case .proofread: 0.1
-        case .rewrite, .friendlier, .professional, .shorter: 0.4
-        case .longer: 0.6
-        }
-    }
-
-    /// The rules every edit carries. Short and mostly positive: the on-device
+    /// The rules every edit carries. Short and mostly positive: a model
     /// model follows a few clear rules better than a long list of prohibitions.
     ///
     /// For a template, `known` placeholders are explained and shown in use, so

@@ -8,18 +8,15 @@ struct DraftSubject {
     var student: String?
 }
 
-/// The sparkles button: Apple Intelligence's cloud model (see `WritingAssistant`)
+/// The sparkles button: writing help through Aurora Writer (see `WritingAssistant`)
 /// on the text it's bound to — quick fixes, the user's own instruction, and, for
 /// a company line, a first draft — with every answer shown as a comparison and
-/// applied only once approved. The system's own Writing Tools stay one tap away
-/// in the same sheet, through `writingTools`. After a change is accepted, Undo
-/// sits beside the button until the text is edited again.
+/// applied only once approved. After a change is accepted, Undo sits beside the
+/// button until the text is edited again.
 struct WritingAssistButton: View {
     @Binding var text: String
     /// What the text is and where it goes, which the model is told.
     let place: WritingPlace
-    /// The paired editor, for opening the system's Writing Tools on it instead.
-    var writingTools: WritingToolsTarget?
     /// Called when an approved change has been written into `text`.
     var onApplied: () -> Void = {}
 
@@ -27,8 +24,6 @@ struct WritingAssistButton: View {
     /// The open sheet's progress, kept here because the sheet's own state is
     /// thrown away when the app comes back from Shortcuts.
     @State private var session = WritingHelpSession()
-    /// Set when the sheet was closed to open Writing Tools, which waits for it to go.
-    @State private var openWritingToolsAfter = false
     @State private var showing = false
     /// The text an accepted change left behind, to tell whether it has been
     /// edited since (after which Undo would throw those edits away).
@@ -63,21 +58,14 @@ struct WritingAssistButton: View {
                     .symbolEffect(.bounce, value: assistant.previous)
             }
             .accessibilityLabel("Writing help")
-            .accessibilityHint("Apple Intelligence: proofread, rewrite, or tell it what to change")
+            .accessibilityHint("Proofread, rewrite, or tell it what to change")
         }
         .animation(Theme.Motion.snappy, value: assistant.previous != nil)
-        .sheet(isPresented: $showing, onDismiss: {
-            guard openWritingToolsAfter else { return }
-            openWritingToolsAfter = false
-            Task { await writingTools?.open() }
-        }) {
-            WritingAssistSheet(text: $text, place: place, assistant: assistant, session: session, onApplied: {
+        .sheet(isPresented: $showing) {
+            WritingAssistSheet(text: $text, place: place, assistant: assistant, session: session) {
                 applied = text
                 onApplied()
-            }, onUseWritingTools: writingTools == nil ? nil : {
-                openWritingToolsAfter = true
-                showing = false
-            })
+            }
         }
         .onChange(of: text) { _, now in
             if assistant.previous != nil, now != applied { assistant.forgetUndo() }
@@ -119,8 +107,6 @@ struct WritingAssistSheet: View {
     let assistant: WritingAssistant
     @Bindable var session: WritingHelpSession
     let onApplied: () -> Void
-    /// Closes the sheet and opens the system's Writing Tools on the text instead.
-    var onUseWritingTools: (() -> Void)?
 
     private typealias Stage = WritingHelpSession.Stage
     private typealias Tab = ChangeComparison.Tab
@@ -142,8 +128,8 @@ struct WritingAssistSheet: View {
     private var tab: Tab { get { session.tab } nonmutating set { session.tab = newValue } }
     private var job: Task<Void, Never>? { get { session.job } nonmutating set { session.job = newValue } }
 
-    /// Read here so the sheet redraws when the shortcut is switched on or off.
-    @AppStorage(ShortcutsWriter.enabledKey) private var viaShortcuts = false
+    /// Read here so the sheet redraws when Aurora Writer is connected or not.
+    @AppStorage(ShortcutsWriter.enabledKey) private var isConnected = false
     /// One column for the icons beside what the model is told.
     @ScaledMetric(relativeTo: .footnote) private var factIconWidth = 20.0
     @FocusState private var promptFocused: Bool
@@ -179,7 +165,6 @@ struct WritingAssistSheet: View {
         return facts.isEmpty ? nil : facts.joined(separator: "; ")
     }
     private var hasText: Bool { !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    private var unavailable: String? { WritingAssistant.unavailableReason }
 
     var body: some View {
         NavigationStack {
@@ -205,7 +190,7 @@ struct WritingAssistSheet: View {
                 session.loaded = true
                 original = text
             }
-            .messageAlert("Apple Intelligence", message: assistant.failure) { assistant.failure = nil }
+            .messageAlert("Writing Help", message: assistant.failure) { assistant.failure = nil }
             .sheet(isPresented: $session.showingShortcutSetup) { ShortcutSetupView(test: session.shortcutTest) }
         }
         .presentationDetents([.medium, .large])
@@ -248,14 +233,13 @@ struct WritingAssistSheet: View {
     private var compose: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                connectionRow
                 contextCard
 
-                if let unavailable {
-                    unavailableCard(unavailable)
-                } else {
+                if isConnected {
                     VStack(alignment: .leading, spacing: 10) {
                         composer(text: $session.prompt, focus: $promptFocused, placeholder: composePlaceholder,
-                                 emptyLabel: emptyRequest == nil ? nil : emptyLabel, showsModel: true) {
+                                 emptyLabel: emptyRequest == nil ? nil : emptyLabel) {
                             let typed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
                             if typed.isEmpty {
                                 if let emptyRequest { run(emptyRequest, from: original) }
@@ -402,50 +386,51 @@ struct WritingAssistSheet: View {
         }
     }
 
-    /// Which model answers, as a small badge in the composer.
-    private var modelBadge: some View {
-        let (image, name) = WritingAssistant.usesCloud ? ("cloud", "Private Cloud Compute")
-            : viaShortcuts ? ("square.2.layers.3d", ShortcutsWriter.shortcutName)
-            : ("iphone", "On iPhone")
-        return Label(name, systemImage: image)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(Color.inkMuted)
-            .lineLimit(1)
-            .accessibilityLabel("Model: \(name)")
+    /// The one place Aurora Writer is named: connected, or not yet — and then a
+    /// tap opens the steps to connect it.
+    private var connectionRow: some View {
+        Button {
+            Haptics.tap()
+            session.showingShortcutSetup = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isConnected ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(isConnected ? Color.olive : Color.kraft)
+                Text(isConnected ? "\(ShortcutsWriter.shortcutName) connected"
+                                 : "\(ShortcutsWriter.shortcutName) not connected")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.ink)
+                Spacer(minLength: 8)
+                if !isConnected {
+                    Text("Connect")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.clay)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.inkFaint)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .contentShape(.rect)
+            .panel(radius: Theme.Radius.inner)
+        }
+        .buttonStyle(BouncyPress(scale: 0.97))
+        .accessibilityHint(isConnected ? "Shows how it's set up" : "Shows how to connect it")
     }
 
-    /// Undo, the system's Writing Tools and the Shortcuts route, as small chips
-    /// under a one-line note on the model.
+    /// Undo of the last change, while it's on offer.
+    @ViewBuilder
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if WritingAssistant.isApproachingLimit {
-                Label("You're close to your share of Apple Intelligence cloud requests for now.",
-                      systemImage: "gauge.with.dots.needle.67percent")
-            } else if !WritingAssistant.usesCloud, !viaShortcuts, unavailable == nil {
-                Label("The model on your iPhone is smaller than Siri's, so check what it changes.",
-                      systemImage: "info.circle")
+        if assistant.previous != nil {
+            footerChip("Undo last change", systemImage: "arrow.uturn.backward") {
+                guard let old = assistant.undo() else { return }
+                text = old
+                original = old
+                onApplied()
             }
-            AdaptiveFlow(spacing: 8) {
-                if assistant.previous != nil {
-                    footerChip("Undo last change", systemImage: "arrow.uturn.backward") {
-                        guard let old = assistant.undo() else { return }
-                        text = old
-                        original = old
-                        onApplied()
-                    }
-                    .transition(.liquid)
-                }
-                if hasText, let onUseWritingTools {
-                    footerChip("Writing Tools", systemImage: "pencil.and.scribble", action: onUseWritingTools)
-                }
-                if !WritingAssistant.usesCloud {
-                    footerChip(viaShortcuts ? "\(ShortcutsWriter.shortcutName): on" : "Siri's model via Shortcuts",
-                               systemImage: "square.2.layers.3d") { session.showingShortcutSetup = true }
-                }
-            }
+            .transition(.liquid)
         }
-        .font(.footnote)
-        .foregroundStyle(Color.inkMuted)
     }
 
     private func footerChip(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -465,30 +450,11 @@ struct WritingAssistSheet: View {
         .buttonStyle(BouncyPress(scale: 0.94))
     }
 
-    private func unavailableCard(_ reason: String) -> some View {
-        VStack(spacing: 10) {
-            Image(systemName: "sparkles")
-                .font(.largeTitle)
-                .foregroundStyle(Color.inkFaint)
-            Text("Not available right now")
-                .font(.headline)
-                .foregroundStyle(Color.ink)
-            Text(reason)
-                .font(.subheadline)
-                .foregroundStyle(Color.inkMuted)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(24)
-        .panel()
-    }
-
     /// A text box with the send button under it, ringed in colour that turns
     /// while it has focus. Left empty, the button says what it will do instead
     /// (`emptyLabel`); nil means it needs something typed.
     private func composer(text: Binding<String>, focus: FocusState<Bool>.Binding, placeholder: String,
-                          emptyLabel: String?, showsModel: Bool = false,
-                          onSend: @escaping () -> Void) -> some View {
+                          emptyLabel: String?, onSend: @escaping () -> Void) -> some View {
         let typed = !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let ready = typed || emptyLabel != nil
         return VStack(alignment: .leading, spacing: 10) {
@@ -500,7 +466,6 @@ struct WritingAssistSheet: View {
                 .submitLabel(.send)
                 .onSubmit { if ready { onSend() } }
             HStack(spacing: 8) {
-                if showsModel { modelBadge }
                 Spacer(minLength: 0)
                 Button {
                     Haptics.tap()
@@ -625,12 +590,6 @@ struct WritingAssistSheet: View {
                         ChangeTally(diff: diff)
                     }
 
-                    if let notice = assistant.notice {
-                        Label(notice, systemImage: "iphone")
-                            .font(.footnote)
-                            .foregroundStyle(Color.inkMuted)
-                    }
-
                     ChangeComparison(before: original, after: candidate, tab: $session.tab)
 
                     composer(text: $session.refinement, focus: $refineFocused,
@@ -742,13 +701,12 @@ struct WritingAssistSheet: View {
         }
     }
 
-    /// Writes the change in and closes, under a curtain that says where it went.
+    /// Writes the change in and closes.
     private func accept() {
         Haptics.success()
         assistant.accepted(replacing: original)
         text = candidate
         onApplied()
-        WrittenCurtain.show(rewrote: hasText, landing: place.landing)
         dismiss()
     }
 

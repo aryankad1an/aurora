@@ -19,6 +19,9 @@ struct AuroraApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                // Writing help through Aurora Writer is the app's one way to have
+                // text written, so the system's Writing Tools are off everywhere.
+                .writingToolsBehavior(.disabled)
         }
     }
 }

@@ -50,15 +50,6 @@ enum WritingPlace: Equatable {
         }
     }
 
-    /// Where an accepted change went, and what keeps it, said briefly.
-    var landing: String {
-        switch self {
-        case .template: "In the template. Save it to keep it."
-        case .mail: "In your mail. Nothing goes until you send it."
-        case .companyLine(let company, _, _): "In your line for \(company). Save to keep it."
-        }
-    }
-
     // MARK: - For the model
 
     /// What the text is and where it goes, put ahead of every request. Written

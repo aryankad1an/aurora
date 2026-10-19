@@ -48,7 +48,7 @@ struct PersonalisedLineCard: View {
     }
 }
 
-/// Where the line is written: a text box with Apple Intelligence behind the
+/// Where the line is written: a roomy text box with writing help behind the
 /// sparkles button — to draft a line from notes or refine one — and its changes
 /// shown for review before they're kept.
 struct PersonalisedLineSheet: View {
@@ -63,7 +63,6 @@ struct PersonalisedLineSheet: View {
     @State private var saved = ""
     @State private var loaded = false
     @State private var aiFlash = 0
-    @State private var writingTools = WritingToolsTarget()
     @FocusState private var focused: Bool
 
     /// Where the line goes: the first template with a place for it, so the
@@ -81,10 +80,9 @@ struct PersonalisedLineSheet: View {
             PaperForm {
                 Section {
                     TextEditor(text: $text)
-                        .writingToolsBehavior(.complete)
+                        .writingToolsBehavior(.disabled)
                         .focused($focused)
-                        .frame(minHeight: 140)
-                        .reviewsWritingTools(text: $text, target: writingTools) { aiFlash += 1 }
+                        .frame(minHeight: 260)
                         .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8,
                                         inset: EdgeInsets(top: -4, leading: -4, bottom: -4, trailing: -4))
                         .overlay(alignment: .topLeading) {
@@ -102,12 +100,12 @@ struct PersonalisedLineSheet: View {
                     HStack {
                         Text("Your line")
                         Spacer()
-                        WritingAssistButton(text: $text, place: place, writingTools: writingTools) { aiFlash += 1 }
+                        WritingAssistButton(text: $text, place: place) { aiFlash += 1 }
                         .font(.body.weight(.semibold))
                         .textCase(nil)
                     }
                 } footer: {
-                    Text("Goes into mails to people at \(company) wherever a template has the Company line placeholder. Use the sparkles button to draft or refine it with Apple Intelligence. The line itself is kept on this device.")
+                    Text("Goes into mails to people at \(company) wherever a template has the Company line placeholder. Use the sparkles button to draft or refine it. The line itself is kept on this device.")
                 }
             }
             .navigationTitle(company)

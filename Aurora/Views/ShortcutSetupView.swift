@@ -37,9 +37,9 @@ final class ShortcutTest {
     }
 }
 
-/// Setting up the Aurora Writer shortcut (see `ShortcutsWriter`): what it does,
-/// how to make it, a test that runs it once, and the switch that sends writing
-/// help to it.
+/// Connecting the Aurora Writer shortcut (see `ShortcutsWriter`), which all
+/// writing help goes through: what it does, how to make it, a test that runs it
+/// once, and the switch that connects it.
 struct ShortcutSetupView: View {
     let test: ShortcutTest
 
@@ -73,7 +73,7 @@ struct ShortcutSetupView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Writing help can use Siri's larger cloud model through a shortcut of yours. Aurora opens Shortcuts to run it, the Dynamic Island shows it writing, and the answer comes back here for you to review.")
+                    Text("Writing help works through a shortcut of yours. Aurora opens Shortcuts to run it, the Dynamic Island shows it writing, and the answer comes back here for you to review.")
                         .font(.subheadline)
                         .foregroundStyle(Color.inkMuted)
 
@@ -118,7 +118,7 @@ struct ShortcutSetupView: View {
                     testResult
 
                     Toggle(isOn: $isEnabled.animation(Theme.Motion.snappy)) {
-                        Label("Write with the shortcut", systemImage: "sparkles")
+                        Label("Connected", systemImage: "sparkles")
                             .foregroundStyle(Color.ink)
                     }
                     .tint(Color.clay)
@@ -143,10 +143,6 @@ struct ShortcutSetupView: View {
                     }
                     .padding(16)
                     .panel()
-
-                    Text("If the shortcut doesn't answer, the smaller model on your iPhone writes instead, and says so.")
-                        .font(.footnote)
-                        .foregroundStyle(Color.inkMuted)
                 }
                 .padding(.horizontal, Theme.Space.gutter)
                 .padding(.top, 8)

@@ -1,8 +1,8 @@
 import Foundation
 
-// The rules around the on-device writing help: what a reply is cleaned of, and
-// when a rewrite is refused for having touched a {placeholder}. The model call
-// itself needs Apple Intelligence and isn't exercised here.
+// The rules around writing help: what a reply is cleaned of, and when a rewrite
+// is refused for having touched a {placeholder}. The call to the Aurora Writer
+// shortcut itself isn't exercised here.
 //
 //   swiftc -parse-as-library Aurora/Models/WritingAction.swift Aurora/Models/TextDiff.swift \
 //     Tests/WritingActionTests.swift -o /tmp/wa && /tmp/wa
@@ -62,7 +62,6 @@ struct WritingActionTests {
         expect(WritingAction.rules(isLine: true).contains("greeting"), true, "a company line is told not to add a greeting")
         expect(WritingAction.editPrompt("Make the email shorter.", for: "A.", isLine: true), "Instruction: Make the sentences shorter.\n\nSentences:\nA.", "a line's instruction speaks of sentences")
         expect(WritingAction.editPrompt("Make the email shorter.", for: "A."), "Instruction: Make the email shorter.\n\nEmail:\nA.", "a mail's instruction speaks of the email")
-        expect(WritingAction.proofread.temperature < WritingAction.rewrite.temperature, true, "proofreading varies least")
         expect(WritingAction.cleanedLine("Hi Priya,\nI love Stripe's work.\nBest regards,\nAryan"), "I love Stripe's work.", "a greeting and sign-off are stripped from a line")
         expect(WritingAction.cleanedLine("Thanks to its API, I built a payments demo."), "Thanks to its API, I built a payments demo.", "a sentence that starts with Thanks is kept")
         expect(WritingAction.cleanedLine("I follow {company-name} closely."), "", "a line with invented braces is refused")
