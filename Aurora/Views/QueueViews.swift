@@ -626,7 +626,7 @@ private struct BatchPrompts: ViewModifier {
                           confirmLabel: "Send",
                           isPresented: $confirmingSend) {
                 Haptics.cascade(batch.pending)
-                SendIsland.show(count: batch.pending)
+                QueuedCurtain.show(count: batch.pending)
                 queue.sendNow(batch.id)
             }
             .sheet(isPresented: $rescheduling) {

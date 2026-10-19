@@ -133,7 +133,7 @@ private struct DueBatchSummary: ViewModifier {
                                         if batch == nil, isEnabled, let due = queue.dueBatch { queue.snooze(due.id) }
                                     })) { batch in
             DueBatchSheet(batch: batch) {
-                SendIsland.show(count: batch.pending)
+                QueuedCurtain.show(count: batch.pending)
                 queue.sendNow(batch.id)
             } onLater: {
                 queue.snooze(batch.id)
