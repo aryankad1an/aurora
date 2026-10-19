@@ -44,10 +44,10 @@ struct TagChip: View {
     var body: some View {
         HStack(spacing: 4) {
             if let systemImage { Image(systemName: systemImage) }
-            // One line at normal sizes. At accessibility sizes a long role or route
-            // wraps inside the chip: left to its full width it ran off the card.
+            // A chip wider than the card wraps inside it, at every text size: held
+            // to one line, a long role ran off the card's edge.
             Text(text)
-                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
                 .multilineTextAlignment(.leading)
         }
         .font(.caption.weight(.semibold))
@@ -55,15 +55,16 @@ struct TagChip: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background {
-            // A capsule's ends cut into the first line of a chip that wraps.
-            let shape = RoundedRectangle(cornerRadius: typeSize.isAccessibilitySize ? 14 : 100, style: .continuous)
+            // A capsule's ends cut into the first line of a chip that wraps; half a
+            // one-line chip's height still reads as a capsule.
+            let shape = RoundedRectangle(cornerRadius: typeSize.isAccessibilitySize ? 14 : 12, style: .continuous)
             if filled {
                 shape.fill(tint.opacity(0.13))
             } else {
                 shape.strokeBorder(tint.opacity(0.45), lineWidth: 1)
             }
         }
-        .fixedSize(horizontal: !typeSize.isAccessibilitySize, vertical: true)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -181,18 +182,19 @@ struct HiringPanel: View {
     private var facts: some View {
         let type = job.companyType?.trimmingCharacters(in: .whitespaces) ?? ""
         let opens = job.usuallyOpens?.trimmingCharacters(in: .whitespaces) ?? ""
-        if !type.isEmpty || !opens.isEmpty || !job.batches.isEmpty || !job.fresherRoles.isEmpty {
+        let roles = RoleTitle.cleaned(job.fresherRoles)
+        if !type.isEmpty || !opens.isEmpty || !job.batches.isEmpty || !roles.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(factList(type: type, opens: opens), id: \.label) { fact in
                     FactRow(label: fact.label, value: fact.value, systemImage: fact.symbol)
                 }
-                if !job.fresherRoles.isEmpty {
+                if !roles.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Roles", systemImage: "person.text.rectangle")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.inkMuted)
                         WrappingHStack(spacing: 6, lineSpacing: 6) {
-                            ForEach(job.fresherRoles, id: \.self) { role in
+                            ForEach(roles, id: \.self) { role in
                                 TagChip(text: role, tint: .ink, filled: false)
                             }
                         }
