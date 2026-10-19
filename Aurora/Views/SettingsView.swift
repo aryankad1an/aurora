@@ -18,6 +18,10 @@ struct SettingsView: View {
     @State private var isReconnecting = false
     @State private var confirmingSignOut = false
     @State private var isExporting = false
+    @State private var isShowingShortcutHelp = false
+    /// Held here rather than in the guide, whose own state doesn't survive the
+    /// trip to Shortcuts and back.
+    @State private var shortcutTest = ShortcutTest()
 
     private enum Route: Hashable { case theme }
 
@@ -28,6 +32,7 @@ struct SettingsView: View {
                 appearanceSection
                 if gmail.isConnected { gmailSection }
                 dataSection
+                helpSection
                 aboutSection
             }
             .navigationTitle("Settings")
@@ -52,6 +57,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $isExporting) {
                 DataExportView()
+            }
+            .sheet(isPresented: $isShowingShortcutHelp) {
+                ShortcutSetupView(test: shortcutTest)
             }
             // Signing out drops the Gmail connection, and getting it back means
             // the whole Google sign-in again — so it asks, as Settings does.
@@ -216,6 +224,37 @@ struct SettingsView: View {
             if gmail.connectedEmail == nil {
                 Text("Sign in with Gmail to export your data.")
             }
+        }
+    }
+
+    // MARK: - Help
+
+    private var helpSection: some View {
+        Section {
+            Button {
+                Haptics.tap()
+                shortcutTest = ShortcutTest()
+                isShowingShortcutHelp = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(Color.clay)
+                        .frame(minWidth: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Make the \(ShortcutsWriter.shortcutName) Shortcut")
+                            .foregroundStyle(.ink)
+                        Text("Step by step, so writing help can use Siri's larger model")
+                            .font(.caption)
+                            .foregroundStyle(.inkMuted)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.inkFaint)
+                }
+            }
+        } header: {
+            Text("Help")
         }
     }
 

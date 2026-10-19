@@ -57,6 +57,18 @@ struct ShortcutSetupView: View {
         "Come back here and tap Test the Shortcut.",
     ]
 
+    /// What each thing that goes wrong means, and what fixes it.
+    private static let fixes: [(problem: String, fix: String)] = [
+        ("“Could not find the shortcut”",
+         "The name has to be exactly \(ShortcutsWriter.shortcutName), with the same capitals and one space."),
+        ("“Didn't send an answer back”",
+         "The shortcut has to end with Stop and Output set to the Use Model action's Response."),
+        ("Shortcuts asks whether it can open Aurora",
+         "Tap Allow. Without it the answer can't come back."),
+        ("Use Model isn't there, or it can't reach Cloud",
+         "Turn on Apple Intelligence in the Settings app, and stay online while it writes."),
+    ]
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -113,7 +125,26 @@ struct ShortcutSetupView: View {
                     .padding(16)
                     .panel()
 
-                    Text("If the shortcut doesn't answer, the smaller model on your iPhone writes instead, and says so. Shortcuts may ask the first time whether it can open Aurora: allow it.")
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("If It Doesn't Work")
+                            .font(.headline)
+                            .foregroundStyle(Color.ink)
+                        ForEach(Self.fixes, id: \.problem) { item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.problem)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Color.ink)
+                                Text(item.fix)
+                                    .font(.subheadline)
+                                    .foregroundStyle(Color.inkMuted)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding(16)
+                    .panel()
+
+                    Text("If the shortcut doesn't answer, the smaller model on your iPhone writes instead, and says so.")
                         .font(.footnote)
                         .foregroundStyle(Color.inkMuted)
                 }
