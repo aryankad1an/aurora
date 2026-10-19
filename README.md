@@ -57,7 +57,7 @@ sent and read through the Gmail API under Google OAuth.
 | **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. Answers saying the address is no longer in service, or the person has left, count too. Any sent mail can be checked on its own from Activity. |
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
 | **Themes** | Six looks in Settings: Aurora, Tide, Phosphor, Neon, Bloom and Gilded. Each changes the colours, the chart that moves behind every screen, the launch screen and the app icon. |
-| **Send animation** | Sending launches paper planes, one per mail (up to three), that climb on glowing trails, loop and fly off the top of the screen. |
+| **Send animation** | Sending opens a "Sending mails" panel out of the Dynamic Island, with how many mails are going (or when a scheduled batch goes), then folds it back in. |
 | **Fresher hiring** | Every company in the Fresher Hiring Ledger is flagged, with a cap on its logo. Filter chips over Companies list freshers, ones hiring now, and each hiring route (off-campus, campus & intern, unclear), with counts. A company's screen shows its website and careers page, the package its sources state, the routes it hires freshers by, when it usually opens, batches and roles. |
 | **Sources** | Each fact rests on a source: a job post, an offer write-up, a placement page, each with its link, date and the package it states. Any source can be opened, edited, added or marked invalid (shared, with Undo); invalid ones stop counting toward the stated package. |
 | **Logos** | A company's own logo, found on its website, in place of the monogram everywhere it appears. Edit Company can find one on the website, or take a link. |
@@ -325,7 +325,12 @@ a `BGContinuedProcessingTask` (`SendBackgroundTask`). iOS only grants one while
 the app is on screen, so it's asked for when a run starts with the app in
 front: Send or Resume tapped, or the app opened mid-run. One task covers the
 queue until it has nothing left to do soon, including a batch about to retry
-by itself after a dropped connection. iOS shows its own progress for it.
+by itself after a dropped connection. iOS shows its own Live Activity for the
+task, which an app can't hide, so while the task holds the queue Aurora ends
+its own and titles the system's with the run instead ("Sending mails · 3 of 6",
+"Checking for bounces · 6 of 6 sent", then "All 6 mails sent" with "No bounces"
+or "1 bounced"). Only one ever shows: Aurora's comes back when the task ends
+and the queue still has work.
 
 It only buys time. Sending works exactly as it does on screen, so the rules
 above about never mailing anyone twice hold in the background too. iOS expires
@@ -384,7 +389,8 @@ Lock Screen for 15 minutes).
 
 - **Lock Screen and Notification Center:** the status in the theme's colour
   ("Sending mail 4 of 6", "Connection lost · retrying in 0:05", "Paused",
-  "All 6 sent", "Scheduled for 7:00 PM", "Ready to send"), the company the mail
+  "All sent · waiting a minute for bounces", "All 6 sent · 1 bounced",
+  "Scheduled for 7:00 PM", "Ready to send"), the company the mail
   going out now is to ("ACKO Insurance", or "ACKO Insurance and 5 more" for a
   batch that's finished or not started), a count ("3/6 done"), a progress bar,
   and who the mail is going to: their name and address. While the run waits,

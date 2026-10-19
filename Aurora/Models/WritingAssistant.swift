@@ -7,6 +7,8 @@ enum WritingRequest: Equatable {
     case preset(WritingAction)
     /// The user's own instruction, in their words.
     case custom(String)
+    /// An instruction left empty: tidy the text up for where it goes.
+    case polish
     /// A first draft of a company line, from what the student says it should say
     /// (nil: from the company's name and sector alone).
     case draft(notes: String?)
@@ -15,6 +17,7 @@ enum WritingRequest: Equatable {
         switch self {
         case .preset(let action): action.title
         case .custom(let text): text
+        case .polish: "Polish"
         case .draft(let notes):
             notes.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } ?? "Write one for me"
         }
@@ -163,11 +166,18 @@ final class WritingAssistant {
             instructions = WritingAction.rules(known: known, senderFacts: senderFacts, isLine: isLine)
             temperature = 0.3
             checking = original
+        case .polish:
+            guard !original.isEmpty else { return empty() }
+            prompt = WritingAction.editPrompt(WritingAction.polishInstruction, for: original, isLine: isLine)
+            instructions = WritingAction.rules(known: known, senderFacts: senderFacts, isLine: isLine)
+            temperature = 0.3
+            checking = original
         case .draft(let notes):
             guard let subject else { return nil }
-            prompt = WritingAction.draftPrompt(company: subject.company, sector: subject.sector, notes: notes)
+            prompt = WritingAction.draftPrompt(company: subject.company, sector: subject.sector, notes: notes,
+                                               student: subject.student)
             let hasNotes = !(notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            instructions = WritingAction.draftRules(hasNotes: hasNotes)
+            instructions = WritingAction.draftRules(hasNotes: hasNotes, hasStudent: subject.student != nil)
             temperature = 0.6
         }
         if let brief, !brief.isEmpty { prompt = brief + "\n\n" + prompt }

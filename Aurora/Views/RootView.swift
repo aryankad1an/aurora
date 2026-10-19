@@ -262,8 +262,10 @@ struct RootView: View {
             await jobStore.markContactsSent(records)
         }
         mailQueue.onChange = { queue in
-            SendLiveActivity.shared.sync(with: queue)
+            // The background task first: while it holds the queue, its own
+            // card on the Lock Screen is the run's one Live Activity.
             SendBackgroundTask.shared.sync(with: queue)
+            SendLiveActivity.shared.sync(with: queue)
         }
         mailQueue.onBounceCheck = { since in
             await jobStore.checkBouncesWhileSending(using: replySync, since: since)

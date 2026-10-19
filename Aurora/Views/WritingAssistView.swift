@@ -4,6 +4,8 @@ import SwiftUI
 struct DraftSubject {
     let company: String
     let sector: String?
+    /// What the student studies or does, from their profile.
+    var student: String?
 }
 
 /// The sparkles button: Apple Intelligence's cloud model (see `WritingAssistant`)
@@ -149,7 +151,19 @@ struct WritingAssistSheet: View {
     @FocusState private var promptFocused: Bool
     @FocusState private var refineFocused: Bool
 
-    private var subject: DraftSubject? { place.draftSubject }
+    /// The company a line is for, with what the student studies or does, so a
+    /// line written from nothing can say why them.
+    private var subject: DraftSubject? {
+        guard var subject = place.draftSubject else { return nil }
+        let profile = profileStore.profile
+        var about: [String] = []
+        if profile.isStudying, !profile.college.isEmpty { about.append("studies at \(profile.college)") }
+        if profile.isWorking, !profile.company.isEmpty {
+            about.append("works at \(profile.company)" + (profile.position.isEmpty ? "" : " as \(profile.position)"))
+        }
+        subject.student = about.isEmpty ? nil : about.joined(separator: "; ")
+        return subject
+    }
     private var isTemplate: Bool { place.isTemplate }
     private var known: [String] { isTemplate ? MailPlaceholder.allCases.map(\.token) : [] }
 
@@ -213,50 +227,60 @@ struct WritingAssistSheet: View {
 
     // MARK: - Ask
 
+    /// What the send button does with nothing typed: a company line is written
+    /// whole from everything the model is told; other text is polished for
+    /// where it goes. Nil when there's nothing to work on.
+    private var emptyRequest: WritingRequest? {
+        if subject != nil { return .draft(notes: nil) }
+        return hasText ? .polish : nil
+    }
+
+    private var emptyLabel: String {
+        subject == nil ? "Polish" : (hasText ? "Write a new one" : "Write it for me")
+    }
+
+    private var composePlaceholder: String {
+        switch (subject != nil, hasText) {
+        case (true, false): "Anything it should mention? Optional"
+        case (true, true): "Say what to change, or write a new one"
+        case (false, true): "Say what to change, or just polish it"
+        case (false, false): "Nothing to change yet"
+        }
+    }
+
     private var compose: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
+            VStack(alignment: .leading, spacing: 20) {
+                contextCard
 
                 if let unavailable {
                     unavailableCard(unavailable)
-                    if hasText { writingToolsRow }
-                    shortcutRow
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionLabel(hasText ? "Tell it what to do" : (subject == nil ? "Tell it what to do" : "What should it say?"))
-                        promptField(text: $session.prompt, focus: $promptFocused,
-                                    placeholder: hasText ? "e.g. Mention I'm a final-year student"
-                                                         : (subject == nil ? "Nothing to change yet"
-                                                                           : "e.g. I built a project using their API")) {
-                            // With nothing written yet, what's typed is what the line should
-                            // say, not an instruction about text that doesn't exist.
-                            run(hasText ? .custom(prompt) : .draft(notes: prompt), from: original)
+                        composer(text: $session.prompt, focus: $promptFocused, placeholder: composePlaceholder,
+                                 emptyLabel: emptyRequest == nil ? nil : emptyLabel, showsModel: true) {
+                            let typed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if typed.isEmpty {
+                                if let emptyRequest { run(emptyRequest, from: original) }
+                            } else {
+                                // With nothing written yet, what's typed is what the line should
+                                // say, not an instruction about text that doesn't exist.
+                                run(hasText ? .custom(typed) : .draft(notes: typed), from: original)
+                            }
                         }
                         .disabled(!hasText && subject == nil)
                         if hasText || subject != nil { suggestions }
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        sectionLabel(hasText ? "Or pick a quick fix" : "Start")
-                        quickActions
+                    if hasText {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SectionLabel(title: "Quick fixes", systemImage: "wand.and.stars")
+                            quickFixes
+                        }
                     }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        sectionLabel("What it's working with")
-                        context
-                    }
-
-                    if assistant.previous != nil { undoRow }
-                    if WritingAssistant.isApproachingLimit {
-                        Label("You're close to your share of Apple Intelligence cloud requests for now.",
-                              systemImage: "gauge.with.dots.needle.67percent")
-                            .font(.footnote)
-                            .foregroundStyle(Color.inkMuted)
-                    }
-                    if hasText { writingToolsRow }
-                    shortcutRow
                 }
+
+                footer
             }
             .padding(.horizontal, Theme.Space.gutter)
             .padding(.top, 8)
@@ -265,70 +289,56 @@ struct WritingAssistSheet: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "sparkles")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(AIStyle.linear)
-                .symbolEffect(.pulse, options: .repeating.speed(0.5), isActive: !reduceMotion && unavailable == nil)
-                .frame(width: 44, height: 44)
-                .background(Color.clay.opacity(0.10), in: Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Apple Intelligence")
-                    .font(.headline)
-                    .padding(.top, 2)
-                    .foregroundStyle(Color.ink)
-                Text(WritingAssistant.usesCloud
-                     ? "Apple's larger cloud model, the one Siri uses. Private Cloud Compute keeps your text private to the request."
-                     : viaShortcuts
-                     ? "Through your \(ShortcutsWriter.shortcutName) shortcut, with the model you chose in it. If it doesn't answer, the model on your iPhone writes instead."
-                     : "The model on your iPhone. It's smaller than Siri's, so check what it changes. Writing Tools can use the larger one.")
-                    .font(.footnote)
-                    .foregroundStyle(Color.inkMuted)
-            }
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func sectionLabel(_ title: String) -> some View {
-        Text(title)
-            .font(.caption2.weight(.semibold))
-            .textCase(.uppercase)
-            .tracking(0.5)
-            .foregroundStyle(Color.inkMuted)
-    }
-
-    /// The text the request works on and what the model is told about it, so
+    /// What the text is, who it's for, and what else the model is told, so
     /// it's plain what the answer is written for.
-    private var context: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Group {
-                if hasText {
-                    Text(original)
+    private var contextCard: some View {
+        let summary = place.summary
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                IconTile(systemImage: summary.systemImage, size: Theme.Avatar.small)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(summary.kind)
+                        .font(.caption2.weight(.semibold))
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                        .foregroundStyle(Color.inkMuted)
+                    Text(summary.title)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.ink)
-                        .lineLimit(3)
-                } else {
-                    Text("Nothing written yet.")
-                        .foregroundStyle(Color.inkFaint)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer(minLength: 0)
             }
-            .font(.callout)
 
-            Divider()
+            HStack(alignment: .top, spacing: 10) {
+                Capsule()
+                    .fill(AIStyle.linear)
+                    .frame(width: 3)
+                    .opacity(hasText ? 1 : 0.35)
+                Text(hasText ? original : "Nothing written yet.")
+                    .font(.callout)
+                    .foregroundStyle(hasText ? Color.ink : Color.inkFaint)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .fixedSize(horizontal: false, vertical: true)
 
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(place.facts(hasProfile: senderFacts != nil), id: \.text) { fact in
-                    Label {
-                        Text(fact.text).fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: fact.systemImage)
-                            .foregroundStyle(Color.clay)
-                            .frame(width: factIconWidth)
+            let facts = place.facts(hasProfile: senderFacts != nil)
+            if !facts.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(facts, id: \.text) { fact in
+                        Label {
+                            Text(fact.text).fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: fact.systemImage)
+                                .foregroundStyle(Color.clay)
+                                .frame(width: factIconWidth)
+                        }
                     }
                 }
+                .font(.caption)
+                .foregroundStyle(Color.inkMuted)
             }
-            .font(.footnote)
-            .foregroundStyle(Color.inkMuted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -336,127 +346,126 @@ struct WritingAssistSheet: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var quickActions: some View {
-        AdaptiveFlow(spacing: 8) {
-            if subject != nil {
-                actionChip(hasText ? "Write a new one" : "Write one for me",
-                           systemImage: "wand.and.stars", prominent: !hasText) {
-                    run(.draft(notes: nil), from: original)
-                }
-            }
+    /// The preset fixes as tiles: three across, two at large text, and a list
+    /// at accessibility sizes, where a tile's icon sits beside its name.
+    private var quickFixes: some View {
+        let columns = typeSize.isAccessibilitySize ? 1 : (typeSize >= .xxLarge ? 2 : 3)
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columns), spacing: 8) {
             ForEach(WritingAction.allCases) { action in
-                actionChip(action.title, systemImage: action.systemImage, prominent: false) {
+                Button {
+                    Haptics.tap()
                     run(.preset(action), from: original)
+                } label: {
+                    let layout = typeSize.isAccessibilitySize
+                        ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 6))
+                    layout {
+                        Image(systemName: action.systemImage)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Color.clay)
+                        Text(action.shortTitle)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Color.ink)
+                            .lineLimit(2)
+                            .multilineTextAlignment(typeSize.isAccessibilitySize ? .leading : .center)
+                        if typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: typeSize.isAccessibilitySize ? 52 : 64)
+                    .padding(.horizontal, 10)
+                    .contentShape(.rect)
+                    .panel(radius: Theme.Radius.inner)
                 }
-                .disabled(!hasText)
-                .opacity(hasText ? 1 : 0.45)
+                .buttonStyle(BouncyPress(scale: 0.94))
             }
         }
-    }
-
-    private func actionChip(_ title: String, systemImage: String, prominent: Bool,
-                            action: @escaping () -> Void) -> some View {
-        Button {
-            Haptics.tap()
-            action()
-        } label: {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.medium))
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, typeSize.isAccessibilitySize ? 8 : 0)
-                .frame(minHeight: 36)
-                .background(prominent ? Color.clay : Color.clay.opacity(0.14), in: Capsule())
-                .foregroundStyle(prominent ? Color.white : Color.clay)
-        }
-        .buttonStyle(BouncyPress(scale: 0.92))
     }
 
     /// Prompts written out in full: a tap puts one in the box to send as it is or
     /// reword first.
     private var suggestions: some View {
         let ideas = PromptIdeas.ideas(for: place.ideaKind, text: original, profile: profileStore.profile)
-        return VStack(alignment: .leading, spacing: 6) {
-            Label("Tap an idea to fill it in, then edit or send", systemImage: "text.insert")
-                .font(.caption2)
-                .foregroundStyle(Color.inkFaint)
-            AdaptiveFlow(spacing: 6) {
-                ForEach(ideas, id: \.self) { idea in
-                    Button {
-                        Haptics.select()
-                        withAnimation(Theme.Motion.snappy) { prompt = idea }
-                        promptFocused = true
-                    } label: {
-                        Text(idea)
-                            .font(.caption)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(prompt == idea ? Color.clay.opacity(0.14) : Color.paperSunken, in: Capsule())
-                            .foregroundStyle(prompt == idea ? Color.clay : Color.inkMuted)
+        return AdaptiveFlow(spacing: 6) {
+            ForEach(ideas, id: \.self) { idea in
+                Button {
+                    Haptics.select()
+                    withAnimation(Theme.Motion.snappy) { prompt = idea }
+                    promptFocused = true
+                } label: {
+                    Text(idea)
+                        .font(.caption)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(prompt == idea ? Color.clay.opacity(0.14) : Color.paperSunken, in: Capsule())
+                        .foregroundStyle(prompt == idea ? Color.clay : Color.inkMuted)
+                }
+                .buttonStyle(BouncyPress(scale: 0.94))
+                .accessibilityHint("Puts this in the box to edit or send")
+            }
+        }
+    }
+
+    /// Which model answers, as a small badge in the composer.
+    private var modelBadge: some View {
+        let (image, name) = WritingAssistant.usesCloud ? ("cloud", "Private Cloud Compute")
+            : viaShortcuts ? ("square.2.layers.3d", ShortcutsWriter.shortcutName)
+            : ("iphone", "On iPhone")
+        return Label(name, systemImage: image)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(Color.inkMuted)
+            .lineLimit(1)
+            .accessibilityLabel("Model: \(name)")
+    }
+
+    /// Undo, the system's Writing Tools and the Shortcuts route, as small chips
+    /// under a one-line note on the model.
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if WritingAssistant.isApproachingLimit {
+                Label("You're close to your share of Apple Intelligence cloud requests for now.",
+                      systemImage: "gauge.with.dots.needle.67percent")
+            } else if !WritingAssistant.usesCloud, !viaShortcuts, unavailable == nil {
+                Label("The model on your iPhone is smaller than Siri's, so check what it changes.",
+                      systemImage: "info.circle")
+            }
+            AdaptiveFlow(spacing: 8) {
+                if assistant.previous != nil {
+                    footerChip("Undo last change", systemImage: "arrow.uturn.backward") {
+                        guard let old = assistant.undo() else { return }
+                        text = old
+                        original = old
+                        onApplied()
                     }
-                    .buttonStyle(BouncyPress(scale: 0.94))
-                    .accessibilityHint("Puts this in the box to edit or send")
+                    .transition(.liquid)
+                }
+                if hasText, let onUseWritingTools {
+                    footerChip("Writing Tools", systemImage: "pencil.and.scribble", action: onUseWritingTools)
+                }
+                if !WritingAssistant.usesCloud {
+                    footerChip(viaShortcuts ? "\(ShortcutsWriter.shortcutName): on" : "Siri's model via Shortcuts",
+                               systemImage: "square.2.layers.3d") { session.showingShortcutSetup = true }
                 }
             }
         }
+        .font(.footnote)
+        .foregroundStyle(Color.inkMuted)
     }
 
-    /// The system's own Writing Tools on the text, for its inline proofreading
-    /// marks or when the cloud model can't be reached.
-    @ViewBuilder
-    private var writingToolsRow: some View {
-        if let onUseWritingTools {
-            Button {
-                Haptics.tap()
-                onUseWritingTools()
-            } label: {
-                Label("Use Writing Tools instead", systemImage: "pencil.and.scribble")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Color.clay)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .secondaryButton()
-        }
-    }
-
-    /// Setting up, or switching, the Aurora Writer shortcut: the way to Siri's
-    /// larger model without the cloud entitlement.
-    @ViewBuilder
-    private var shortcutRow: some View {
-        if !WritingAssistant.usesCloud {
-            Button {
-                Haptics.tap()
-                session.showingShortcutSetup = true
-            } label: {
-                Label(viaShortcuts ? "\(ShortcutsWriter.shortcutName) shortcut: on" : "Use Siri's larger model through Shortcuts",
-                      systemImage: "square.2.layers.3d")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Color.clay)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .secondaryButton()
-        }
-    }
-
-    private var undoRow: some View {
+    private func footerChip(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button {
-            if let old = assistant.undo() {
-                Haptics.tap()
-                text = old
-                original = old
-                onApplied()
-            }
+            Haptics.tap()
+            action()
         } label: {
-            Label("Undo the last change", systemImage: "arrow.uturn.backward")
-                .font(.subheadline.weight(.medium))
+            Label(title, systemImage: systemImage)
+                .font(.footnote.weight(.medium))
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.clay.opacity(0.12), in: Capsule())
                 .foregroundStyle(Color.clay)
-                .frame(maxWidth: .infinity, minHeight: 44)
         }
-        .secondaryButton()
-        .transition(.liquid)
+        .buttonStyle(BouncyPress(scale: 0.94))
     }
 
     private func unavailableCard(_ reason: String) -> some View {
@@ -477,38 +486,60 @@ struct WritingAssistSheet: View {
         .panel()
     }
 
-    /// A text box with a send button, ringed in colour while it has focus.
-    private func promptField(text: Binding<String>, focus: FocusState<Bool>.Binding, placeholder: String,
-                             onSend: @escaping () -> Void) -> some View {
-        let trimmed = text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return HStack(alignment: .bottom, spacing: 8) {
+    /// A text box with the send button under it, ringed in colour that turns
+    /// while it has focus. Left empty, the button says what it will do instead
+    /// (`emptyLabel`); nil means it needs something typed.
+    private func composer(text: Binding<String>, focus: FocusState<Bool>.Binding, placeholder: String,
+                          emptyLabel: String?, showsModel: Bool = false,
+                          onSend: @escaping () -> Void) -> some View {
+        let typed = !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let ready = typed || emptyLabel != nil
+        return VStack(alignment: .leading, spacing: 10) {
             TextField(placeholder, text: text, axis: .vertical)
-                .lineLimit(1...4)
+                .lineLimit(2...5)
                 .font(.subheadline)
                 .foregroundStyle(Color.ink)
                 .focused(focus)
                 .submitLabel(.send)
-                .onSubmit { if !trimmed.isEmpty { onSend() } }
-            Button {
-                Haptics.tap()
-                onSend()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(trimmed.isEmpty ? Color.inkFaint : Color.clay)
-                    .symbolEffect(.bounce, value: trimmed.isEmpty)
+                .onSubmit { if ready { onSend() } }
+            HStack(spacing: 8) {
+                if showsModel { modelBadge }
+                Spacer(minLength: 0)
+                Button {
+                    Haptics.tap()
+                    onSend()
+                } label: {
+                    Group {
+                        if !typed, let emptyLabel {
+                            Label(emptyLabel, systemImage: "sparkles")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 34)
+                                .background(Color.clay, in: Capsule())
+                                .foregroundStyle(Color.white)
+                                .transition(.scale(scale: 0.8).combined(with: .opacity))
+                        } else {
+                            Image(systemName: "arrow.up")
+                                .font(.subheadline.weight(.bold))
+                                .frame(width: 34, height: 34)
+                                .background(ready ? Color.clay : Color.inkFaint.opacity(0.4), in: Circle())
+                                .foregroundStyle(Color.white)
+                                .transition(.scale(scale: 0.8).combined(with: .opacity))
+                        }
+                    }
+                    .animation(Theme.Motion.snappy, value: typed)
+                }
+                .buttonStyle(BouncyPress(scale: 0.92))
+                .disabled(!ready)
+                .accessibilityLabel(!typed ? (emptyLabel ?? "Send") : "Send")
             }
-            .buttonStyle(.plain)
-            .disabled(trimmed.isEmpty)
-            .accessibilityLabel("Send")
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .panel(radius: 22)
+        .padding(14)
+        .panel(radius: 20)
         .overlay {
-            AIGlowBorder(cornerRadius: 22, lineWidth: 1.5, halo: 0.12)
-                .opacity(focus.wrappedValue ? 1 : 0)
+            AIGlowBorder(cornerRadius: 20, lineWidth: 1.5, isTurning: focus.wrappedValue, halo: 0.12)
+                .opacity(focus.wrappedValue ? 1 : 0.35)
                 .animation(Theme.Motion.snappy, value: focus.wrappedValue)
         }
     }
@@ -600,12 +631,10 @@ struct WritingAssistSheet: View {
 
                     ChangeComparison(before: original, after: candidate, tab: $session.tab)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        sectionLabel("Not quite? Say what to adjust")
-                        promptField(text: $session.refinement, focus: $refineFocused,
-                                    placeholder: "e.g. Keep it shorter") {
-                            run(.custom(refinement), from: candidate)
-                        }
+                    composer(text: $session.refinement, focus: $refineFocused,
+                             placeholder: "Not quite? Say what to adjust", emptyLabel: "Polish") {
+                        let typed = refinement.trimmingCharacters(in: .whitespacesAndNewlines)
+                        run(typed.isEmpty ? .polish : .custom(typed), from: candidate)
                     }
                 }
                 .padding(.horizontal, Theme.Space.gutter)

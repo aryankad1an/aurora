@@ -281,7 +281,7 @@ final class JobStore {
 
     /// Look for bounces to a batch's mail while it's still sending, from
     /// `since` (when the run began). Quiet: see `ReplySync.checkBouncesWhileSending`.
-    func checkBouncesWhileSending(using sync: ReplySync, since: Date) async {
+    func checkBouncesWhileSending(using sync: ReplySync, since: Date) async -> Int {
         await sync.checkBouncesWhileSending(sends: sends, emailByContact: emailByContact, since: since)
     }
 

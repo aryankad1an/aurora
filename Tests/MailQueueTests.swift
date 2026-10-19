@@ -367,6 +367,7 @@ struct MailQueueTests {
                 shownDuringCheck = shownDuringCheck && queue.step == .checkingBounces
                 try? await Task.sleep(for: .milliseconds(100))
                 sentDuringCheck += world.gmail.sentBox.count - before
+                return 0
             }
             let many = (1...120).map { "p\($0)@acme.com" }
             queue.enqueue(batch(many))

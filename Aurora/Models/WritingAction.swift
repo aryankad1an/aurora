@@ -20,6 +20,16 @@ enum WritingAction: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The title on a quick-fix tile, where "Make" on four of them is noise.
+    var shortTitle: String {
+        switch self {
+        case .friendlier: "Friendlier"
+        case .professional: "Professional"
+        case .shorter: "Shorter"
+        default: title
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .proofread: "checkmark.circle"
@@ -50,6 +60,10 @@ enum WritingAction: String, CaseIterable, Identifiable {
             "Make the email a little longer: add one or two natural sentences that elaborate on what it already says, such as why the sender is interested in the role. Do not claim anything the sender has done, and add no new facts about the sender or the company."
         }
     }
+
+    /// What an instruction left empty asks for: a general tidy-up for wherever
+    /// the text is going, which the brief ahead of it says.
+    static let polishInstruction = "Polish the email for where it is going: fix any mistakes, make awkward sentences clearer and more natural, and tighten anything wordy. Keep the meaning, every fact and roughly the same length."
 
     /// How freely the model may vary, 0 to 1. Proofreading should read the same
     /// every time; a rewrite that is asked for again should come out differently.
@@ -165,8 +179,9 @@ enum WritingAction: String, CaseIterable, Identifiable {
     ///
     /// Two sets, by whether the student gave notes. With generic examples in the
     /// rules the model copies them and ignores the notes, so notes get rules and
-    /// examples built around them alone.
-    static func draftRules(hasNotes: Bool) -> String {
+    /// examples built around them alone. Without notes, the student's own
+    /// details (`hasStudent`) let the line say why them, not just why the company.
+    static func draftRules(hasNotes: Bool, hasStudent: Bool = false) -> String {
         let common = """
             You write one or two sentences for a student's cold email to a recruiter at a company.
             Reply with those sentences only: no greeting, no sign-off, no quotation marks, no curly braces.
@@ -190,6 +205,21 @@ enum WritingAction: String, CaseIterable, Identifiable {
                 Sector: Payments
                 Notes from the student: built a checkout demo with their API, curious about fraud checks
                 Reply: I built a checkout demo with Razorpay's API and became curious about how fraud checks work, so I'd love to learn more about how your team approaches payments.
+                """
+        }
+        if hasStudent {
+            return common + """
+
+
+                Say why the student is interested in the company and its work, and tie in what the student studies \
+                or does where it fits naturally. Use only the facts given about the student, and nothing more about \
+                their background, skills or experience.
+
+                Example
+                Company: Notion
+                Sector: Productivity software
+                About the student: studies at Anna University
+                Reply: As a student at Anna University, I'm excited by the work Notion is doing in productivity software, and I'd love to learn more about how your team builds it.
                 """
         }
         return common + """
@@ -223,12 +253,15 @@ enum WritingAction: String, CaseIterable, Identifiable {
         return "Instruction: \(task.trimmingCharacters(in: .whitespacesAndNewlines))\n\n\(isLine ? "Sentences" : "Email"):\n\(text)"
     }
 
-    /// What a company line is written from: the company, its sector if known, and
-    /// anything the student said they want it to say. The website is left out on
+    /// What a company line is written from: the company, its sector if known,
+    /// what the student studies or does, and anything they said they want it to say. The website is left out on
     /// purpose — given it, the model announces that it found it.
-    static func draftPrompt(company: String, sector: String?, notes: String?) -> String {
+    static func draftPrompt(company: String, sector: String?, notes: String?, student: String? = nil) -> String {
         var prompt = "Company: \(company)"
         if let sector, !sector.isEmpty { prompt += "\nSector: \(sector)" }
+        if let student = student?.trimmingCharacters(in: .whitespacesAndNewlines), !student.isEmpty {
+            prompt += "\nAbout the student: \(student)"
+        }
         if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
             prompt += "\nNotes from the student: \(notes)"
         }

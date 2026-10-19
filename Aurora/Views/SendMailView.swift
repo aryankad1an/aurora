@@ -720,7 +720,7 @@ struct SendMailView: View {
         // to sending one, and this is the last moment the user is still holding
         // the phone waiting to find out that it worked.
         Haptics.cascade(letters.count)
-        SendFlight.launch(count: letters.count)
+        SendIsland.show(count: letters.count)
         mailQueue.enqueue(makeBatch(scheduledFor: nil))
         finish()
     }
@@ -728,7 +728,7 @@ struct SendMailView: View {
     private func schedule(for date: Date) {
         guard !letters.isEmpty else { return }
         Haptics.success()
-        SendFlight.launch(count: letters.count, scheduledFor: date)
+        SendIsland.show(count: letters.count, scheduledFor: date)
         mailQueue.enqueue(makeBatch(scheduledFor: date))
         finish()
     }

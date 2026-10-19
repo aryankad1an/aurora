@@ -64,6 +64,8 @@ final class MailQueue {
         var stoppedBecause: String? = nil
         /// Stopped with mail still to go — by Pause, or by `stoppedBecause`.
         var isPaused = false
+        /// Bounces the run's checks found; nil when it didn't check.
+        var bounced: Int? = nil
     }
 
     /// How the queue paces itself. Tests run with `Timing.immediate`.
@@ -197,8 +199,8 @@ final class MailQueue {
     var onChange: ((MailQueue) -> Void)?
     /// Looks for bounces to mail sent since the given time — when the run
     /// began. Called every `bounceCheckEvery` mails, and once after the run's
-    /// last; sending waits for it.
-    var onBounceCheck: ((_ since: Date) async -> Void)?
+    /// last; sending waits for it. Returns how many bounces it found.
+    var onBounceCheck: ((_ since: Date) async -> Int)?
 
     private var file: JSONFile<[MailBatch]>?
     #if canImport(UIKit)
@@ -544,6 +546,7 @@ final class MailQueue {
         var sent = 0
         /// How many had been sent at the last bounce check.
         var checkedAt = 0
+        var bounced: Int?
         var failed: [String] = []
         var stoppedBecause: String?
         /// Gmail rate limits in a row, for the backoff.
@@ -672,7 +675,7 @@ final class MailQueue {
             if unrecordedCount >= Self.recordEvery { await recordDeliveries() }
             if sent - checkedAt >= Self.bounceCheckEvery, let batch = self.batch(id), !batch.isPaused, batch.hasWork {
                 checkedAt = sent
-                await checkBounces(since: startedAt)
+                if let found = await checkBounces(since: startedAt) { bounced = (bounced ?? 0) + found }
             }
             if let batch = self.batch(id), !batch.isPaused, batch.hasWork {
                 let jitter = timing.jitter
@@ -704,7 +707,7 @@ final class MailQueue {
             }
             // Pause, now, skips the check — and a batch with nothing left
             // isn't left paused by it.
-            if !isStopping { await checkBounces(since: startedAt) }
+            if !isStopping, let found = await checkBounces(since: startedAt) { bounced = (bounced ?? 0) + found }
             if batch(id)?.isPaused == true { update(id) { $0.isPaused = false } }
         }
         step = nil
@@ -714,19 +717,20 @@ final class MailQueue {
         isStopping = false
         cooldown = nil
         outcome = Outcome(batchID: id, sent: sent, failed: failed,
-                          stoppedBecause: stoppedBecause, isPaused: paused)
+                          stoppedBecause: stoppedBecause, isPaused: paused, bounced: bounced)
         startNext()
         changed()
     }
 
     /// Look for bounces to this run's mail, with sending held meanwhile — a few
     /// seconds, and the queue says so.
-    private func checkBounces(since: Date) async {
-        guard let onBounceCheck else { return }
+    /// Returns how many it found, or nil when there's no way to look.
+    private func checkBounces(since: Date) async -> Int? {
+        guard let onBounceCheck else { return nil }
         // In the send history first, so a notice can be matched to them.
         await recordDeliveries()
         show(.checkingBounces)
-        await onBounceCheck(since)
+        return await onBounceCheck(since)
     }
 
     private func show(_ step: Step) {

@@ -109,7 +109,7 @@ private struct Style {
 
     func tint(_ phase: SendActivityAttributes.ContentState.Phase) -> Color {
         switch phase {
-        case .sending, .pausing, .scheduled: accent
+        case .sending, .pausing, .scheduled, .checking: accent
         case .waiting, .paused: attention
         case .done: reply
         }
@@ -156,12 +156,19 @@ private struct Headline: View {
                 } else {
                     Text("\(state.note ?? "Waiting") · retrying now")
                 }
+            case .checking:
+                Text(state.note ?? "Checking for bounced mail")
             case .pausing:
                 Text("Pausing after this mail")
             case .paused:
                 Text(state.note.map { "Paused · \($0)" } ?? "Paused")
             case .done:
-                Text(state.failed == 0 ? "All \(state.sent) sent" : "Finished · \(state.failed) failed")
+                let sent = state.failed == 0 ? "All \(state.sent) sent" : "Finished · \(state.failed) failed"
+                switch state.bounced {
+                case nil: Text(sent)
+                case 0?: Text("\(sent) · no bounces")
+                case let count?: Text("\(sent) · \(count) bounced")
+                }
             case .scheduled:
                 if Phrase.isReady(state, isStale: isStale) {
                     Text("Ready to send")
@@ -315,6 +322,7 @@ private struct Legend: View {
         HStack(spacing: 12) {
             item("\(state.sent) sent", style.reply)
             if state.failed > 0 { item("\(state.failed) failed", style.attention) }
+            if let bounced = state.bounced, bounced > 0 { item("\(bounced) bounced", style.attention) }
             if state.toGo > 0 { item("\(state.toGo) to go", .white.opacity(0.35)) }
         }
         .font(.caption)
@@ -396,6 +404,7 @@ private struct Glyph: View {
         case .sending: "paperplane.fill"
         case .waiting: "arrow.clockwise"
         case .pausing, .paused: "pause.fill"
+        case .checking: "magnifyingglass"
         case .done: "checkmark"
         case .scheduled: "clock.fill"
         }

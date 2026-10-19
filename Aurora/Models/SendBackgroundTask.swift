@@ -24,6 +24,11 @@ import UIKit
 /// minute, so progress ticks on its own between mails — through the gap, a
 /// check of Sent mail, a bounce check, or a wait on Gmail — without ever
 /// reaching the next mail's share.
+///
+/// iOS shows the task in a Live Activity of its own, which the app can't hide
+/// or restyle — only title. While it's up, `SendLiveActivity` keeps out of the
+/// way, so the run is one card on the Lock Screen; the titles here say what
+/// that one would have, the bounce check and how the run ended included.
 @MainActor
 final class SendBackgroundTask {
     static let shared = SendBackgroundTask()
@@ -54,6 +59,9 @@ final class SendBackgroundTask {
     /// can be removed, and progress must never go back.
     private var finished = 0
     private var lastFinished = 0
+
+    /// Whether the system's card is up for the queue, or about to be.
+    var isHolding: Bool { task != nil || isRequesting }
 
     /// Bring the task in line with the queue: ask for one when a run is under
     /// way on screen, report how far it's got, and hand it back once the queue
@@ -113,6 +121,7 @@ final class SendBackgroundTask {
                 // on when the app is opened again, as it always has.
                 isRequesting = false
                 refusedAt = .now
+                handBack()
             }
         }
     }
@@ -121,6 +130,7 @@ final class SendBackgroundTask {
         isRequesting = false
         guard let queue, needsTime(queue) else {
             task.setTaskCompleted(success: true)
+            handBack()
             return
         }
         self.task = task
@@ -151,6 +161,7 @@ final class SendBackgroundTask {
         ticker = nil
         self.task = nil
         task.setTaskCompleted(success: false)
+        handBack()
     }
 
     private func finish(success: Bool) {
@@ -158,8 +169,21 @@ final class SendBackgroundTask {
         ticker = nil
         guard let task else { return }
         self.task = nil
-        if success { task.progress.completedUnitCount = task.progress.totalUnitCount }
+        if success {
+            // The card's last word: how the run went, bounces and all.
+            if let queue, let closing = closingTitles(for: queue) {
+                task.updateTitle(closing.title, subtitle: closing.subtitle)
+            }
+            task.progress.completedUnitCount = task.progress.totalUnitCount
+        }
         task.setTaskCompleted(success: success)
+        handBack()
+    }
+
+    /// The system's card is gone: the app's own Live Activity carries on with
+    /// anything still to show.
+    private func handBack() {
+        if let queue { SendLiveActivity.shared.sync(with: queue) }
     }
 
     // MARK: - Progress
@@ -203,7 +227,13 @@ final class SendBackgroundTask {
     }
 
     private func titles(for queue: MailQueue, done: Int, total: Int) -> (title: String, subtitle: String) {
-        let title = "Sending mail · \(done) of \(total)"
+        let title: String
+        switch queue.step {
+        case .awaitingBounces, .checkingBounces:
+            title = "Checking for bounces · \(done) of \(total) sent"
+        default:
+            title = "\(total == 1 ? "Sending mail" : "Sending mails") · \(done) of \(total)"
+        }
         if let cooldown = queue.cooldown {
             return (title, "Gmail asked to slow down · trying again at "
                     + cooldown.until.formatted(date: .omitted, time: .shortened))
@@ -214,5 +244,20 @@ final class SendBackgroundTask {
             return (title, "Trying again at " + next.formatted(date: .omitted, time: .shortened))
         }
         return (title, queue.running?.liveCompany ?? "")
+    }
+
+    /// "All 4 mails sent" over "No bounces", once the run has finished.
+    private func closingTitles(for queue: MailQueue) -> (title: String, subtitle: String)? {
+        guard let outcome = queue.outcome, !outcome.isPaused else { return nil }
+        let (done, _) = counts(queue)
+        let failed = outcome.failed.count
+        let title = failed > 0 ? "\(max(done - failed, 0)) sent · \(failed) failed"
+            : done == 1 ? "Mail sent" : "All \(done) mails sent"
+        let subtitle = switch outcome.bounced {
+        case nil: queue.batch(outcome.batchID)?.companiesLabel ?? ""
+        case 0?: "No bounces"
+        case let count?: count == 1 ? "1 bounced" : "\(count) bounced"
+        }
+        return (title, subtitle)
     }
 }

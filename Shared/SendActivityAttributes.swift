@@ -34,6 +34,9 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
             case pausing
             /// Stopped with mail still to go.
             case paused
+            /// Every mail has gone; the run is giving bounces a minute to
+            /// arrive, or looking for them.
+            case checking
             /// Nothing left in this run.
             case done
             /// A scheduled batch waiting for `startsAt`. Once that has passed
@@ -63,6 +66,8 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
         var batchID: String?
         /// When a scheduled batch is due.
         var startsAt: Date?
+        /// Bounces the run's check found, once it has looked.
+        var bounced: Int?
 
         var done: Int { sent + failed }
         var toGo: Int { max(0, total - done) }

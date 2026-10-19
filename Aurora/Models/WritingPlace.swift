@@ -129,25 +129,34 @@ enum WritingPlace: Equatable {
 
     // MARK: - For the user
 
-    /// What the model is told, as short lines for the sheet.
+    /// What the text is and who it's for, at the top of the sheet.
+    var summary: (systemImage: String, kind: String, title: String) {
+        switch self {
+        case .template:
+            return ("doc.text", "Template", "Goes to many recruiters")
+        case .mail(_, let recipient):
+            var to = recipient.name.isEmpty ? "One recruiter" : "To \(recipient.name)"
+            if !recipient.company.isEmpty { to += " at \(recipient.company)" }
+            return ("envelope", "Mail", to)
+        case .companyLine(let company, let sector, _):
+            var title = "For \(company)"
+            if let sector, !sector.isEmpty { title += " · \(sector)" }
+            return ("building.2", "Company line", title)
+        }
+    }
+
+    /// The rest of what the model is told, as short lines under `summary`.
     func facts(hasProfile: Bool) -> [(systemImage: String, text: String)] {
         var facts: [(String, String)] = []
         switch self {
         case .template(let subject):
-            facts.append(("doc.text", "Your template, which goes to many recruiters"))
             if let subject = Self.shown(subject) { facts.append(("textformat", "Subject: \(subject)")) }
             facts.append(("curlybraces", "Keeps placeholders such as {Receiver-Name}"))
         case .mail(let subject, let recipient):
-            var to = recipient.name.isEmpty ? "One mail" : "Mail to \(recipient.name)"
-            if !recipient.company.isEmpty { to += " at \(recipient.company)" }
-            facts.append(("envelope", to))
             if !recipient.position.isEmpty { facts.append(("person.text.rectangle", recipient.position)) }
             if let subject = Self.shown(subject) { facts.append(("textformat", "Subject: \(subject)")) }
             if hasProfile { facts.append(("person.crop.circle", "Your profile, when you ask for a detail of yours")) }
-        case .companyLine(let company, let sector, let template):
-            var about = "Your line for \(company)"
-            if let sector, !sector.isEmpty { about += " · \(sector)" }
-            facts.append(("building.2", about))
+        case .companyLine(let company, _, let template):
             if let template, Self.spot(in: template, company: company) != nil {
                 facts.append(("text.insert", "Where it sits in your template, to fit around it"))
             }

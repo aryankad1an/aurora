@@ -8,6 +8,12 @@ import SwiftUI
 /// another — and ended, showing how it finished, when the queue has nothing
 /// left to do.
 ///
+/// While `SendBackgroundTask` holds the queue, iOS already shows the run in a
+/// Live Activity of its own, which can't be hidden; this one steps aside then,
+/// so the run is only ever one card. It covers what that one doesn't: a run
+/// iOS refused background time for, a batch stopped or waiting to retry, and a
+/// scheduled batch coming up.
+///
 /// `MailQueue` calls `sync(with:)` whenever something on it changes (its
 /// `onChange`); this works out what the activity should say and only talks to
 /// the system when that changed, so calling it often costs nothing.
@@ -17,6 +23,9 @@ final class SendLiveActivity {
 
     private var activity: Activity<SendActivityAttributes>?
     private var shown: ActivityContent<SendActivityAttributes.ContentState>?
+    /// The batch last shown, here or in the background task's card: a batch
+    /// that stops is kept showing, paused, whichever card it was in.
+    private var batchID: String?
     /// Whether this launch has looked for an activity a previous one left up.
     private var adopted = false
 
@@ -29,6 +38,15 @@ final class SendLiveActivity {
     func sync(with queue: MailQueue) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         adoptLeftover()
+        if SendBackgroundTask.shared.isHolding {
+            if let running = queue.running { batchID = running.id.uuidString }
+            if let activity {
+                self.activity = nil
+                shown = nil
+                Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            }
+            return
+        }
         if let content = Self.content(for: queue) {
             show(content)
         } else if let activity {
@@ -64,6 +82,7 @@ final class SendLiveActivity {
         if let activity, activity.activityState == .active {
             guard content.state != shown?.state || content.staleDate != shown?.staleDate else { return }
             shown = content
+            batchID = content.state.batchID
             Task { await activity.update(content) }
             return
         }
@@ -75,6 +94,7 @@ final class SendLiveActivity {
         do {
             activity = try Activity.request(attributes: attributes, content: content, pushType: nil)
             shown = content
+            batchID = content.state.batchID
         } catch {
             // Turned off for the app, or too many running: the shelf in the app
             // still says everything this would.
@@ -108,7 +128,7 @@ final class SendLiveActivity {
     /// one carrying on by itself, or the one the activity was already about.
     private static func heldBatch(in queue: MailQueue) -> MailBatch? {
         let stopped = queue.batches.filter { $0.isPaused && $0.hasWork && $0.startedAt != nil }
-        if let id = shared.shown?.state.batchID, let same = stopped.first(where: { $0.id.uuidString == id }) {
+        if let id = shared.batchID, let same = stopped.first(where: { $0.id.uuidString == id }) {
             return same
         }
         return stopped.first { $0.resumeAt != nil }
@@ -116,10 +136,15 @@ final class SendLiveActivity {
 
     private static func state(running batch: MailBatch, queue: MailQueue) -> SendActivityAttributes.ContentState {
         let cooldown = queue.cooldown?.batchID == batch.id ? queue.cooldown : nil
+        let checking = switch queue.step {
+        case .awaitingBounces, .checkingBounces: true
+        default: false
+        }
         let phase: SendActivityAttributes.ContentState.Phase =
-            cooldown != nil ? .waiting : queue.isStopping ? .pausing : .sending
+            cooldown != nil ? .waiting : queue.isStopping ? .pausing : checking ? .checking : .sending
         // The mail on its way — or, while waiting, the one that goes next.
-        let current = batch.current
+        // None once they've all gone.
+        let current = checking ? nil : batch.current
         // A step worth saying instead of "Sending mail 4 of 11". Not the
         // second's gap between mails, which would only make it flicker.
         let step: String? = switch queue.step {
@@ -153,7 +178,8 @@ final class SendLiveActivity {
         return .init(phase: outcome.isPaused ? .paused : .done, title: batch.companiesLabel,
                      sent: batch.sent, failed: batch.failed, total: batch.mails.count,
                      recipient: nil, recipientEmail: nil, company: nil,
-                     resumesAt: batch.resumeAt, note: batch.stopNote, batchID: batch.id.uuidString)
+                     resumesAt: batch.resumeAt, note: batch.stopNote, batchID: batch.id.uuidString,
+                     bounced: outcome.bounced)
     }
 
     static func rgb(_ color: Color) -> SendActivityAttributes.RGB {
