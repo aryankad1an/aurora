@@ -98,7 +98,9 @@ struct MailContext {
 ///
 /// The spaces in front of a placeholder go with it, so one that fills in empty
 /// takes them away too: with no name it can trust, "Hi {Receiver-Name}," is
-/// sent as "Hi," rather than "Hi ,".
+/// sent as "Hi," rather than "Hi ,". One that stood on a line of its own takes
+/// the line with it: a company with no personalised line gets a mail with no
+/// gap where it would have been.
 struct MailText {
     private enum Piece {
         case text(String)
@@ -138,7 +140,8 @@ struct MailText {
     }
 
     /// How long the filled-in text runs, in UTF-8 bytes, without writing it —
-    /// enough to find the longest of many letters.
+    /// enough to find the longest of many letters. A blank placeholder's own line
+    /// break isn't subtracted, so it can run a byte or two over.
     func length(with context: MailContext) -> Int {
         pieces.reduce(0) { total, piece in
             switch piece {
@@ -151,12 +154,36 @@ struct MailText {
 
     func filled(with context: MailContext) -> String {
         var result = ""
-        for piece in pieces {
+        /// Line breaks to drop from the start of the next text: set when a
+        /// placeholder that stood alone on its line came out empty.
+        var dropBreaks = 0
+        for (index, piece) in pieces.enumerated() {
             switch piece {
-            case .text(let text): result += text
+            case .text(var text):
+                if dropBreaks > 0 {
+                    text = String(text.dropFirst(min(dropBreaks, text.prefix { $0 == "\n" }.count)))
+                    dropBreaks = 0
+                }
+                result += text
             case .placeholder(let placeholder, let lead):
                 if let value = Self.value(of: placeholder, in: context) {
                     result += lead + value.sanitizedLineSeparators
+                    continue
+                }
+                // Alone on its line: a break (or the start) before it, and a break
+                // (or the end) after. The gaps either side become the larger of the
+                // two, so "A\n\n{X}\n\nB" comes out "A\n\nB", not with two blank lines.
+                let before = result.reversed().prefix { $0 == "\n" }.count
+                let next: String? = if index + 1 < pieces.count, case .text(let text) = pieces[index + 1] { text } else { nil }
+                let after = next?.prefix { $0 == "\n" }.count ?? 0
+                let endsHere = index + 1 == pieces.count
+                guard before > 0 || result.isEmpty, after > 0 || endsHere else { continue }
+                if result.isEmpty {
+                    dropBreaks = after
+                } else if endsHere {
+                    result = String(result.dropLast(before))
+                } else {
+                    dropBreaks = min(before, after)
                 }
             }
         }

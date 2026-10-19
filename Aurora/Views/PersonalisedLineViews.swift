@@ -48,9 +48,8 @@ struct PersonalisedLineCard: View {
     }
 }
 
-/// Where the line is written: a text box with Apple Intelligence writing help
-/// (on-device, via Foundation Models) in the toolbar, and the system's own
-/// Writing Tools on the text itself.
+/// Where the line is written: a text box with the system's Writing Tools behind
+/// the sparkles button, and its changes shown for review before they're kept.
 struct PersonalisedLineSheet: View {
     let company: String
 
@@ -60,6 +59,7 @@ struct PersonalisedLineSheet: View {
     @State private var saved = ""
     @State private var loaded = false
     @State private var aiFlash = 0
+    @State private var writingTools = WritingToolsTarget()
     @FocusState private var focused: Bool
 
     private var hasChanges: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines) != saved }
@@ -72,7 +72,7 @@ struct PersonalisedLineSheet: View {
                         .writingToolsBehavior(.complete)
                         .focused($focused)
                         .frame(minHeight: 140)
-                        .reviewsWritingTools(text: $text) { aiFlash += 1 }
+                        .reviewsWritingTools(text: $text, target: writingTools) { aiFlash += 1 }
                         .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8,
                                         inset: EdgeInsets(top: -4, leading: -4, bottom: -4, trailing: -4))
                         .overlay(alignment: .topLeading) {
@@ -90,7 +90,7 @@ struct PersonalisedLineSheet: View {
                     HStack {
                         Text("Your line")
                         Spacer()
-                        WritingToolsButton { focused = true }
+                        WritingToolsButton(target: writingTools)
                         .font(.body.weight(.semibold))
                         .textCase(nil)
                     }

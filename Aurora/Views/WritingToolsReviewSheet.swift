@@ -13,6 +13,7 @@ struct WritingToolsReviewSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var tab = Tab.changes
     @State private var sealed = false
 
@@ -142,8 +143,6 @@ struct WritingToolsReviewSheet: View {
         .padding(.vertical, 10)
         .background(.bar)
     }
-
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var keepButton: some View {
         Button {

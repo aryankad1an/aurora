@@ -133,9 +133,26 @@ enum TemplateDiagnostics {
     /// Where it wouldn't, `emptyNameFindings` says so.
     private static func recipientGapFindings(used: Set<MailPlaceholder>,
                                              recipients: RecipientCoverage) -> [TemplateFinding] {
-        guard used.contains(.receiverPosition), recipients.missingPosition > 0 else { return [] }
+        var findings: [TemplateFinding] = []
+        // The company line is written by hand per company, so most companies start
+        // without one; it drops out of their mail cleanly, but the person writing
+        // the template should know how many that is.
+        if used.contains(.companyPersonalised), recipients.companies > 0, recipients.companiesWithoutLine > 0 {
+            let none = recipients.companiesWithoutLine == recipients.companies
+            findings.append(TemplateFinding(
+                id: "recipients-company-line",
+                severity: .warning,
+                title: none ? "No company on Home has a company line yet"
+                            : "\(recipients.companiesWithoutLine) of \(recipients.companies) companies on Home have no company line",
+                detail: "\(MailPlaceholder.companyPersonalised.token) is left out of mail to people there. "
+                    + "Write one from a company's page, under Your personalised line.",
+                token: MailPlaceholder.companyPersonalised.token,
+                suggestion: nil
+            ))
+        }
+        guard used.contains(.receiverPosition), recipients.missingPosition > 0 else { return findings }
 
-        return [TemplateFinding(
+        return findings + [TemplateFinding(
             id: "recipients-position",
             severity: .warning,
             title: "\(recipients.missingPosition) of \(recipients.total) contacts have no position",
@@ -231,6 +248,9 @@ enum TemplateDiagnostics {
 struct RecipientCoverage {
     var total = 0
     var missingPosition = 0
+    /// Companies on Home, and how many of them have no personalised line.
+    var companies = 0
+    var companiesWithoutLine = 0
 
     static let none = RecipientCoverage()
 

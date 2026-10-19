@@ -91,6 +91,10 @@ final class JobStore {
     /// The connected Gmail address whose data we show. Set on sign-in.
     var userEmail: String?
 
+    /// Told the old and new name when a company is renamed (an edit, or the undo
+    /// of one), so what's filed under the name — the personalised line — follows.
+    @ObservationIgnored var onRename: ((_ from: String, _ to: String) -> Void)?
+
     // MARK: - Home selection (synced per account)
 
     /// Which companies are on Home now lives server-side in `tracked_companies`,
@@ -406,14 +410,14 @@ final class JobStore {
         guard !details.name.isEmpty else { return }
         let previous = company(id: id)
 
-        let saved = await saveCompany(id: id, details: details, previous: previous)
+        let saved = await saveCompany(id: id, details: details, sending: previous)
         if saved, details.domains != previous?.domains { warnIfDomainsDropped(details.domains) }
         if saved { warnIfFresherDetailsDropped(details, previous: previous) }
         // Only a write that landed has anything to undo.
         guard saved, let previous else { return }
         UndoCoordinator.shared.stage(message: "Company details updated") { [weak self] in
             // Restored as it was — including where its links came from.
-            await self?.saveCompany(id: id, details: previous.details, previous: nil, restoringLinksOf: previous)
+            await self?.saveCompany(id: id, details: previous.details, sending: nil, restoringLinksOf: previous)
         }
     }
 
@@ -421,11 +425,16 @@ final class JobStore {
     /// it was if the database refuses. A rename moves the company in the sorted
     /// lists, which only a reload can do; anything else needs just this company
     /// fetched again, for what the server worked out itself.
+    ///
+    /// - Parameter sending: what `SupabaseAPI.updateCompany` compares against to
+    ///   mark edited links as edited. An undo sends nil and restores the links'
+    ///   sources itself. Rolling back always uses the copy on screen.
     @discardableResult
-    private func saveCompany(id: String, details: CompanyDetails, previous: Job?,
+    private func saveCompany(id: String, details: CompanyDetails, sending previous: Job?,
                              restoringLinksOf original: Job? = nil) async -> Bool {
-        let renamed = previous.map { $0.company != details.name } ?? true
-        if var shown = previous ?? company(id: id) {
+        let shownBefore = company(id: id)
+        let oldName = shownBefore?.company
+        if var shown = shownBefore {
             shown.apply(details)
             replaceCompany(shown)
         }
@@ -436,11 +445,16 @@ final class JobStore {
                                                          careers: original.careersSource)
             }
         } catch {
-            if let previous { replaceCompany(previous) }
+            if let shownBefore { replaceCompany(shownBefore) }
             report(error)
             return false
         }
-        if renamed { await reloadQuietly() } else { await refreshCompanies([id]) }
+        if let oldName, oldName != details.name {
+            onRename?(oldName, details.name)
+            await reloadQuietly()
+        } else {
+            await refreshCompanies([id])
+        }
         return true
     }
 
@@ -813,6 +827,7 @@ final class JobStore {
         if !refreshedCounts.isEmpty { scopeCounts = refreshedCounts }
         apply(sends: sends)
         rebuildActivity(from: sends)
+        lastLoadFailed = false
         warmScopes()
     }
 
@@ -1121,7 +1136,10 @@ final class JobStore {
             for contact in company.contacts where ids.contains(contact.id) && found[contact.id] == nil {
                 found[contact.id] = contact
             }
-            if found.count == ids.count { break }
+            if found.count == ids.count { return found }
+        }
+        for entry in activity where ids.contains(entry.contact.id) && found[entry.contact.id] == nil {
+            found[entry.contact.id] = entry.contact
         }
         return found
     }

@@ -39,6 +39,7 @@ struct TemplateEditorView: View {
     @State private var confirmingSaveWithErrors = false
     /// Bumped when an approved AI change lands in the message, to ring it in colour.
     @State private var aiFlash = 0
+    @State private var writingTools = WritingToolsTarget()
     @State private var testSendResult: String?
     @State private var isTestSending = false
     @FocusState private var focus: Field?
@@ -148,6 +149,8 @@ struct TemplateEditorView: View {
             company.contacts.map { (contact: $0, company: company.company) }
         }
         coverage = RecipientCoverage(catalog.lazy.map(\.contact))
+        coverage.companies = jobStore.jobs.count
+        coverage.companiesWithoutLine = jobStore.jobs.count { personalisedLines.line(for: $0.company).isEmpty }
         if pickedSample == nil,
            let job = jobStore.jobs.first(where: { $0.validContacts.contains { !$0.position.isEmpty } }),
            let contact = job.validContacts.first(where: { !$0.position.isEmpty }) {
@@ -227,7 +230,7 @@ struct TemplateEditorView: View {
                 Spacer()
                 // Apple's own Writing Tools on the message. When it closes having
                 // changed the text, the changes come up for review.
-                WritingToolsButton { focus = .content }
+                WritingToolsButton(target: writingTools)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.tint)
             }
@@ -252,7 +255,7 @@ struct TemplateEditorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .reviewsWritingTools(text: $content) { aiFlash += 1 }
+                .reviewsWritingTools(text: $content, target: writingTools) { aiFlash += 1 }
                 .aiAppliedFlash(trigger: aiFlash, cornerRadius: 14,
                                 inset: EdgeInsets(top: 0, leading: 6, bottom: 12, trailing: 6))
         }

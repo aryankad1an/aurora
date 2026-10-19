@@ -29,13 +29,19 @@ final class PersonalisedLineStore {
         lines[Self.key(company)] ?? ""
     }
 
-    /// Save `line` for `company`; an empty line removes it. When a company is
-    /// renamed, `previousName` moves its line along instead of orphaning it.
-    func set(_ line: String, for company: String, previousName: String? = nil) {
+    /// Refile a company's line under its new name, after a rename. A line already
+    /// written for the new name is kept rather than overwritten.
+    func move(from oldName: String, to newName: String) {
+        let old = Self.key(oldName), new = Self.key(newName)
+        guard old != new, let line = lines[old] else { return }
+        lines.removeValue(forKey: old)
+        if lines[new] == nil { lines[new] = line }
+        file?.save(lines)
+    }
+
+    /// Save `line` for `company`; an empty line removes it.
+    func set(_ line: String, for company: String) {
         let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let previousName, Self.key(previousName) != Self.key(company) {
-            lines.removeValue(forKey: Self.key(previousName))
-        }
         if text.isEmpty {
             lines.removeValue(forKey: Self.key(company))
         } else {

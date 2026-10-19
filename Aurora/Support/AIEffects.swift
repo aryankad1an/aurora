@@ -40,7 +40,9 @@ struct AIGlowBorder: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || !isTurning)) { context in
+        // Thirty frames a second: the ring turns slowly, and every frame redraws a
+        // gradient stroke over whatever it surrounds.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || !isTurning)) { context in
             let seconds = context.date.timeIntervalSinceReferenceDate
             let angle = reduceMotion ? Angle.zero : .degrees((seconds * 70).truncatingRemainder(dividingBy: 360))
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

@@ -1079,8 +1079,12 @@ struct MailPreview: Identifiable {
         self.contact = contact
         self.company = company
         self.context = context
+        // Not gaps: with no name it can trust a mail opens "Hi,", and a company
+        // with no personalised line simply goes without it — the line and its
+        // paragraph drop out cleanly. Flagging either would mark most letters.
         self.blanks = Set(MailPlaceholder.allCases.filter {
-            $0 != .receiverName && (context.values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            $0 != .receiverName && $0 != .companyPersonalised
+                && (context.values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
         })
         self.name = contact.displayName
         self.email = contact.email
@@ -1233,7 +1237,7 @@ struct MailEditorView: View {
     @State private var subject: String
     @State private var messageBody: String
     @State private var aiFlash = 0
-    @FocusState private var bodyFocused: Bool
+    @State private var writingTools = WritingToolsTarget()
     @Environment(\.dismiss) private var dismiss
 
     fileprivate init(letter: MailPreview, face: LetterFace, onSave: @escaping (String, String) -> Void) {
@@ -1277,14 +1281,13 @@ struct MailEditorView: View {
                         .writingToolsBehavior(.complete)
                         .frame(minHeight: 260)
                         .font(.callout)
-                        .focused($bodyFocused)
-                        .reviewsWritingTools(text: $messageBody) { aiFlash += 1 }
+                        .reviewsWritingTools(text: $messageBody, target: writingTools) { aiFlash += 1 }
                         .aiAppliedFlash(trigger: aiFlash, cornerRadius: 8)
                 } header: {
                     HStack {
                         Text("Message")
                         Spacer()
-                        WritingToolsButton { bodyFocused = true }
+                        WritingToolsButton(target: writingTools)
                             .font(.body.weight(.semibold))
                             .textCase(nil)
                     }

@@ -186,6 +186,8 @@ struct RootView: View {
         connectMailQueue()
         mailQueue.load(account: email)
         personalisedLines.load(account: email)
+        // A renamed company keeps its personalised line, which is filed by name.
+        jobStore.onRename = { [personalisedLines] old, new in personalisedLines.move(from: old, to: new) }
         replySync.loadBounces(account: email)
         MailboxNames.shared.load(account: email)
 

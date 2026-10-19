@@ -37,17 +37,14 @@ final class TemplateStore {
     /// Create or update a template (both are an upsert on its id).
     func save(_ template: MailTemplate) async {
         guard let email else { return }
-        let before = templates
-        if let index = templates.firstIndex(where: { $0.id == template.id }) {
-            templates[index] = template
-        } else {
-            templates.append(template)
-        }
-        templates.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let previous = templates.first { $0.id == template.id }
+        put(template)
         do {
             try await SupabaseAPI.upsertTemplate(userEmail: email, template: template)
         } catch {
-            templates = before
+            // Only this template goes back: restoring the whole list as it was would
+            // also undo any other change made while this one was on its way.
+            if let previous { put(previous) } else { templates.removeAll { $0.id == template.id } }
             errorMessage = error.localizedDescription
         }
     }
@@ -55,15 +52,24 @@ final class TemplateStore {
     /// Delete templates in one request; they leave the list at once.
     func delete(_ doomed: [MailTemplate]) async {
         guard email != nil, !doomed.isEmpty else { return }
-        let before = templates
         let ids = Set(doomed.map(\.id))
         templates.removeAll { ids.contains($0.id) }
         do {
             try await SupabaseAPI.deleteTemplates(ids: doomed.map(\.id))
         } catch {
-            templates = before
+            for template in doomed { put(template) }
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Insert or replace a template, keeping the list in name order.
+    private func put(_ template: MailTemplate) {
+        if let index = templates.firstIndex(where: { $0.id == template.id }) {
+            templates[index] = template
+        } else {
+            templates.append(template)
+        }
+        templates.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// Save a copy under a new id, named so it's clearly the copy.

@@ -3,9 +3,15 @@ import UIKit
 import FoundationModels
 
 /// The system's Writing Tools (Apple Intelligence) as the app's way of editing
-/// text: the button opens Apple's own panel on the text being edited, and when
-/// the panel closes having changed the text, `reviewsWritingTools` shows what
-/// changed and asks whether to keep it.
+/// text: the button opens Apple's own panel on the text it's paired with, and
+/// when the panel closes having changed the text, `reviewsWritingTools` shows
+/// what changed and asks whether to keep it.
+///
+/// A screen pairs the two through a `WritingToolsTarget`:
+///
+///     @State private var writingTools = WritingToolsTarget()
+///     WritingToolsButton(target: writingTools)
+///     TextEditor(text: $body).reviewsWritingTools(text: $body, target: writingTools)
 enum WritingTools {
     /// Nil when Writing Tools can be used; otherwise why not, for the user.
     static var unavailableReason: String? {
@@ -22,36 +28,35 @@ enum WritingTools {
             "Apple Intelligence isn't available right now."
         }
     }
-
-    /// Open Writing Tools on whichever text view has the keyboard. False when
-    /// there's none to open it on.
-    @MainActor
-    @discardableResult
-    static func present() -> Bool {
-        let windows = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.windows }.flatMap { $0 }
-        for window in windows {
-            if let textView = window.descendants(of: UITextView.self).first(where: \.isFirstResponder) {
-                textView.showWritingTools(textView)
-                return true
-            }
-        }
-        return false
-    }
 }
 
 extension UIView {
     /// Every view below this one of a given type.
     func descendants<T: UIView>(of type: T.Type) -> [T] {
-        subviews.flatMap { ($0 as? T).map { [$0] } ?? [] } + subviews.flatMap { $0.descendants(of: type) }
+        var found: [T] = []
+        var stack = subviews
+        while let view = stack.popLast() {
+            if let match = view as? T { found.append(match) }
+            stack.append(contentsOf: view.subviews)
+        }
+        return found
     }
 }
 
 // MARK: - Button
 
-/// The sparkles button: Writing Tools on the text it sits beside.
+/// The text view a sparkles button opens Writing Tools on, found by the editor's
+/// `reviewsWritingTools`. Held directly, not looked up as "whatever has the
+/// keyboard" when tapped: with the Subject field focused, that opened Writing
+/// Tools on the subject while the review watched the message.
+@MainActor
+final class WritingToolsTarget {
+    fileprivate weak var textView: UITextView?
+}
+
+/// The sparkles button: Writing Tools on the text it's paired with.
 struct WritingToolsButton: View {
-    /// Puts the keyboard in the text, so Writing Tools has something to work on.
-    var focusEditor: () -> Void
+    let target: WritingToolsTarget
     @State private var message: String?
 
     var body: some View {
@@ -61,11 +66,18 @@ struct WritingToolsButton: View {
                 message = reason
                 return
             }
-            focusEditor()
+            guard let textView = target.textView else {
+                message = "Tap in the text first, then try again."
+                return
+            }
             Task {
-                // Long enough for the keyboard to arrive and take the text.
-                try? await Task.sleep(for: .milliseconds(350))
-                if !WritingTools.present() { message = "Tap in the text first, then try again." }
+                // Writing Tools opens on the text view with the keyboard: put it
+                // there, and give it a few frames to take it if it hadn't.
+                if !textView.isFirstResponder { textView.becomeFirstResponder() }
+                for _ in 0..<10 where !textView.isFirstResponder {
+                    try? await Task.sleep(for: .milliseconds(30))
+                }
+                textView.showWritingTools(textView)
             }
         } label: {
             Image(systemName: "sparkles")
@@ -82,19 +94,22 @@ extension View {
     /// After Writing Tools changes this text, shows what changed and lets the user
     /// keep it or put the old text back. Applies to the `TextEditor` it's on, and
     /// also catches Writing Tools opened from the text's own selection menu.
-    func reviewsWritingTools(text: Binding<String>, onKept: @escaping () -> Void = {}) -> some View {
-        modifier(ReviewsWritingTools(text: text, onKept: onKept))
+    /// `target` is how a `WritingToolsButton` finds this text.
+    func reviewsWritingTools(text: Binding<String>, target: WritingToolsTarget,
+                             onKept: @escaping () -> Void = {}) -> some View {
+        modifier(ReviewsWritingTools(text: text, target: target, onKept: onKept))
     }
 }
 
 private struct ReviewsWritingTools: ViewModifier {
     @Binding var text: String
+    let target: WritingToolsTarget
     let onKept: () -> Void
     @State private var change: WritingToolsChange?
 
     func body(content: Content) -> some View {
         content
-            .background { WritingToolsProbe { change = $0 } }
+            .background { WritingToolsProbe(target: target) { change = $0 } }
             .sheet(item: $change) { change in
                 WritingToolsReviewSheet(change: change,
                                         onRevert: { text = change.before },
@@ -104,8 +119,11 @@ private struct ReviewsWritingTools: ViewModifier {
 }
 
 /// An invisible view behind a text editor that finds the editor's `UITextView` and
-/// samples it ten times a second for "is Writing Tools active".
+/// samples it ten times a second for "is Writing Tools active". The text view is
+/// found once and held: searching the window's whole view tree on every sample
+/// was a full traversal ten times a second for each editor on screen.
 private struct WritingToolsProbe: UIViewRepresentable {
+    let target: WritingToolsTarget
     let onChange: (WritingToolsChange) -> Void
 
     func makeUIView(context: Context) -> ProbeView {
@@ -117,24 +135,32 @@ private struct WritingToolsProbe: UIViewRepresentable {
 
     func updateUIView(_ view: ProbeView, context: Context) {
         context.coordinator.onChange = onChange
+        context.coordinator.target = target
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+    func makeCoordinator() -> Coordinator { Coordinator(target: target, onChange: onChange) }
 
     final class Coordinator {
         var onChange: (WritingToolsChange) -> Void
+        var target: WritingToolsTarget
         private var tracker = WritingToolsTracker()
-        private var seeded = false
+        private weak var textView: UITextView?
 
-        init(onChange: @escaping (WritingToolsChange) -> Void) { self.onChange = onChange }
+        init(target: WritingToolsTarget, onChange: @escaping (WritingToolsChange) -> Void) {
+            self.target = target
+            self.onChange = onChange
+        }
 
         @MainActor
         func tick(_ probe: ProbeView) {
-            guard let textView = Self.textView(behind: probe) else { return }
-            if !seeded {
-                tracker = WritingToolsTracker(text: textView.text)
-                seeded = true
+            // Looked for again only once the one held has left the window.
+            if textView?.window == nil {
+                guard let found = Self.textView(behind: probe) else { return }
+                textView = found
+                target.textView = found
+                tracker = WritingToolsTracker(text: found.text)
             }
+            guard let textView else { return }
             if let change = tracker.observe(isActive: textView.isWritingToolsActive, text: textView.text) {
                 onChange(change)
             }
@@ -166,6 +192,7 @@ private struct WritingToolsProbe: UIViewRepresentable {
         override func didMoveToWindow() {
             super.didMoveToWindow()
             timer?.invalidate()
+            timer = nil
             guard window != nil else { return }
             // `.common`, so it keeps sampling while the screen is being scrolled.
             let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in

@@ -264,9 +264,14 @@ enum SupabaseAPI {
         if limit == 0 {
             let page = 1000
             var all: [MailSend] = []
+            var seen = Set<String>()
+            var offset = 0
             while true {
-                let batch = try await fetchSends(userEmail: userEmail, limit: page, offset: all.count)
-                all += batch
+                let batch = try await fetchSends(userEmail: userEmail, limit: page, offset: offset)
+                offset += batch.count
+                // A mail recorded mid-read lands at the top and pushes every row down
+                // one, so the next page starts with a row already read.
+                all += batch.filter { seen.insert($0.id).inserted }
                 if batch.count < page { return all }
             }
         }
