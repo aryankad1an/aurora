@@ -1051,6 +1051,42 @@
         "Bellatlantic",
         "Insightbb"
       ]
+    },
+    {
+      "into": "Info Edge",
+      "from": [
+        "Naukri",
+        "Naukricampus"
+      ],
+      "why": "Naukri.com and Naukri Campus are Info Edge's: naukricampus.com redirects to naukri.com/campus; Info Edge's site lists Naukri among its businesses (verified 2026-10-19)"
+    },
+    {
+      "into": "Jio",
+      "from": [
+        "Reliance Jio"
+      ],
+      "why": "Reliance Jio is Jio (jio.com); the Reliance Jio row was an empty duplicate with no contacts (2026-10-19)"
+    },
+    {
+      "into": "CommBank",
+      "from": [
+        "Cba"
+      ],
+      "why": "cba.com.au redirects to commbank.com.au: both are the Commonwealth Bank of Australia (2026-10-19)"
+    },
+    {
+      "into": "Upstox",
+      "from": [
+        "Rksv"
+      ],
+      "why": "rksv.in redirects to upstox.com: RKSV Securities is Upstox's former name (2026-10-19)"
+    },
+    {
+      "into": "Citadel",
+      "from": [
+        "Citadelgroup"
+      ],
+      "why": "citadelgroup.com 301-redirects to citadel.com and both domains use the same Proofpoint mail tenant (mxa-001f6701): Citadel's older mail domain (2026-10-20)"
     }
   ],
   "renames": {
@@ -1146,6 +1182,11 @@
       "Heizen",
       "Heizen (formerly OpenGig)",
       "heizen.io (Brazilian retailer) vs heizen.work (Indian software firm)"
+    ],
+    [
+      "General Electric (GE)",
+      "GE Aerospace",
+      "ge.com now serves all three GE companies (Aerospace, Vernova, HealthCare); GE Aerospace staff mail from both ge.com and geaerospace.com, but older @ge.com contacts may be Vernova's, so a merge isn't proven (2026-10-19)"
     ]
   ],
   "unresolved": {
@@ -1575,7 +1616,20 @@
     "Zoom": "527e44fb-ae6a-4cdc-aaaf-a544ed147c4e",
     "Zoom Video Communications": "5bfc0934-fe1e-43c7-a979-39048da93dc0",
     "iCloud (Personal Email)": "9e1590b4-f050-4842-9ae1-530950b8f5a6",
-    "iRAGE Capital": "30be9ce1-4d0f-479c-8b8c-617c0ef33859"
+    "iRAGE Capital": "30be9ce1-4d0f-479c-8b8c-617c0ef33859",
+    "Info Edge": "326c95dd-1bcf-448a-b296-99087e010f1f",
+    "Naukri": "d22eaba0-ecf8-42e3-b0db-a7808cfffb83",
+    "Naukricampus": "76f5083d-c152-41ac-be4d-54741785e4c2",
+    "Jio": "fbf6000b-e83f-4156-9269-97d5ac95747a",
+    "Reliance Jio": "945190f3-02c3-4ec7-a6c5-24132f0c5c59",
+    "CommBank": "3f4db8f8-769c-45dd-8807-d2e0efe441df",
+    "Cba": "827550d6-becb-46f2-8081-bc4a807e40b5",
+    "Upstox": "b3b24816-34f9-4b0f-9361-ed1cbc501d75",
+    "Rksv": "70c4c2a4-9ef8-4b08-908a-e0a73212b771",
+    "General Electric (GE)": "fc9367d4-f962-408e-8530-c3008e10ad0e",
+    "GE Aerospace": "b5f5c156-af8a-4d22-a232-0c8a7e18b748",
+    "Citadel": "e3a0dcbf-6090-493f-b594-094f2698ca67",
+    "Citadelgroup": "77decd0d-b499-460b-8fa1-6677f2b27a3c"
   },
   "personal_contacts": {
     "action": "delete",

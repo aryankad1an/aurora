@@ -23,6 +23,7 @@ Sources are written as `verified_lookup`.
 """
 import json
 import re
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,7 +34,7 @@ from bs4 import BeautifulSoup
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "company_verification"))
 import supabase  # noqa: E402
 import crawl  # noqa: E402
-from crawl import ATS_HOSTS, PARKED, fetch, host_of, reg_of, words  # noqa: E402
+from crawl import ATS_HOSTS, PARKED, host_of, reg_of, words  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 WORK = REPO / "data_verification" / "links"
@@ -43,10 +44,60 @@ USER = "realaryankadian@gmail.com"
 SOURCE = "verified_lookup"
 
 crawl.HEADERS["User-Agent"] = crawl.DESKTOP_UA
+
+
+class _Response:
+    def __init__(self, status_code, url):
+        self.status_code, self.url = status_code, url
+
+
+def fetch(url, limit, accept=None):
+    """GET `url` with curl: (response, body) or (None, None).
+
+    curl rather than requests: this Mac's Python links an old LibreSSL that
+    can't complete the TLS handshake with many current sites, which then
+    looked unreachable."""
+    cmd = ["curl", "-sL", "--compressed", "--max-time", "15", "--max-redirs", "8",
+           "--max-filesize", str(limit), "-A", crawl.DESKTOP_UA,
+           "-H", "Accept-Language: en-US,en;q=0.9", "-w", "\n%{http_code} %{url_effective}"]
+    if accept:
+        cmd += ["-H", f"Accept: {accept}"]
+    try:
+        out = subprocess.run(cmd + [url], capture_output=True, timeout=25).stdout
+    except Exception:
+        return None, None
+    body, _, tail = out.rpartition(b"\n")
+    try:
+        code, final = tail.decode().split(" ", 1)
+        code = int(code)
+    except ValueError:
+        return None, None
+    if code == 0:
+        return None, None
+    return _Response(code, final), body
+
+
+crawl.fetch = fetch  # crawl.find_careers checks the link it picks with this too
+
+SITEMAP_CAREERS = re.compile(r"<loc>\s*(https?://[^<\s]*/(careers?|jobs|join-us|work-with-us)/?)\s*</loc>", re.I)
+
+
+def sitemap_careers(root):
+    """Careers pages a site's own sitemap lists — found even when the
+    homepage draws its links with JavaScript."""
+    found = []
+    for path in ("/sitemap.xml", "/sitemap_index.xml", "/page-sitemap.xml"):
+        r, body = fetch(root + path, 3_000_000)
+        if r is None or r.status_code != 200 or not body:
+            continue
+        found += [m.group(1) for m in SITEMAP_CAREERS.finditer(body.decode("utf-8", "ignore"))]
+    return sorted(set(found), key=len)[:3]
 BLOCKED = re.compile(r"just a moment|attention required|access denied|request rejected|"
                      r"are you a robot|captcha|forbidden|cloudflare", re.I)
 JOB_WORDS = re.compile(r"\b(careers?|jobs?|openings?|vacanc(y|ies)|positions?|join (us|our)|"
                        r"apply|hiring|life at|work with us)\b", re.I)
+CAREERS_WORDS = re.compile(r"career|jobs?\b|hiring|join[- ]?us|recruit|talent|vacanc|opening|work[- ]with[- ]us", re.I)
+NOT_FOUND = re.compile(r"\b404\b|not found|page not found|error|one moment, please|just a moment", re.I)
 CAREER_PATHS = ("/careers", "/careers/", "/career", "/jobs", "/join-us", "/company/careers",
                 "/about/careers", "/about-us/careers", "/en/careers", "/work-with-us")
 
@@ -123,15 +174,28 @@ def probe_website(c):
 
 
 def careers_check(url, own):
+    """Whether `url` is a careers page. Every candidate tested here is one the
+    company's own site pointed at (a homepage link, its own /careers path or
+    careers. subdomain, its sitemap) or one checked by hand, so where it ends
+    up — its own domain or the job board it redirects to — is the company's
+    say-so. What's tested is that it is a careers page: it answers, isn't the
+    homepage or a parked page, and its title, address, host or text says jobs."""
     info, parsed = page(url)
     final = info.get("final") or ""
     host = host_of(final)
     on_ats = any(host == h or host.endswith("." + h) for h in ATS_HOSTS)
     hits = sorted({m.group(0).lower() for m in JOB_WORDS.finditer(parsed[1][:20000])}) if parsed else []
-    info.update(on_own=reg_of(final) == own, on_ats=on_ats, job_words=hits[:8],
-                homepage=urlparse(final).path in ("", "/") and not host.startswith(("careers.", "jobs.")))
-    info["ok"] = (info["status"] == 200 and (info["on_own"] or on_ats) and not info["homepage"]
-                  and not info["parked"] and len(hits) >= 2)
+    # The title has to say it: a /careers address alone has turned out to be a
+    # soft 404 (status 200, "Page Not Found") or a parked lander.
+    title = info.get("title") or ""
+    says_jobs = bool(CAREERS_WORDS.search(title)) and not NOT_FOUND.search(title)
+    if NOT_FOUND.search(title) or urlparse(final).path.rstrip("/") == "/lander":
+        info["parked"] = True
+    info.update(on_own=reg_of(final) == own, on_ats=on_ats, job_words=hits[:8], says_jobs=says_jobs,
+                homepage=urlparse(final).path in ("", "/") and not host.startswith(("careers.", "jobs."))
+                and not on_ats)
+    info["ok"] = (info["status"] == 200 and not info["homepage"] and not info["parked"]
+                  and (says_jobs or (on_ats and not NOT_FOUND.search(title)) or len(hits) >= 3))
     return info
 
 
@@ -165,6 +229,7 @@ def probe_one(c):
         if link:
             cands.append(("homepage link", link))
     root = f"https://{host_of(final)}"
+    cands += [("sitemap", u) for u in sitemap_careers(root)]
     cands += [("path", root + p) for p in CAREER_PATHS]
     cands += [("subdomain", f"https://{s}.{own}/") for s in ("careers", "jobs")]
     checks = []
@@ -230,7 +295,10 @@ def apply(k):
         "id,name,website,website_source,careers_url,careers_source")}
     log, skipped = [], []
     for cid, ans in review.items():
-        row = before[cid]
+        row = before.get(cid)
+        if row is None:  # merged into another company since the queue was made
+            skipped.append(cid)
+            continue
         body = {}
         # "replace_website": the stored one was shown wrong (parked, someone else's).
         if ans.get("website") and (not row["website"] or ans.get("replace_website")) \
