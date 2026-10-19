@@ -159,6 +159,10 @@ struct Job: Identifiable, Decodable {
     /// the list grows on its own as contacts are added — see
     /// `JobStore.addContact`. Empty until the `domains` migration has run.
     var domains: [String] = []
+    /// Other names the company goes by — its brands, a former name, the name
+    /// it trades under (Eternal: Zomato, Blinkit, District). Shown under its
+    /// name and searched like it. Empty until the also-known-as migration has run.
+    var alsoKnownAs: [String] = []
     var contacts: [Contact] = []
 
     // MARK: Links and fresher hiring
@@ -200,6 +204,7 @@ struct Job: Identifiable, Decodable {
         case company = "name"
         case sector
         case domains
+        case alsoKnownAs = "also_known_as"
         case contacts = "recruiters"
         case website
         case websiteSource = "website_source"
@@ -230,6 +235,7 @@ struct Job: Identifiable, Decodable {
         company = try c.decode(String.self, forKey: .company)
         sector = try c.decodeIfPresent(String.self, forKey: .sector)
         domains = (try c.decodeIfPresent([String].self, forKey: .domains) ?? []).compactMap(MailDomain.clean)
+        alsoKnownAs = try c.decodeIfPresent([String].self, forKey: .alsoKnownAs) ?? []
         contacts = try c.decodeIfPresent([Contact].self, forKey: .contacts) ?? []
         // Every one of these is absent until the fresher-hiring migration has run.
         website = try c.decodeIfPresent(String.self, forKey: .website)
@@ -273,6 +279,7 @@ struct Job: Identifiable, Decodable {
         func optional(_ text: String) -> String? { text.isEmpty ? nil : text }
         company = details.name
         sector = optional(details.sector)
+        alsoKnownAs = details.alsoKnownAs
         domains = details.domains
         website = optional(details.website)
         careersURL = optional(details.careersURL)
@@ -289,7 +296,7 @@ struct Job: Identifiable, Decodable {
     /// Everything Edit Company can change, as it stands.
     var details: CompanyDetails {
         CompanyDetails(
-            name: company, sector: sector ?? "", domains: domains,
+            name: company, sector: sector ?? "", alsoKnownAs: alsoKnownAs, domains: domains,
             website: website ?? "", careersURL: careersURL ?? "", logoURL: logoURL ?? "",
             isFresher: isFresher, isOpenNow: isOpenNow, companyType: companyType ?? "",
             hiringRoutes: Set(hiringRoutes), usuallyOpens: usuallyOpens ?? "",
@@ -342,9 +349,18 @@ struct Job: Identifiable, Decodable {
     ///
     /// `query` is expected to be already trimmed; an empty one matches nothing,
     /// because "no query" is a decision for the caller, not for a filter.
+    /// The other name `query` found this company by, when its own name
+    /// doesn't match — what a search result shows so "Blinkit" turning up
+    /// Eternal isn't a puzzle.
+    func otherName(matching query: String) -> String? {
+        guard !query.isEmpty, !company.localizedCaseInsensitiveContains(query) else { return nil }
+        return alsoKnownAs.first { $0.localizedCaseInsensitiveContains(query) }
+    }
+
     func matches(_ query: String) -> Bool {
         guard !query.isEmpty else { return false }
         if company.localizedCaseInsensitiveContains(query) { return true }
+        if alsoKnownAs.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return true }
         if sector?.localizedCaseInsensitiveContains(query) == true { return true }
         if companyType?.localizedCaseInsensitiveContains(query) == true { return true }
         if fresherRoles.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return true }
@@ -358,6 +374,7 @@ struct Job: Identifiable, Decodable {
 struct CompanyDetails: Equatable {
     var name = ""
     var sector = ""
+    var alsoKnownAs: [String] = []
     var domains: [String] = []
     var website = ""
     var careersURL = ""
@@ -384,6 +401,8 @@ struct CompanyDetails: Equatable {
         var d = self
         d.name = clean(name)
         d.sector = clean(sector)
+        // A name it goes by is never the name itself.
+        d.alsoKnownAs = list(alsoKnownAs).filter { $0.caseInsensitiveCompare(d.name) != .orderedSame }
         d.website = clean(website)
         d.careersURL = clean(careersURL)
         d.logoURL = clean(logoURL)

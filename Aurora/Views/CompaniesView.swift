@@ -283,7 +283,8 @@ struct CompaniesView: View {
             let tracked = jobStore.isTracked(company.id)
             CompanyCard(job: company, isTracked: tracked,
                         // While selecting, a tap anywhere on the card ticks it.
-                        onToggleTrack: selection.isSelecting ? nil : { toggleTracking(company) })
+                        onToggleTrack: selection.isSelecting ? nil : { toggleTracking(company) },
+                        matchedName: company.otherName(matching: query))
                 .cardRow()
                 // Ask for the next 50 while ten rows are still to come, so the
                 // page lands before the list runs out rather than after.

@@ -76,6 +76,24 @@ Re-running is safe:
 - Values already on a company the ledger doesn't cover are never overwritten,
   except a logo that vetting has since ruled out, which is cleared.
 
+## Other names (`set_aliases.py`)
+
+Stores the brands, former names and trading names a company goes by in
+`companies.also_known_as` (the migration is in the main README). The input maps
+a company id to its name and the names to add; each was checked against the
+company's own site or a filing and a second source before it went in.
+
+```bash
+python3 ../company_verification/backup.py
+python3 set_aliases.py ../../data_verification/aliases/aliases_by_id.json           # dry run
+python3 set_aliases.py ../../data_verification/aliases/aliases_by_id.json --apply
+```
+
+Ids, not names, pick the row, and the run stops if a name no longer matches.
+Names are added to what a company has, never replacing it. A name that is the
+company's own, or another catalog company's, is refused. Every row written is
+re-read.
+
 ## Merges in the verification pipeline
 
 `company_verification/verify_companies.py` folds duplicate companies into one.

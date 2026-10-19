@@ -17,6 +17,9 @@ struct CompanyCard: View {
     /// Home, in place of the chevron. Without it the card shows the chevron
     /// and, when tracked, a small pin by the name.
     var onToggleTrack: (() -> Void)? = nil
+    /// The other name a search found it by ("Blinkit" for Eternal), said
+    /// under its own name.
+    var matchedName: String? = nil
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// At accessibility sizes the name gets the whole line and wraps; the
@@ -63,6 +66,13 @@ struct CompanyCard: View {
                             .fixedSize()
                             .accessibilityLabel("Last sent \(last.agoLabel)")
                     }
+                }
+
+                if let matchedName {
+                    Text("Also known as \(matchedName)")
+                        .font(.caption)
+                        .foregroundStyle(.inkMuted)
+                        .lineLimit(wide ? 2 : 1)
                 }
 
                 status(contacted: contacted, total: total, replied: replied)

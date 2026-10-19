@@ -88,6 +88,7 @@ sent and read through the Gmail API under Google OAuth.
 | **Curtains** | The big moments play as short full-screen motion graphics over film grain: the screen washes over, a figure acts in the middle, a serif title rises in, and the curtain lifts away. Sending drops envelopes onto a stack while its count ticks up under "Queued" (or "Scheduled", with the time). While writing help works, the sheet sits on the same grainy ground, and the splash and sign-in screen open on it. A tap lifts a curtain early; Reduce Motion fades it in and out. |
 | **Fresher hiring** | Every company in the Fresher Hiring Ledger is flagged, with a cap on its logo. Filter chips over Companies list freshers, ones hiring now, and each hiring route (off-campus, campus & intern, unclear), with counts. A company's screen shows its website and careers page, the package its sources state, the routes it hires freshers by, when it usually opens, batches and roles. |
 | **Sources** | Each fact rests on a source: a job post, an offer write-up, a placement page, each with its link, date and the package it states. Any source can be opened, edited, added or marked invalid (shared, with Undo); invalid ones stop counting toward the stated package. |
+| **Also known as** | A company's brands, former names and the name it trades under (Eternal: Zomato, Blinkit, District, Hyperpure). They're listed under its name, searching any of them finds it ("blink" turns up Eternal, with "Also known as Blinkit" on the card), and Edit Company adds or removes them. |
 | **Logos** | A company's own logo, found on its website, in place of the monogram everywhere it appears. Edit Company can find one on the website, or take a link. |
 | **Export** | Settings → Export Data saves the shared catalog and your own sends, templates and profile to a place you pick in Files, as one JSON file or a .zip of spreadsheets. |
 | **Invalid contacts** | A contact whose address bounces or who has left can be marked invalid, and isn't mailed or suggested again until marked valid. Shared across users, since a dead address is dead for everyone. A company's contacts are split into Valid and Invalid lists, one at a time; Select All selects the list on screen. |
@@ -113,6 +114,20 @@ Changes the app expects, newest first. Run them in the Supabase SQL editor; each
 is safe to re-run.
 
 ```sql
+-- Other names a company goes by: its brands, a former name, the name it
+-- trades under (Eternal: {Zomato, Blinkit, District, Hyperpure}). Shown under
+-- its name and searched like it; the function lets search match part of a
+-- name ("blink" finds Eternal), which a PostgREST filter can't do on an array.
+alter table companies
+  add column if not exists also_known_as text[] not null default '{}';
+create or replace function companies_known_as(q text)
+returns setof companies language sql stable as $$
+  select * from companies c
+  where exists (select 1 from unnest(c.also_known_as) a where a ilike '%' || q || '%')
+$$;
+grant execute on function companies_known_as(text) to anon, authenticated;
+notify pgrst, 'reload schema';
+
 -- Fresher hiring: links, logos, routes and sources for each company
 -- (also in scripts/fresher_ledger/migration.sql).
 
@@ -218,6 +233,9 @@ alter table recruiters
 ```
 
 The app still runs if some of these haven't been applied yet:
+
+- Without `also_known_as`, companies have no other names: Edit Company hides
+  the section and search goes by the company's own name.
 
 - Without the fresher-hiring columns, companies show their monograms, the
   filter chips and the hiring card are hidden, and Edit Company says the links
@@ -790,6 +808,9 @@ swiftc -parse-as-library Aurora/Models/GmailReadPolicy.swift \
   Tests/GmailReadPolicyTests.swift -o /tmp/gr && /tmp/gr
 swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift \
   Tests/ReplyCheckCoverageTests.swift -o /tmp/cc && /tmp/cc
+swiftc -parse-as-library -default-isolation MainActor \
+  Aurora/Models/Job.swift Aurora/Models/FresherHiring.swift \
+  Aurora/Models/RecipientName.swift Tests/AlsoKnownAsTests.swift -o /tmp/aka && /tmp/aka
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift
@@ -804,7 +825,7 @@ notice. The Python scripts below have their own `unittest` suites.
 
 | Path | What it does |
 |---|---|
-| [`scripts/fresher_ledger/`](scripts/fresher_ledger/README.md) | Imports the Fresher Hiring Ledger: matches each of its companies to the catalog (or adds it), flags it, and loads its links, routes and sources; crawls company websites for logos and careers pages. Dry run first; backs up before writing. |
+| [`scripts/fresher_ledger/`](scripts/fresher_ledger/README.md) | Imports the Fresher Hiring Ledger: matches each of its companies to the catalog (or adds it), flags it, and loads its links, routes and sources; crawls company websites for logos and careers pages; fills missing links in checked batches; and stores companies' other names. Dry run first; backs up before writing. |
 | [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. Backs up before every change. |
 | `scripts/app_icons/make_icons.swift` | Draws the app icon (light, dark and tinted) and the README logo from the app's mark, a dawn with a rising line. |
 

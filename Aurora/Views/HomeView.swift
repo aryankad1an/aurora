@@ -132,7 +132,7 @@ struct HomeView: View {
                     .cardRow()
             } else {
                 ForEach(filteredJobs) { job in
-                    CompanyCard(job: job)
+                    CompanyCard(job: job, matchedName: job.otherName(matching: query))
                         .cardRow()
                         .swipeActions(edge: .trailing) { untrackButton(job) }
                         // Both edges used to untrack. The leading one now does

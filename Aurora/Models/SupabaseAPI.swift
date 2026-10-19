@@ -38,6 +38,7 @@ enum SupabaseAPI {
         if let probe = try? decoder.decode([ColumnProbe].self, from: data).first {
             domainsColumnMissing = !probe.hasDomains
             fresherColumnsMissing = !probe.hasFresher
+            alsoKnownAsColumnMissing = !probe.hasAlsoKnownAs
         }
         return try decoder.decode([Job].self, from: data)
     }
@@ -45,11 +46,13 @@ enum SupabaseAPI {
     private struct ColumnProbe: Decodable {
         let hasDomains: Bool
         let hasFresher: Bool
-        private enum Key: String, CodingKey { case domains, is_fresher }
+        let hasAlsoKnownAs: Bool
+        private enum Key: String, CodingKey { case domains, is_fresher, also_known_as }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: Key.self)
             hasDomains = c.contains(.domains)
             hasFresher = c.contains(.is_fresher)
+            hasAlsoKnownAs = c.contains(.also_known_as)
         }
     }
 
@@ -94,11 +97,28 @@ enum SupabaseAPI {
         ])
         async let byCompany = searchCompanyRows(pattern: pattern, domain: MailDomain.clean(cleaned), limit: limit)
         async let byContact = send(contactReq)
+        async let byOtherName = companiesKnownAs(cleaned, limit: limit)
         var foundCompanies = try await byCompany
+        let knownAs = await byOtherName
+        foundCompanies += knownAs.filter { found in !foundCompanies.contains { $0.id == found.id } }
         let employers = try decoder.decode([CompanyRef].self, from: try await byContact)
         foundCompanies += try await fetchCompanies(ids: Set(employers.compactMap(\.company_id))
                                                         .subtracting(foundCompanies.map(\.id)))
         return foundCompanies.sortedByName()
+    }
+
+    /// Companies that go by another name matching `query` — "Blinkit" finds
+    /// Eternal. A database function does the matching, since PostgREST can't
+    /// filter part of an array element. Empty, not an error, until the
+    /// also-known-as migration has run: the rest of the search still answers.
+    private static func companiesKnownAs(_ query: String, limit: Int) async -> [Job] {
+        guard !alsoKnownAsColumnMissing else { return [] }
+        let request = makeRequest(path: "rpc/companies_known_as", query: [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "select", value: "*,recruiters(*)"),
+            URLQueryItem(name: "limit", value: String(limit))
+        ])
+        return (try? decoder.decode([Job].self, from: try await send(request))) ?? []
     }
 
     /// Companies whose name or sector matches `pattern`, or that list `domain`.
@@ -381,6 +401,11 @@ enum SupabaseAPI {
     /// rest of a company still saves; the store says what didn't.
     private(set) static var fresherColumnsMissing = false
 
+    /// Set once the database reports it has no `also_known_as` column: its
+    /// migration hasn't run. A company's other names can't be stored or
+    /// searched until it has.
+    private(set) static var alsoKnownAsColumnMissing = false
+
     /// Create a company in the catalog and return its new id. The company is
     /// created even when its domains or fresher details can't be stored (see
     /// `domainsColumnMissing`, `fresherColumnsMissing`).
@@ -463,6 +488,7 @@ enum SupabaseAPI {
         var body: [String: Any] = [
             "name": d.name,
             "sector": value(d.sector),
+            "also_known_as": d.alsoKnownAs,
             "domains": d.domains,
             "website": website ?? NSNull(),
             "careers_url": careers ?? NSNull(),
@@ -491,6 +517,7 @@ enum SupabaseAPI {
     private static func stripMissingColumns(_ body: [String: Any]) -> [String: Any] {
         body.filter { key, _ in
             !(domainsColumnMissing && key == "domains") && !(fresherColumnsMissing && fresherColumns.contains(key))
+                && !(alsoKnownAsColumnMissing && key == "also_known_as")
         }
     }
 
@@ -498,6 +525,11 @@ enum SupabaseAPI {
     /// likely belongs to as missing. False when there's nothing left to drop,
     /// so the caller rethrows instead of looping.
     private static func noteMissingColumn(in body: [String: Any]) -> Bool {
+        // The newest migration is the likeliest one not to have run.
+        if !alsoKnownAsColumnMissing && body["also_known_as"] != nil {
+            alsoKnownAsColumnMissing = true
+            return true
+        }
         if !fresherColumnsMissing && body.keys.contains(where: fresherColumns.contains) {
             fresherColumnsMissing = true
             return true

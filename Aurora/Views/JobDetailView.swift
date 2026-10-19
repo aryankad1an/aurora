@@ -366,6 +366,14 @@ struct JobDetailView: View {
                         .foregroundStyle(Color.ink)
                         .lineLimit(2)
                         .minimumScaleFactor(0.85)
+                    if !job.alsoKnownAs.isEmpty {
+                        // Its brands and other names, so the company that
+                        // came up for "Blinkit" says why it's Eternal.
+                        Text("Also known as \(job.alsoKnownAs.formatted(.list(type: .and)))")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(3)
+                    }
                     if let sector = job.sector, !sector.isEmpty {
                         // Two lines, not one: sectors run long ("Internet and
                         // consumer products"), and a sector cut to "Internet

@@ -28,11 +28,12 @@ struct CompanyFormView: View {
     @State private var newDomain = ""
     @State private var newBatch = ""
     @State private var newRole = ""
+    @State private var newOtherName = ""
     @State private var isFindingLogo = false
     @State private var logoNote: String?
     @FocusState private var isDomainFieldFocused: Bool
     @FocusState private var focus: Field?
-    private enum Field { case name, sector, website, careers, logo, batch, role }
+    private enum Field { case name, sector, otherName, website, careers, logo, batch, role }
     /// Other companies already using each domain, looked up as domains are added.
     @State private var owners: [String: [String]] = [:]
     @Environment(JobStore.self) private var jobStore
@@ -74,6 +75,14 @@ struct CompanyFormView: View {
         return role
     }
 
+    private var pendingOtherName: String? {
+        let name = newOtherName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, name.caseInsensitiveCompare(draft.name.trimmingCharacters(in: .whitespaces)) != .orderedSame,
+              !draft.alsoKnownAs.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
+        else { return nil }
+        return name
+    }
+
     /// Everything that will be saved, including a domain, year or role typed
     /// but not yet added — tapping Save with one in its field shouldn't
     /// quietly lose it.
@@ -82,6 +91,7 @@ struct CompanyFormView: View {
         if let pendingDomain { d.domains.append(pendingDomain) }
         if let pendingBatch { d.batches.append(pendingBatch) }
         if let pendingRole { d.fresherRoles.append(pendingRole) }
+        if let pendingOtherName { d.alsoKnownAs.append(pendingOtherName) }
         if !d.isFresher { d.isOpenNow = false }
         return d.trimmed
     }
@@ -99,6 +109,9 @@ struct CompanyFormView: View {
         NavigationStack {
             PaperForm {
                 companySection
+                if !SupabaseAPI.alsoKnownAsColumnMissing {
+                    otherNamesSection
+                }
                 if canStoreFresherDetails {
                     linksSection
                     fresherSection
@@ -114,6 +127,7 @@ struct CompanyFormView: View {
             .animation(Theme.Motion.snappy, value: draft.domains)
             .animation(Theme.Motion.snappy, value: draft.batches)
             .animation(Theme.Motion.snappy, value: draft.fresherRoles)
+            .animation(Theme.Motion.snappy, value: draft.alsoKnownAs)
             .animation(Theme.Motion.snappy, value: owners)
             .task(id: finalDetails.domains) { await lookUpOwners() }
             .discardableEdits(hasChanges)
@@ -160,6 +174,59 @@ struct CompanyFormView: View {
                 Text("A logo, links and fresher hiring can be added once the database has been updated — run the fresher-hiring migration from the README.")
             }
         }
+    }
+
+    // MARK: - Other names
+
+    /// Brands, a former name, the name it trades under. Searching any of them
+    /// finds this company.
+    private var otherNamesSection: some View {
+        Section {
+            ForEach(draft.alsoKnownAs, id: \.self) { name in
+                HStack {
+                    Text(name)
+                        .foregroundStyle(.ink)
+                    Spacer()
+                    Button {
+                        Haptics.tap()
+                        draft.alsoKnownAs.removeAll { $0 == name }
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundStyle(Color.danger)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove \(name)")
+                }
+            }
+            HStack {
+                TextField(draft.alsoKnownAs.isEmpty ? "Add a brand or former name" : "Add another name",
+                          text: $newOtherName)
+                    .textInputAutocapitalization(.words)
+                    .focused($focus, equals: .otherName)
+                    .submitLabel(.done)
+                    .onSubmit(addOtherName)
+                Button(action: addOtherName) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(pendingOtherName == nil ? Color.inkFaint : Color.clay)
+                }
+                .buttonStyle(.plain)
+                .disabled(pendingOtherName == nil)
+                .accessibilityLabel("Add name")
+            }
+        } header: {
+            Text("Also known as")
+        } footer: {
+            Text("Searching any of these finds this company.")
+        }
+    }
+
+    private func addOtherName() {
+        guard let name = pendingOtherName else { return }
+        Haptics.select()
+        draft.alsoKnownAs.append(name)
+        newOtherName = ""
+        focus = .otherName
     }
 
     // MARK: - Logo and links
