@@ -1,12 +1,12 @@
 # Screenshots
 
-Taken from a demo account. The companies, people and replies are made up.
+Aurora 2.0, taken from a demo account. The companies, people and replies are made up.
 Back to the [README](README.md).
 
 <table>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/home.png" alt="Home" width="300"><br><sub><b>Home.</b> Tracked companies, and a scheduled batch on the shelf.</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/company.png" alt="Company" width="300"><br><sub><b>Company.</b> Its mail domains, counts, and contacts split into Valid and Invalid; one with no name says so.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/company.png" alt="Company" width="300"><br><sub><b>Company.</b> Its mail domain, counts, the personalised line, and contacts split into Valid and Invalid; one with no name shows its address.</sub></td>
   </tr>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/compose.png" alt="Compose" width="300"><br><sub><b>Compose.</b> Recipients, a row of templates, and a deck of the actual mails.</sub></td>
@@ -27,5 +27,9 @@ Back to the [README](README.md).
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/status.png" alt="Status" width="300"><br><sub><b>Status.</b> The latest check as a timeline: done, running, still to come.</sub></td>
     <td align="center" width="50%"><img src="docs/screenshots/live-activity-lock.png" alt="Live Activity on the Lock Screen" width="300"><br><sub><b>Lock Screen.</b> The company the mail is going to, and who.</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/writing-help.png" alt="Writing help" width="300"><br><sub><b>Writing help.</b> Aurora Writer connected, what the text is for, and a box to say what to change.</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/live-activity-scheduled.png" alt="A scheduled batch ready to send" width="300"><br><sub><b>Ready to send.</b> A scheduled batch whose time has come, with Send Now.</sub></td>
   </tr>
 </table>

@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <img alt="Version 2.0" src="https://img.shields.io/badge/version-2.0-E8643A">
   <img alt="iOS 27" src="https://img.shields.io/badge/iOS-27-black?logo=apple">
   <img alt="SwiftUI" src="https://img.shields.io/badge/SwiftUI-Observation-orange?logo=swift">
   <img alt="Supabase" src="https://img.shields.io/badge/backend-Supabase-3ECF8E?logo=supabase&logoColor=white">
@@ -29,6 +30,26 @@ account, and reads the threads back to find replies and bounces. It is a
 SwiftUI app for iOS 27, backed by [Supabase](https://supabase.com), with mail
 sent and read through the Gmail API under Google OAuth.
 
+### What's new in 2.0
+
+- **A new look.** One retro motion-graphics style in place of the themes: a
+  warm black ground under film grain, cream type, a burnt-orange accent, and a
+  striped sun. The launch screen is an ident, and sending plays a short
+  full-screen "Queued" curtain.
+- **Writing help through Aurora Writer.** A shortcut of your own runs Apple
+  Intelligence's Use Model action to proofread, rewrite or draft, and every
+  change is shown word by word before it's applied.
+- **A personalised line per company.** `{Company-Personalised}` puts a
+  sentence you wrote about a company into every mail to people there.
+- **Fresher hiring.** Companies from the Fresher Hiring Ledger are flagged and
+  filterable, with their logos, websites, careers pages, hiring routes, stated
+  packages and the sources behind them.
+- **Sending you can leave.** The queue carries on in the background, never
+  mails anyone twice, and shows one Live Activity from the first mail to the
+  bounce check.
+- **Replies read from new mail only**, with a Status timeline of each check,
+  and **Export Data** to JSON or spreadsheets.
+
 ## Contents
 
 - [Features](#features)
@@ -40,6 +61,7 @@ sent and read through the Gmail API under Google OAuth.
   - [Reply tracking](#reply-tracking)
   - [Bounces](#bounces)
   - [Greetings](#greetings)
+  - [Writing help](#writing-help)
 - [Architecture](#architecture)
 - [Design system](#design-system)
 - [Testing](#testing)
@@ -53,6 +75,8 @@ sent and read through the Gmail API under Google OAuth.
 |---|---|
 | **Companies and contacts** | A company can have several mail domains (`stripe.com`, `stripe.dev`). Adding a contact looks up the domain of their address and suggests the company already on file, so the same company isn't entered twice. |
 | **Templates** | Subject and body with placeholders (`{Receiver-Name}`, `{Receiver-Company}`, `{Sender-College}`, `{Resume-Link}`, …) filled from the contact and your profile. The editor flags misspelled placeholders and ones that would come out blank. A template that names one company in plain text is labelled with it, and compose warns before it goes to anyone else. |
+| **Personalised lines** | A sentence of your own for each company ("I've been following Juniper's move to edge regions…"), written on the company's page. `{Company-Personalised}` puts it into mails to anyone there; a company without one gets the mail without it. |
+| **Writing help** | The sparkles button in the template, mail and company-line editors: Proofread, Rewrite, Friendlier, Professional, Shorter, Expand, your own instruction, or a first draft of a company line. It runs through **Aurora Writer**, a shortcut you make once, and every answer is shown as a word-by-word change to keep or throw away, with Undo after. Placeholders are checked on the way back. See [Writing help](#writing-help). |
 | **Greetings** | "Hi {Receiver-Name}," greets people by a name that's plainly there: the contact's name field, the name they signed a reply with, what your own mail calls their address, or an address that spells the given name out (`anjali.kumari@`). Nothing is guessed: otherwise the mail opens with a plain "Hi," and the app shows "Name not detected". See [Greetings](#greetings). |
 | **Compose** | One screen per batch: who it's going to, a row of templates, and a swipeable deck of the actual mails. Any mail can be edited by hand or moved to another template. Batches have no size limit. |
 | **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. When Gmail rate-limits a send or the connection drops, the queue waits and carries on by itself. Nobody is ever mailed twice: a mail Gmail may already have is looked for in Sent before it can go again, and tests interrupt the queue at every stage to prove it. |
@@ -660,6 +684,38 @@ never count. The catalog follows the same rule: a contact whose name can't be
 read this way has an empty name field, the "name not detected" state (see
 [`verify_names.py`](scripts/company_verification/README.md#name-pass-verify_namespy)).
 
+### Writing help
+
+<p align="center">
+  <img src="docs/screenshots/writing-help.png" alt="Writing help on a template, with Aurora Writer connected" width="300">
+</p>
+
+All written text comes from **Aurora Writer**, a shortcut in the Shortcuts app
+that the user makes once (Settings → Help has the steps, and writing help
+links to them until it's connected). It's a Use Model action set to Apple
+Intelligence's Cloud model, fed the shortcut's input and ending in Stop and
+Output. The app's own on-device generation and the system's Writing Tools were
+both tried and dropped: the small model copied its examples and lost
+greetings, and Writing Tools changed text with no review. Writing Tools are
+now turned off app-wide.
+
+A request goes out as an x-callback-url (`ShortcutsWriter`). Shortcuts runs
+it and opens `aurora://writing/<id>/done?result=…` with the answer, and the
+Dynamic Island shows the request as writing while Aurora is behind Shortcuts.
+Coming back with nothing sent back gives the request up with a reason ("Didn't
+send an answer back"), and the setup screen's Test the Shortcut runs one
+request end to end so a wrong name or missing step shows up before it's used.
+
+`WritingAssistant` tells the model where the text goes (a template that goes
+to many recruiters, one mail, or a company line) and what must survive. Each
+preset says what to keep as well as what to change, since a bare "rewrite"
+drops greetings and invents subject lines. An answer that loses or renames a
+`{placeholder}` is sent back once with the list it must keep, and refused if it
+still doesn't. What comes back is shown as a word-by-word comparison
+(`ChangeComparison`) to keep or discard, and a kept change can be undone until
+the text is edited again. `Tests/WritingActionTests.swift` and
+`Tests/TextDiffTests.swift` cover the rules and the comparison.
+
 ## Architecture
 
 | Layer | Where |
@@ -750,14 +806,13 @@ notice. The Python scripts below have their own `unittest` suites.
 |---|---|
 | [`scripts/fresher_ledger/`](scripts/fresher_ledger/README.md) | Imports the Fresher Hiring Ledger: matches each of its companies to the catalog (or adds it), flags it, and loads its links, routes and sources; crawls company websites for logos and careers pages. Dry run first; backs up before writing. |
 | [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. Backs up before every change. |
-| `scripts/app_icon/make_icon.swift` | Draws the app icon, one rising curve from rose to amber with a glow behind it, and its tinted variant. Usage is at the top of the file. |
-| `scripts/app_icons/make_icons.swift` | Draws the app icon and the README logo from the app's mark. |
+| `scripts/app_icons/make_icons.swift` | Draws the app icon (light, dark and tinted) and the README logo from the app's mark, a dawn with a rising line. |
 
 ## Project layout
 
 ```
 Aurora/
-├─ AuroraApp.swift             App entry; installs the notification delegate
+├─ AuroraApp.swift             App entry; installs the notification delegate, turns Writing Tools off
 ├─ AppConfig.swift             Supabase + Google OAuth configuration
 ├─ Models/                     Stores, Supabase/Gmail access, mail queue, reply sync, greetings
 ├─ Views/                      SwiftUI screens
@@ -768,7 +823,6 @@ Shared/                        Code compiled into both the app and the extension
 Tests/                         Standalone Swift test programs
 scripts/fresher_ledger/        Fresher Hiring Ledger import and website crawl (Python)
 scripts/company_verification/  Catalog verification pipeline (Python)
-scripts/app_icon/              Draws the app icon (Swift, Core Graphics)
 scripts/app_icons/             Draws the app icon from the mark (Swift)
 docs/screenshots/              Screenshots used in this README and SCREENSHOTS.md
 ```
