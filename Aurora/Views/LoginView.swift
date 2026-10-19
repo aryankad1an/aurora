@@ -4,23 +4,28 @@ import SwiftUI
 /// everything (companies, sent state, profile) is keyed to the signed-in address.
 struct LoginView: View {
     @Environment(GmailAuthStore.self) private var gmail
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
 
-            // The theme's mark, in a disc of its accent.
-            Image(systemName: ThemeStore.shared.current.mark)
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 76, height: 76)
-                .background(Color.clay, in: Circle())
+            // The theme's mark, on a raised tile like the app icon's.
+            AuroraMark(theme: ThemeStore.shared.current)
+                .padding(12)
+                .frame(width: 88, height: 88)
+                .background(Color.paperRaised, in: .rect(cornerRadius: 22, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Color.hairline, lineWidth: 1))
                 // The one piece of idle motion in the app, and only here: the
                 // sign-in screen has nothing else on it, and a mark that breathes
                 // says the app is running before anything has been tapped.
-                .symbolEffect(.bounce.up.byLayer, options: .repeat(.periodic(delay: 2.4)))
+                .phaseAnimator(reduceMotion ? [false] : [false, true]) { mark, lifted in
+                    mark.scaleEffect(lifted ? 1.03 : 1)
+                } animation: { _ in .easeInOut(duration: 2.4) }
                 .scaleEffect(gmail.isConnecting ? 0.92 : 1)
                 .animation(Theme.Motion.bouncy, value: gmail.isConnecting)
+                .accessibilityHidden(true)
 
             VStack(spacing: 8) {
                 Text("Aurora")

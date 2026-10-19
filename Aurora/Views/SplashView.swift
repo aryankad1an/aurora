@@ -111,8 +111,8 @@ struct SplashView: View {
 /// the curve extends and the droplets glide in rather than jumping.
 private struct GraphGlassScene: View, Animatable {
     var progress: Double
-    /// The theme's glyph, floating in the lens.
-    let mark: String
+    /// The theme's mark, floating in the lens.
+    let mark: AuroraMark.Variant
     let isAnimated: Bool
     let isRevealed: Bool
 
@@ -231,13 +231,12 @@ private struct GraphGlassScene: View, Animatable {
         }
     }
 
-    /// The mark: a glass tile, tinted with the accent, with the theme's glyph
+    /// The mark: a glass tile, tinted with the accent, with the theme's mark
     /// floating in it.
     private func lens(time: Double) -> some View {
-        Image(systemName: mark)
-            .font(.system(size: 40, weight: .medium))
-            .foregroundStyle(Color.clay)
-            .rotationEffect(.degrees(-14 + 3 * sin(time * 1.3)))
+        AuroraMark(variant: mark, accent: .clay, bead: .ink, line: .inkMuted)
+            .frame(width: 64, height: 64)
+            .rotationEffect(.degrees(1.5 * sin(time * 1.3)))
             .offset(x: 1.5 * cos(time * 0.9), y: 2.5 * sin(time * 1.6))
             .frame(width: Self.lensSide, height: Self.lensSide)
             // Clear rather than regular glass: regular frosts what's behind it,

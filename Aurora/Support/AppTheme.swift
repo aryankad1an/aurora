@@ -36,10 +36,12 @@ struct AppTheme: Identifiable, Equatable {
     let tagline: String
     let palette: ThemePalette
     let motion: Motion
-    /// The mark: the glyph in the splash's lens and on the sign-in screen.
-    let mark: String
     /// The alternate app icon's name; nil is the primary icon.
     let iconName: String?
+
+    /// The theme's version of Aurora's mark: in the splash's lens, on the
+    /// sign-in screen, in the Live Activity and on the app icon.
+    var mark: AuroraMark.Variant { AuroraMark.Variant(rawValue: id.rawValue) ?? .aurora }
 
     /// The icon as an image the app can draw (alternate icons can't be read
     /// back from the bundle by name).
@@ -82,7 +84,7 @@ extension AppTheme {
             hairline: Color(hex: 0x27272C), grid: Color(hex: 0x17171B),
             accent: Color(hex: 0xE8794F), reply: Color(hex: 0x8CC47E), waiting: Color(hex: 0x8EA8CC),
             attention: Color(hex: 0xE0AA6E), danger: Color(hex: 0xF0705F)),
-        motion: .lines, mark: "paperplane.fill", iconName: nil)
+        motion: .lines, iconName: nil)
 
     /// Deep water, a teal crest.
     static let tide = AppTheme(
@@ -93,7 +95,7 @@ extension AppTheme {
             hairline: Color(hex: 0x18303A), grid: Color(hex: 0x0C1C22),
             accent: Color(hex: 0x3CC8C8), reply: Color(hex: 0x7FD89A), waiting: Color(hex: 0x86A8E6),
             attention: Color(hex: 0xE6B66E), danger: Color(hex: 0xF2706A)),
-        motion: .waves, mark: "water.waves", iconName: "AppIcon-Tide")
+        motion: .waves, iconName: "AppIcon-Tide")
 
     /// A green-phosphor terminal.
     static let phosphor = AppTheme(
@@ -104,7 +106,7 @@ extension AppTheme {
             hairline: Color(hex: 0x173020), grid: Color(hex: 0x0B170E),
             accent: Color(hex: 0x3BE477), reply: Color(hex: 0x5EE0D6), waiting: Color(hex: 0x9BB8A6),
             attention: Color(hex: 0xE8C35A), danger: Color(hex: 0xFF6B5E)),
-        motion: .candles, mark: "terminal.fill", iconName: "AppIcon-Phosphor")
+        motion: .candles, iconName: "AppIcon-Phosphor")
 
     /// Synthwave: magenta over a violet night.
     static let neon = AppTheme(
@@ -115,7 +117,7 @@ extension AppTheme {
             hairline: Color(hex: 0x2A1B44), grid: Color(hex: 0x150C26),
             accent: Color(hex: 0xFF3EA5), reply: Color(hex: 0x3EE6F0), waiting: Color(hex: 0x9C8CFF),
             attention: Color(hex: 0xFFB547), danger: Color(hex: 0xFF5470)),
-        motion: .neon, mark: "waveform.path.ecg", iconName: "AppIcon-Neon")
+        motion: .neon, iconName: "AppIcon-Neon")
 
     /// Cherry blossom on plum.
     static let bloom = AppTheme(
@@ -126,7 +128,7 @@ extension AppTheme {
             hairline: Color(hex: 0x33212A), grid: Color(hex: 0x1A1015),
             accent: Color(hex: 0xF48FB1), reply: Color(hex: 0x9AD7A0), waiting: Color(hex: 0xA9B6E8),
             attention: Color(hex: 0xF1C27D), danger: Color(hex: 0xFF6F6F)),
-        motion: .scatter, mark: "camera.macro", iconName: "AppIcon-Bloom")
+        motion: .scatter, iconName: "AppIcon-Bloom")
 
     /// Gold leaf on black.
     static let gilded = AppTheme(
@@ -137,7 +139,7 @@ extension AppTheme {
             hairline: Color(hex: 0x2C261B), grid: Color(hex: 0x15120C),
             accent: Color(hex: 0xE2B34F), reply: Color(hex: 0x9FC98A), waiting: Color(hex: 0x9DB3C9),
             attention: Color(hex: 0xD9935B), danger: Color(hex: 0xEE6A5A)),
-        motion: .radar, mark: "sparkle", iconName: "AppIcon-Gilded")
+        motion: .radar, iconName: "AppIcon-Gilded")
 }
 
 // MARK: - Store
@@ -197,5 +199,16 @@ final class ThemeStore {
         let app = UIApplication.shared
         guard app.supportsAlternateIcons, app.alternateIconName != name else { return }
         app.setAlternateIconName(name) { _ in }
+    }
+}
+
+// MARK: - Mark
+
+extension AuroraMark {
+    /// A theme's mark in its own colours: the rise in its accent, the bead in
+    /// its ink, the horizon and sun faint.
+    init(theme: AppTheme) {
+        self.init(variant: theme.mark, accent: theme.palette.accent, bead: theme.palette.ink,
+                  line: theme.palette.inkFaint)
     }
 }

@@ -55,11 +55,11 @@ private struct ThemeCard: View {
                         Capsule().fill(palette.inkMuted.opacity(0.7)).frame(width: 60, height: 6)
                     }
                     Spacer()
-                    Image(systemName: theme.mark)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white)
+                    AuroraMark(theme: theme)
+                        .padding(5)
                         .frame(width: 34, height: 34)
-                        .background(palette.accent, in: Circle())
+                        .background(palette.paperSunken, in: Circle())
+                        .overlay(Circle().strokeBorder(palette.hairline, lineWidth: 1))
                 }
                 .padding(10)
                 .background(palette.paperRaised.opacity(0.92),

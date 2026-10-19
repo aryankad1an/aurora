@@ -15,8 +15,8 @@ nonisolated struct SendActivityAttributes: ActivityAttributes {
     var accent: RGB
     var reply: RGB
     var attention: RGB
-    /// The theme's mark, drawn beside the title.
-    var mark: String
+    /// The theme's version of the mark, drawn while a mail is on its way.
+    var mark: AuroraMark.Variant
 
     struct RGB: Codable, Hashable {
         var red: Double

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Aurora's icon: a clay line rising out of a dawn to a bead" width="112">
+</p>
+
 <h1 align="center">Aurora</h1>
 
 <p align="center">

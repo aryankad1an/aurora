@@ -100,11 +100,13 @@ private struct Style {
     let accent: Color
     let reply: Color
     let attention: Color
+    let mark: AuroraMark.Variant
 
     init(_ attributes: SendActivityAttributes) {
         accent = Color(attributes.accent)
         reply = Color(attributes.reply)
         attention = Color(attributes.attention)
+        mark = attributes.mark
     }
 
     func tint(_ phase: SendActivityAttributes.ContentState.Phase) -> Color {
@@ -387,16 +389,24 @@ private struct Tile: View {
     }
 }
 
-/// The mark for what's happening.
+/// The mark for what's happening. While a mail is on its way it's Aurora's
+/// own mark, the line rising to its bead, in the theme's version.
 private struct Glyph: View {
     let phase: SendActivityAttributes.ContentState.Phase
     let style: Style
     var size: CGFloat = 20
 
     var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: size, weight: .semibold))
-            .foregroundStyle(style.tint(phase))
+        if phase == .sending {
+            // A touch larger than a symbol at the same point size, whose ink
+            // doesn't fill its box the way the mark's square does.
+            AuroraMark(variant: style.mark, accent: style.accent, bead: .white, line: .white.opacity(0.4))
+                .frame(width: size * 1.45, height: size * 1.45)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(style.tint(phase))
+        }
     }
 
     private var symbol: String {
