@@ -315,6 +315,9 @@ struct RootView: View {
                     mailQueue.isOpenRequested = true
                 } else if url.host() == "activity" {
                     mailQueue.isOpenRequested = true
+                } else if url.host() == "writing" {
+                    // The Aurora Writer shortcut's answer: aurora://writing/<request id>/done?result=…
+                    ShortcutsWriter.shared.receive(url)
                 }
             }
             .onChange(of: notifications.openedBatchID) { openTappedBatch() }

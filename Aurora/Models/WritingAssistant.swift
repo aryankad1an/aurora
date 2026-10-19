@@ -40,6 +40,14 @@ final class WritingAssistant {
     private(set) var previous: String?
     /// A reason the last request didn't go through, shown in the sheet.
     var failure: String?
+    /// Said with an answer that came another way than asked: the shortcut
+    /// didn't answer, so the on-device model wrote it.
+    private(set) var notice: String?
+    /// Whether the request is out with the shortcut, with nothing to stream.
+    private(set) var isInShortcuts = false
+    /// Set once the shortcut has failed during a request, so its second round
+    /// stays on the device rather than going back to Shortcuts.
+    private var shortcutFailed = false
 
     /// The cloud model, shared: creating one is cheap, but there's no reason to.
     static let model = PrivateCloudComputeLanguageModel()
@@ -57,12 +65,21 @@ final class WritingAssistant {
         #endif
     }()
 
+    /// Whether requests go to the user's Aurora Writer shortcut, which can use the
+    /// cloud model through Shortcuts' Use Model action (see `ShortcutsWriter`).
+    /// Only without the entitlement; the on-device model stands in when the
+    /// shortcut doesn't answer.
+    static var viaShortcuts: Bool { !usesCloud && ShortcutsWriter.isEnabled }
+
     /// How long an answer may take before the request is given up. A cloud call
     /// that never answers otherwise leaves the sheet spinning for good.
     static let timeout: Duration = .seconds(45)
 
     /// Nil when the model can be used; otherwise why not, in words for the user.
     static var unavailableReason: String? {
+        // The shortcut's model is the shortcut's business; when it fails, the
+        // on-device model's own reason is given then.
+        if viaShortcuts { return nil }
         guard usesCloud else {
             switch SystemLanguageModel.default.availability {
             case .available:
@@ -120,6 +137,8 @@ final class WritingAssistant {
     func perform(_ request: WritingRequest, on text: String, subject: DraftSubject? = nil,
                  known: [String] = [], senderFacts: String? = nil, attempt: Int = 0) async -> String? {
         failure = nil
+        notice = nil
+        shortcutFailed = false
         let original = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt: String
         let instructions: String
@@ -161,7 +180,8 @@ final class WritingAssistant {
             // A second try, once, when the answer lost or renamed a placeholder: the
             // reminder names exactly which ones must be there.
             for round in 0..<2 {
-                let reply = try await write(prompt + reminder, instructions: instructions, temperature: temperature)
+                let reply = try await write(prompt + reminder, instructions: instructions, temperature: temperature,
+                                            title: request.title, attempt: attempt)
                 var result = WritingAction.cleaned(reply)
                 if case .draft = request { result = WritingAction.cleanedLine(result) }
                 else if isLine { result = WritingAction.cleanedLine(result) }
@@ -192,6 +212,9 @@ final class WritingAssistant {
             @unknown default:
                 failure = "Apple Intelligence couldn't do that. Try again."
             }
+            return nil
+        } catch let error as ShortcutsWriter.Failure {
+            failure = error.message
             return nil
         } catch is TimedOut {
             failure = "Apple Intelligence didn't answer in time. Check your connection and try again."
@@ -234,9 +257,36 @@ final class WritingAssistant {
 
     private struct TimedOut: Error {}
 
+    /// Ask the shortcut when it's on, and the model on the device when it isn't
+    /// or doesn't answer (with `notice` saying so).
+    private func write(_ prompt: String, instructions: String, temperature: Double,
+                       title: String, attempt: Int) async throws -> String {
+        guard Self.viaShortcuts, !shortcutFailed else {
+            return try await writeHere(prompt, instructions: instructions, temperature: temperature)
+        }
+        // Use Model takes a single request, so the rules go first. It has no
+        // temperature, so Try Again asks for a different version in words.
+        let variation = attempt > 0 ? "\n\nWrite a noticeably different version from your previous answers." : ""
+        isInShortcuts = true
+        defer { isInShortcuts = false }
+        do {
+            let reply = try await ShortcutsWriter.shared.ask(instructions + "\n\n" + prompt + variation, title: title)
+            streamed = reply
+            return reply
+        } catch ShortcutsWriter.Failure.cancelled {
+            throw CancellationError()
+        } catch let error as ShortcutsWriter.Failure {
+            guard SystemLanguageModel.default.isAvailable else { throw error }
+            shortcutFailed = true
+            isInShortcuts = false
+            notice = error.message + " This was written by the smaller model on your iPhone instead."
+            return try await writeHere(prompt, instructions: instructions, temperature: temperature)
+        }
+    }
+
     /// Ask the model, publishing the answer in `streamed` as it arrives, and give up
     /// after `timeout` without an answer.
-    private func write(_ prompt: String, instructions: String, temperature: Double) async throws -> String {
+    private func writeHere(_ prompt: String, instructions: String, temperature: Double) async throws -> String {
         try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask { @MainActor [self] in
                 let session = Self.usesCloud

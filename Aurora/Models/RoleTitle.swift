@@ -4,7 +4,7 @@ import Foundation
 /// ledger, and many are a post's labelled fields run together ("Company Name:
 /// AgodaRole: Software Developer (Contract)"), with batches, degrees and "Apply
 /// Now" glued on. This keeps the role's name and leaves the stored text alone.
-enum RoleTitle {
+nonisolated enum RoleTitle {
     /// The roles worth showing, cleaned, in their order and without repeats.
     static func cleaned(_ roles: [String]) -> [String] {
         var seen = Set<String>()

@@ -156,7 +156,7 @@ final class SendLiveActivity {
                      resumesAt: batch.resumeAt, note: batch.stopNote, batchID: batch.id.uuidString)
     }
 
-    private static func rgb(_ color: Color) -> SendActivityAttributes.RGB {
+    static func rgb(_ color: Color) -> SendActivityAttributes.RGB {
         let resolved = color.resolve(in: EnvironmentValues())
         return .init(red: Double(resolved.red), green: Double(resolved.green), blue: Double(resolved.blue))
     }

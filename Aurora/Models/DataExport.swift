@@ -91,7 +91,7 @@ enum ExportError: LocalizedError {
 }
 
 /// Rows of JSON objects as comma-separated values.
-enum CSV {
+nonisolated enum CSV {
     /// The leading columns, when a table has them; every other column follows
     /// alphabetically, so the same table always comes out in the same order.
     private static let leading = ["id", "name", "company_id", "company_name", "email"]

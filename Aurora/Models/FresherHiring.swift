@@ -377,7 +377,7 @@ enum PostedDate {
 }
 
 /// Website and careers links: tidied when typed, checked before they're saved.
-enum CompanyLink {
+nonisolated enum CompanyLink {
     /// A link as an `https` URL with a real host, or nil. "stripe.com" becomes
     /// "https://stripe.com"; anything that isn't a web address is rejected.
     static func url(_ raw: String?) -> URL? {

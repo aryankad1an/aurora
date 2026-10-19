@@ -25,6 +25,9 @@ struct WritingAssistButton: View {
     var onApplied: () -> Void = {}
 
     @State private var assistant = WritingAssistant()
+    /// The open sheet's progress, kept here because the sheet's own state is
+    /// thrown away when the app comes back from Shortcuts.
+    @State private var session = WritingHelpSession()
     /// Set when the sheet was closed to open Writing Tools, which waits for it to go.
     @State private var openWritingToolsAfter = false
     @State private var showing = false
@@ -35,6 +38,7 @@ struct WritingAssistButton: View {
     var body: some View {
         Button {
             Haptics.tap()
+            session = WritingHelpSession()
             showing = true
         } label: {
             Image(systemName: "sparkles")
@@ -48,7 +52,7 @@ struct WritingAssistButton: View {
             Task { await writingTools?.open() }
         }) {
             WritingAssistSheet(text: $text, subject: subject, isTemplate: isTemplate, company: company,
-                               assistant: assistant, onApplied: {
+                               assistant: assistant, session: session, onApplied: {
                 applied = text
                 onApplied()
             }, onUseWritingTools: writingTools == nil ? nil : {
@@ -62,6 +66,36 @@ struct WritingAssistButton: View {
     }
 }
 
+/// Where one opening of the writing-help sheet has got to. It lives with the
+/// button rather than in the sheet: when Aurora comes back from Shortcuts the
+/// system rebuilds the sheet's content with fresh state, which would drop the
+/// request that's out and close the shortcut setup over it.
+@MainActor @Observable
+final class WritingHelpSession {
+    enum Stage: Equatable { case compose, working, review }
+    enum Tab: Hashable { case changes, result }
+
+    var stage = Stage.compose
+    /// The text as the sheet opened, which every comparison is made against.
+    var original = ""
+    /// The answer under review.
+    var candidate = ""
+    /// What the answer was made from, and what was asked, for Try Again.
+    var lastSource = ""
+    var lastRequest: WritingRequest?
+    /// How many times the same request has been asked again, so each Try Again
+    /// varies more.
+    var attempts = 0
+    var prompt = ""
+    var refinement = ""
+    var tab = Tab.changes
+    var job: Task<Void, Never>?
+    var burst: Date?
+    var loaded = false
+    var showingShortcutSetup = false
+    let shortcutTest = ShortcutTest()
+}
+
 /// The writing-help sheet: ask → watch it work → review what changed → approve.
 struct WritingAssistSheet: View {
     @Binding var text: String
@@ -70,34 +104,34 @@ struct WritingAssistSheet: View {
     /// The company a single mail is going to, for prompt ideas that name it.
     var company: String?
     let assistant: WritingAssistant
+    @Bindable var session: WritingHelpSession
     let onApplied: () -> Void
     /// Closes the sheet and opens the system's Writing Tools on the text instead.
     var onUseWritingTools: (() -> Void)?
 
-    private enum Stage: Equatable { case compose, working, review }
-    private enum Tab: Hashable { case changes, result }
+    private typealias Stage = WritingHelpSession.Stage
+    private typealias Tab = WritingHelpSession.Tab
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(ProfileStore.self) private var profileStore
-    @State private var stage = Stage.compose
-    /// The text as the sheet opened, which every comparison is made against.
-    @State private var original = ""
-    /// The answer under review.
-    @State private var candidate = ""
-    /// What the answer was made from, and what was asked, for Try Again.
-    @State private var lastSource = ""
-    @State private var lastRequest: WritingRequest?
-    /// How many times the same request has been asked again, so each Try Again
-    /// varies more.
-    @State private var attempts = 0
-    @State private var prompt = ""
-    @State private var refinement = ""
-    @State private var tab = Tab.changes
-    @State private var job: Task<Void, Never>?
-    @State private var burst: Date?
-    @State private var loaded = false
+
+    // The session's fields under their own names, so the views below read plainly.
+    private var stage: Stage { get { session.stage } nonmutating set { session.stage = newValue } }
+    private var original: String { get { session.original } nonmutating set { session.original = newValue } }
+    private var candidate: String { get { session.candidate } nonmutating set { session.candidate = newValue } }
+    private var lastSource: String { get { session.lastSource } nonmutating set { session.lastSource = newValue } }
+    private var lastRequest: WritingRequest? { get { session.lastRequest } nonmutating set { session.lastRequest = newValue } }
+    private var attempts: Int { get { session.attempts } nonmutating set { session.attempts = newValue } }
+    private var prompt: String { get { session.prompt } nonmutating set { session.prompt = newValue } }
+    private var refinement: String { get { session.refinement } nonmutating set { session.refinement = newValue } }
+    private var tab: Tab { get { session.tab } nonmutating set { session.tab = newValue } }
+    private var job: Task<Void, Never>? { get { session.job } nonmutating set { session.job = newValue } }
+    private var burst: Date? { get { session.burst } nonmutating set { session.burst = newValue } }
+
+    /// Read here so the sheet redraws when the shortcut is switched on or off.
+    @AppStorage(ShortcutsWriter.enabledKey) private var viaShortcuts = false
     @FocusState private var promptFocused: Bool
     @FocusState private var refineFocused: Bool
 
@@ -140,11 +174,12 @@ struct WritingAssistSheet: View {
                 }
             }
             .onAppear {
-                guard !loaded else { return }
-                loaded = true
+                guard !session.loaded else { return }
+                session.loaded = true
                 original = text
             }
             .messageAlert("Apple Intelligence", message: assistant.failure) { assistant.failure = nil }
+            .sheet(isPresented: $session.showingShortcutSetup) { ShortcutSetupView(test: session.shortcutTest) }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -168,10 +203,11 @@ struct WritingAssistSheet: View {
                 if let unavailable {
                     unavailableCard(unavailable)
                     if hasText { writingToolsRow }
+                    shortcutRow
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         sectionLabel(hasText ? "Tell it what to do" : (subject == nil ? "Tell it what to do" : "What should it say?"))
-                        promptField(text: $prompt, focus: $promptFocused,
+                        promptField(text: $session.prompt, focus: $promptFocused,
                                     placeholder: hasText ? "e.g. Mention I'm a final-year student"
                                                          : (subject == nil ? "Nothing to change yet"
                                                                            : "e.g. I built a project using their API")) {
@@ -203,6 +239,7 @@ struct WritingAssistSheet: View {
                             .foregroundStyle(Color.inkMuted)
                     }
                     if hasText { writingToolsRow }
+                    shortcutRow
                 }
             }
             .padding(.horizontal, Theme.Space.gutter)
@@ -227,6 +264,8 @@ struct WritingAssistSheet: View {
                     .foregroundStyle(Color.ink)
                 Text(WritingAssistant.usesCloud
                      ? "Apple's larger cloud model, the one Siri uses. Private Cloud Compute keeps your text private to the request."
+                     : viaShortcuts
+                     ? "Through your \(ShortcutsWriter.shortcutName) shortcut, with the model you chose in it. If it doesn't answer, the model on your iPhone writes instead."
                      : "The model on your iPhone. It's smaller than Siri's, so check what it changes. Writing Tools can use the larger one.")
                     .font(.footnote)
                     .foregroundStyle(Color.inkMuted)
@@ -353,6 +392,25 @@ struct WritingAssistSheet: View {
         }
     }
 
+    /// Setting up, or switching, the Aurora Writer shortcut: the way to Siri's
+    /// larger model without the cloud entitlement.
+    @ViewBuilder
+    private var shortcutRow: some View {
+        if !WritingAssistant.usesCloud {
+            Button {
+                Haptics.tap()
+                session.showingShortcutSetup = true
+            } label: {
+                Label(viaShortcuts ? "\(ShortcutsWriter.shortcutName) shortcut: on" : "Use Siri's larger model through Shortcuts",
+                      systemImage: "square.2.layers.3d")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.clay)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .secondaryButton()
+        }
+    }
+
     private var undoRow: some View {
         Button {
             if let old = assistant.undo() {
@@ -458,7 +516,7 @@ struct WritingAssistSheet: View {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
                     .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
-                Text(assistant.streamed.isEmpty ? "Reading…" : "Writing…")
+                Text(assistant.isInShortcuts ? "Writing in Shortcuts…" : assistant.streamed.isEmpty ? "Reading…" : "Writing…")
                     .contentTransition(.opacity)
             }
             .font(.subheadline.weight(.medium))
@@ -495,7 +553,13 @@ struct WritingAssistSheet: View {
                         summary(diff)
                     }
 
-                    SegmentedSelector(segments: [(Tab.changes, "Changes"), (Tab.result, "Result")], selection: $tab)
+                    if let notice = assistant.notice {
+                        Label(notice, systemImage: "iphone")
+                            .font(.footnote)
+                            .foregroundStyle(Color.inkMuted)
+                    }
+
+                    SegmentedSelector(segments: [(Tab.changes, "Changes"), (Tab.result, "Result")], selection: $session.tab)
 
                     Group {
                         if tab == .changes {
@@ -517,7 +581,7 @@ struct WritingAssistSheet: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         sectionLabel("Not quite? Say what to adjust")
-                        promptField(text: $refinement, focus: $refineFocused,
+                        promptField(text: $session.refinement, focus: $refineFocused,
                                     placeholder: "e.g. Keep it shorter") {
                             run(.custom(refinement), from: candidate)
                         }
