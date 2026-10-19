@@ -7,8 +7,9 @@
 Work lives in data_verification/links/ (git-ignored):
 
 * queue.json — every company missing a website or careers page, the user's
-  tracked companies first, then by number of contacts. Batch k is
-  queue[50k : 50k+50]. Companies whose links were edited in the app are left out.
+  tracked companies first, then by number of contacts. Batch 0 is the first 50;
+  every batch after it is the next 200 (see `bounds`). Companies whose links
+  were edited in the app are left out.
 * batch_<k>.json — what `probe` found for each company: the candidates and the
   evidence for them (status, final URL, page title, careers words on the page).
 * review_<k>.json — the second check, written by hand after reading the probe and
@@ -36,7 +37,8 @@ from crawl import ATS_HOSTS, PARKED, fetch, host_of, reg_of, words  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 WORK = REPO / "data_verification" / "links"
-BATCH = 50
+FIRST_BATCH = 50
+BATCH = 200
 USER = "realaryankadian@gmail.com"
 SOURCE = "verified_lookup"
 
@@ -70,7 +72,16 @@ def queue():
     (WORK / "queue.json").write_text(json.dumps(todo, indent=1))
     print(f"{len(todo)} companies to fill: {sum(c['need_website'] for c in todo)} websites, "
           f"{sum(c['need_careers'] for c in todo)} careers pages, "
-          f"{-(-len(todo) // BATCH)} batches of {BATCH}")
+          f"batch 0 of {FIRST_BATCH}, then {-(-max(len(todo) - FIRST_BATCH, 0) // BATCH)} batches of {BATCH}")
+
+
+def bounds(k):
+    """queue[start:end] for batch k: the first 50 were done on their own, then
+    batches of 200."""
+    if k == 0:
+        return 0, FIRST_BATCH
+    start = FIRST_BATCH + (k - 1) * BATCH
+    return start, start + BATCH
 
 
 def page(url):
@@ -174,13 +185,14 @@ def probe_one(c):
 
 
 def probe(k):
-    todo = json.loads((WORK / "queue.json").read_text())[k * BATCH:(k + 1) * BATCH]
+    start, end = bounds(k)
+    todo = json.loads((WORK / "queue.json").read_text())[start:end]
     with ThreadPoolExecutor(12) as pool:
         rows = list(pool.map(probe_one, todo))
     (WORK / f"batch_{k}.json").write_text(json.dumps(rows, indent=1))
     for i, r in enumerate(rows):
         w = r["website"]
-        print(f"{k * BATCH + i:4} {r['name'][:28]:28} "
+        print(f"{start + i:4} {r['name'][:28]:28} "
               f"W{'*' if r['need_website'] else ' '} {(w.get('candidate') or '-')[:40]:40} "
               f"[{w.get('status', '-')}{' blocked' if w.get('blocked') else ''}] "
               f"{(w.get('title') or '')[:30]:30} "
@@ -220,7 +232,9 @@ def apply(k):
     for cid, ans in review.items():
         row = before[cid]
         body = {}
-        if ans.get("website") and not row["website"] and row["website_source"] != "edited":
+        # "replace_website": the stored one was shown wrong (parked, someone else's).
+        if ans.get("website") and (not row["website"] or ans.get("replace_website")) \
+                and row["website_source"] != "edited":
             body.update(website=ans["website"], website_source=SOURCE)
         if ans.get("careers") and not row["careers_url"] and row["careers_source"] != "edited":
             body.update(careers_url=ans["careers"], careers_source=SOURCE)
