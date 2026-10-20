@@ -298,6 +298,12 @@ final class MailQueue {
                 set(mail.id, in: batch.id, to: delivery)
             }
         }
+        // The checks above showed "Checking Sent"; with no run to take the
+        // step over, it would stay on the shelf and the background task's title.
+        if !isRunning, step != nil {
+            step = nil
+            changed()
+        }
         save()
         await recordDeliveries()
         isReconciling = false

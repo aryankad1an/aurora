@@ -260,11 +260,12 @@ enum WritingAction: String, CaseIterable, Identifiable {
 
     // MARK: - Checks
 
+    private static let placeholder = try! NSRegularExpression(pattern: "\\{[^{}]*\\}")
+
     /// The `{…}` runs in `text`, sorted, for comparing before and after.
     static func placeholders(in text: String) -> [String] {
-        let regex = try! NSRegularExpression(pattern: "\\{[^{}]*\\}")
         let ns = text as NSString
-        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        return placeholder.matches(in: text, range: NSRange(location: 0, length: ns.length))
             .map { ns.substring(with: $0.range) }
             .sorted()
     }

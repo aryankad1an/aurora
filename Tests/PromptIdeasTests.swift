@@ -1,14 +1,10 @@
 import Foundation
 
 // The writing-help sheet's setup: the prompt ideas it offers for a template, a
-// mail and a company line, and the entitlement check that decides whether
-// requests go to the cloud model (without the entitlement, Foundation Models
-// stops the app rather than throwing). Pass a built Aurora.app/Aurora to also
-// read a real signature:
+// mail and a company line.
 //
 //   swiftc -parse-as-library Aurora/Models/PromptIdeas.swift Aurora/Models/RecipientName.swift \
-//     Aurora/Models/MailTemplate.swift Aurora/Support/Entitlements.swift \
-//     Tests/PromptIdeasTests.swift -o /tmp/pi && /tmp/pi [path/to/Aurora.app/Aurora]
+//     Aurora/Models/MailTemplate.swift Tests/PromptIdeasTests.swift -o /tmp/pi && /tmp/pi
 
 extension String {
     var sanitizedLineSeparators: String { self }
@@ -81,20 +77,6 @@ struct PromptIdeasTests {
         let edit = PromptIdeas.ideas(for: .line(company: "Stripe", sector: " "), text: "Loved Atlas.", profile: student)
         expect(edit.first, "Make it more specific to Stripe", "editing a line")
         expect(edit.contains { $0.hasPrefix("Tie it to") }, false, "a blank sector isn't offered")
-
-        // The entitlement check reads only a real Mach-O signature.
-        expect(Entitlements.entitlementsPlist(in: Data("not a binary".utf8)) == nil, true, "non-Mach-O data has no entitlements")
-        expect(Entitlements.entitlementsPlist(in: Data()) == nil, true, "empty data has no entitlements")
-        if CommandLine.arguments.count > 1 {
-            let url = URL(fileURLWithPath: CommandLine.arguments[1])
-            if let data = try? Data(contentsOf: url), let plist = Entitlements.entitlementsPlist(in: data),
-               let keys = (try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any])?.keys {
-                print("    signed with: " + keys.sorted().joined(separator: ", "))
-                expect(keys.contains("application-identifier"), true, "a device build's signature has its app id")
-            } else {
-                expect(false, true, "read the entitlements of \(url.lastPathComponent)")
-            }
-        }
 
         print(failures == 0 ? "All passed" : "\(failures) failed")
         exit(failures == 0 ? 0 : 1)

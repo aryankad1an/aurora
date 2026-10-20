@@ -398,16 +398,6 @@ final class JobStore {
 
     // MARK: - Catalog mutations (shared, upstream — change the DB for everyone)
 
-    /// Create a new company in the shared catalog. Not auto-tracked; it appears in
-    /// the Companies list (with "Show empty" on) ready for contacts.
-    func createCompany(name: String, sector: String? = nil, domains: [String] = []) async {
-        var details = CompanyDetails()
-        details.name = name
-        details.sector = sector ?? ""
-        details.domains = domains
-        await createCompany(details)
-    }
-
     /// Create a company with everything the form was given. A new company belongs
     /// in the sorted catalog, which only a reload can place, so it's fetched again
     /// quietly; the screen it was made from stays usable meanwhile.
@@ -478,16 +468,6 @@ final class JobStore {
             await refreshCompanies([id])
         }
         return true
-    }
-
-    /// Rename, re-sector, or change the domains of a catalog company (upstream,
-    /// for everyone), with a short window to undo it.
-    func updateCompany(id: String, name: String, sector: String?, domains: [String]) async {
-        guard var details = company(id: id)?.details else { return }
-        details.name = name
-        details.sector = sector ?? ""
-        details.domains = domains
-        await updateCompany(id: id, details: details)
     }
 
     /// Fresher details that couldn't be stored (the database predates their

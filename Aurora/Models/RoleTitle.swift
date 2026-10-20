@@ -16,7 +16,7 @@ nonisolated enum RoleTitle {
     static func clean(_ raw: String) -> String? {
         // Compatibility mapping turns styled letters (𝐑𝐨𝐥𝐞) and no-break spaces
         // into plain ones, so the labels below can be found.
-        var text = replacing(#"\s+"#, in: raw.precomposedStringWithCompatibilityMapping, with: " ")
+        var text = replacing(whitespace, in: raw.precomposedStringWithCompatibilityMapping, with: " ")
 
         // Labelled fields: the role's value if there is one, else whatever came
         // before the first label. Labels are often glued to the previous value.
@@ -45,15 +45,15 @@ nonisolated enum RoleTitle {
             text = (text as NSString).substring(to: glued.range.location)
         }
 
-        for (pattern, replacement) in tidying {
-            text = replacing(pattern, in: text, with: replacement)
+        for (regex, replacement) in tidying {
+            text = replacing(regex, in: text, with: replacement)
         }
         // A value the ledger cut off mid-parenthesis: "Software Engineer ( Backend,".
         if text.filter({ $0 == "(" }).count > text.filter({ $0 == ")" }).count,
            let open = text.lastIndex(of: "(") {
             text = String(text[..<open])
         }
-        text = replacing(#"[\s\-–|:,!*]+$"#, in: text, with: "")
+        text = replacing(trailing, in: text, with: "")
 
         if !text.isEmpty, text == text.lowercased() { text = titleCased(text) }
         return text.count < 2 ? nil : text
@@ -81,9 +81,13 @@ nonisolated enum RoleTitle {
     private static let gluedTail = try! NSRegularExpression(
         pattern: #"(?<=[a-z0-9)])(BE/|B\.?Tech|BCA\b|BSC\b|Degree\b|Expected\b|Greetings\b|Internal\b|Reposted\b|Freshers?\b|Apply Now|JobsNet|Jobsnet)"#)
 
+    private static let whitespace = try! NSRegularExpression(pattern: #"\s+"#)
+    private static let trailing = try! NSRegularExpression(pattern: #"[\s\-–|:,!*]+$"#)
+
     /// What surrounds the role: hiring calls, batches, experience and pay ranges,
-    /// job boards. In order, case-insensitive.
-    private static let tidying: [(String, String)] = [
+    /// job boards. In order, case-insensitive. Compiled once: `clean` runs for
+    /// every role a company page draws.
+    private static let tidying: [(NSRegularExpression, String)] = [
         (#"(?i)\s*apply now$"#, ""),
         (#"(?i)\s*for\s+(graduates\s*:?\s*)?\d{4}.*$"#, ""),
         (#"(?i)\s*\d{4}(\s*[/,&]\s*\d{2,4})*\s+(batch|passout).*$"#, ""),
@@ -105,7 +109,7 @@ nonisolated enum RoleTitle {
         (#"(?i)^(freshers?|new grads)\s*([-–:|]\s*|as\s+|for\s+|(?-i:(?=[A-Z])))"#, ""),
         (#"(?i)([\s.]*[-–|,/]?\s*\b(fresher(?:'|’)?s?( only)?|new( college)? grads|early careers|any batch)[\s/.]*)+$"#, ""),
         (#"(?i)\s+(batch( eligible)?|role)\.?$"#, ""),
-    ]
+    ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
 
     private static let acronyms: Set<String> = ["sde", "sdet", "ai", "ml", "qa", "ui", "ux", "aws", "it", "pm", "hr"]
 
@@ -116,9 +120,8 @@ nonisolated enum RoleTitle {
         }.joined(separator: " ")
     }
 
-    private static func replacing(_ pattern: String, in text: String, with template: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
-        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
+    private static func replacing(_ regex: NSRegularExpression, in text: String, with template: String) -> String {
+        regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
                                               withTemplate: template)
     }
 }

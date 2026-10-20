@@ -862,6 +862,16 @@ swiftc -parse-as-library -default-isolation MainActor \
   Tests/AlsoKnownAsTests.swift -o /tmp/aka && /tmp/aka
 swiftc -parse-as-library Aurora/Models/Sealing.swift Aurora/Models/KeyRing.swift \
   Tests/SealingTests.swift -o /tmp/seal && /tmp/seal
+swiftc -parse-as-library -default-isolation MainActor \
+  Aurora/Models/PersonalisedLineStore.swift Aurora/Models/RecipientName.swift \
+  Aurora/Models/MailTemplate.swift Aurora/Support/JSONFile.swift \
+  Tests/PersonalisedLineTests.swift -o /tmp/pl && /tmp/pl
+swiftc -parse-as-library Aurora/Models/PromptIdeas.swift Aurora/Models/RecipientName.swift \
+  Aurora/Models/MailTemplate.swift Tests/PromptIdeasTests.swift -o /tmp/pi && /tmp/pi
+swiftc -parse-as-library Aurora/Models/RoleTitle.swift Tests/RoleTitleTests.swift -o /tmp/rt && /tmp/rt
+swiftc -parse-as-library Aurora/Models/TextDiff.swift Tests/TextDiffTests.swift -o /tmp/td && /tmp/td
+swiftc -parse-as-library Aurora/Models/WritingAction.swift Aurora/Models/TextDiff.swift \
+  Tests/WritingActionTests.swift -o /tmp/wa && /tmp/wa
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift

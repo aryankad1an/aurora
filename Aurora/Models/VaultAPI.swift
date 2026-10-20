@@ -157,12 +157,6 @@ enum VaultAPI {
         try await SupabaseAPI.write(method: "DELETE", path: "vault_grants", query: query)
     }
 
-    /// Every grant into a vault but one key's, whoever holds them: after a
-    /// private-key change, the owner's old way in.
-    static func deleteOwnGrants(email: String, vaultID: String, except keyID: String) async throws {
-        try await deleteGrants(email: email, vaultID: vaultID, keeping: keyID)
-    }
-
     // MARK: Counting
 
     /// How many contacts a vault owns.

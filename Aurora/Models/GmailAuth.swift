@@ -88,6 +88,14 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
     /// `ReplySync` can find the thread later anyway.
     @discardableResult
     func send(to recipient: String, subject: String, body: String, fromName: String) async throws -> SentMessage? {
+        // The address goes into the headers as it is, so one that isn't a single
+        // plain address (an imported row with a line break and a `Bcc:` in it)
+        // is refused here, before anything is sent, and the queue marks it failed.
+        let recipient = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard MailDomain.isPlausibleAddress(recipient),
+              !recipient.contains(where: \.isNewline) else {
+            throw GmailAuthError.server("\(recipient) isn't a valid email address.")
+        }
         let token = try await accessToken()
         let raw = Self.mimeMessage(
             from: connectedEmail ?? "", fromName: fromName,
@@ -262,17 +270,24 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
 
     /// Build a base64url-encoded RFC 2822 message for the Gmail API's `raw` field.
     private static func mimeMessage(from: String, fromName: String, to: String, subject: String, body: String) -> String {
+        // A line break in a header value would start a header of its own.
+        let fromName = singleLine(fromName)
         let fromHeader = fromName.isEmpty ? from : "\(displayName(fromName)) <\(from)>"
         let headers = [
             "From: \(fromHeader)",
             "To: \(to)",
-            "Subject: \(encodeHeader(subject))",
+            "Subject: \(encodeHeader(singleLine(subject)))",
             "MIME-Version: 1.0",
             "Content-Type: text/plain; charset=\"UTF-8\"",
             "Content-Transfer-Encoding: 8bit"
         ]
         let message = headers.joined(separator: "\r\n") + "\r\n\r\n" + body
         return Data(message.utf8).base64URLEncodedString()
+    }
+
+    /// `text` with its line breaks turned into spaces.
+    private static func singleLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline).joined(separator: " ")
     }
 
     /// RFC 2047-encode a header value only when it contains non-ASCII characters.

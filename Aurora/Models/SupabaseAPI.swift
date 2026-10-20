@@ -467,24 +467,6 @@ enum SupabaseAPI {
         }
     }
 
-    /// Rename, re-sector, or replace the domains of a catalog company. Empty
-    /// sector clears the column; nil `domains` leaves them untouched.
-    static func updateCompany(id: String, name: String, sector: String?, domains: [String]? = nil) async throws {
-        var body: [String: Any] = [
-            "name": name,
-            "sector": (sector?.isEmpty ?? true) ? NSNull() : sector!
-        ]
-        if let domains, !domainsColumnMissing { body["domains"] = domains }
-        let query = [URLQueryItem(name: "id", value: "eq.\(id)")]
-        do {
-            try await write(method: "PATCH", path: "companies", query: query, body: body)
-        } catch SupabaseError.schemaOutOfDate where body["domains"] != nil {
-            domainsColumnMissing = true
-            body.removeValue(forKey: "domains")
-            try await write(method: "PATCH", path: "companies", query: query, body: body)
-        }
-    }
-
     /// Put back where a company's links came from — an undo restores a link
     /// to what it was, and it was not edited by hand.
     static func restoreLinkSources(id: String, website: String?, careers: String?) async throws {
@@ -753,15 +735,9 @@ enum SupabaseAPI {
     /// server's cap), all in flight at once once the total is known.
     static func fetchContactDirectory() async throws -> [(companyID: String, contact: Contact)] {
         let filter = readableContacts(under: nil)
-        var head = makeRequest(path: "recruiters", query: [URLQueryItem(name: "select", value: "id"), filter])
-        head.setValue("count=exact", forHTTPHeaderField: "Prefer")
-        head.setValue("0-0", forHTTPHeaderField: "Range")
-        head.setValue("items", forHTTPHeaderField: "Range-Unit")
-        let (_, response) = try await URLSession.shared.data(for: head)
-        guard let range = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Range"),
-              let total = range.split(separator: "/").last.flatMap({ Int($0) }) else {
-            throw SupabaseError.badResponse
-        }
+        // Checked like any other request: a refused count (an expired key, a
+        // pending migration) says why rather than "Unexpected response".
+        let total = try await count("recruiters", [filter])
         struct Row: Decodable {
             let companyID: String
             let contact: Contact
@@ -1042,6 +1018,12 @@ enum SupabaseAPI {
     /// What a failed request means, from its status and PostgREST's error body.
     private static func error(status: Int, body data: Data, request: URLRequest) -> SupabaseError {
         let body = String(data: data, encoding: .utf8) ?? "status \(status)"
+        // A foreign-key violation (23503) is a 409 too, and no duplicate: a
+        // write pointing at a row since deleted (a contact added to a company
+        // another phone just removed), or a delete of a row others still use.
+        if body.contains("\"23503\"") {
+            return request.httpMethod == "DELETE" ? .stillInUse : .missingParent
+        }
         // A unique-constraint violation (Postgres 23505) means the row already
         // exists — surface a friendly message instead of raw SQL.
         if status == 409 || body.contains("\"23505\"") {
@@ -1162,6 +1144,10 @@ enum SupabaseError: LocalizedError {
     case badResponse
     case duplicateCompany
     case duplicateContact
+    /// The row a write points at (a contact's company) has been deleted.
+    case missingParent
+    /// A delete refused because other rows still point at the row.
+    case stillInUse
     /// The database is missing a column this build uses — one of the migrations
     /// in the README hasn't been run yet.
     case schemaOutOfDate
@@ -1172,6 +1158,8 @@ enum SupabaseError: LocalizedError {
         case .badResponse: return "Unexpected response from the server."
         case .duplicateCompany: return "A company with that name already exists."
         case .duplicateContact: return "A contact with that email already exists at this company."
+        case .missingParent: return "That company has been deleted. Refresh and try again."
+        case .stillInUse: return "Other records still use this, so it can't be deleted. Refresh and try again."
         case .schemaOutOfDate:
             return "The database is missing columns this version of the app uses. Run the migrations in the README."
         case .server(let message): return message
