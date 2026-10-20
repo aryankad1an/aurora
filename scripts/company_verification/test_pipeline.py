@@ -274,8 +274,14 @@ class Pipeline(unittest.TestCase):
 class ApplySafety(unittest.TestCase):
     """apply() against a fake API: order of writes and the cascade guards."""
 
-    def run_apply(self, plan, db_recruiters_left=None, sends_found=None):
+    def run_apply(self, plan, db_recruiters_left=None, sends_found=None, links_left=0):
         calls = []
+
+        # Company links go through their own module (and the vault session):
+        # faked here too, so nothing reaches the network.
+        def move_links(src, dst):
+            calls.append(("MOVE", "company_links", src, dst))
+            return 0
 
         def write(method, table, filters=None, body=None, prefer=None):
             calls.append((method, table, json.dumps(filters, sort_keys=True), json.dumps(body, sort_keys=True)))
@@ -292,7 +298,10 @@ class ApplySafety(unittest.TestCase):
 
         st = vc.State({"companies": [company("a", "A"), company("b", "B")], "recruiters": [],
                        "mail_sends": [], "tracked_companies": [], "user_companies": []})
-        with mock.patch.object(vc.supabase, "write", write), mock.patch.object(vc.supabase, "get", get):
+        with mock.patch.object(vc.supabase, "write", write), mock.patch.object(vc.supabase, "get", get), \
+                mock.patch.object(vc.company_links, "move", move_links), \
+                mock.patch.object(vc.company_links, "count_at", lambda cid: links_left), \
+                mock.patch.object(vc.supabase, "_request", side_effect=AssertionError("network")):
             vc.apply(st, plan)
         return calls
 
@@ -309,6 +318,16 @@ class ApplySafety(unittest.TestCase):
         order = [(m, t) for m, t, _, _ in calls]
         self.assertLess(order.index(("PATCH", "recruiters")), order.index(("DELETE", "companies")))
         self.assertLess(order.index(("DELETE", "companies")), order.index(("PATCH", "companies")))
+
+    def test_company_links_move_before_their_company_is_deleted(self):
+        calls = self.run_apply(self.base_plan(delete_companies=["b"], fold_into={"b": "a"}))
+        order = [(m, t) for m, t, _, _ in calls]
+        self.assertIn(("MOVE", "company_links", "b", "a"), calls)
+        self.assertLess(order.index(("MOVE", "company_links")), order.index(("DELETE", "companies")))
+
+    def test_refuses_to_delete_a_company_that_still_has_links(self):
+        with self.assertRaises(SystemExit):
+            self.run_apply(self.base_plan(delete_companies=["b"], fold_into={"b": "a"}), links_left=1)
 
     def test_refuses_to_delete_a_company_that_still_has_contacts(self):
         with self.assertRaises(SystemExit):

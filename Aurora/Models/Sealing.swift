@@ -124,6 +124,11 @@ nonisolated enum Sealing {
     // stored format.
 
     static func contactContext(id: String, vaultID: String) -> String { "aurora.contact.v1|\(id.lowercased())|\(vaultID.lowercased())" }
+    /// A company's links in one vault: bound to the row, not the company, so
+    /// merging two companies moves them without opening them.
+    static func companyLinksContext(id: String, vaultID: String) -> String {
+        "aurora.companylinks.v1|\(id.lowercased())|\(vaultID.lowercased())"
+    }
     static func sendContext(id: String) -> String { "aurora.send.v1|\(id.lowercased())" }
     static func replyContext(id: String) -> String { "aurora.reply.v1|\(id.lowercased())" }
     static func templateContext(id: String) -> String { "aurora.template.v1|\(id.lowercased())" }

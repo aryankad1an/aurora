@@ -32,8 +32,11 @@ def load(path):
 
 load(HERE / "supabase_standin.sql")
 load(SCRIPTS / "vault_migration.sql")
+load(SCRIPTS / "company_links_migration.sql")   # before the rules: open, like the rest was
+load(SCRIPTS / "rls_bridge.sql")   # signed-in phones before the rules, as live
 load(SCRIPTS / "rls_migration.sql")
 load(SCRIPTS / "rls_migration.sql")   # safe to re-run
+load(SCRIPTS / "company_links_migration.sql")   # and after them, which gives the same rules
 
 def psql(sql):
     r = subprocess.run(["psql", "-h", "127.0.0.1", "-p", "54329", "-U", "postgres", "-tAq", "-v", "ON_ERROR_STOP=1"],
@@ -49,6 +52,11 @@ psql(f"""insert into vaults (id, code, owner_email) values ('00000000-0000-0000-
 update recruiters set vault_id='00000000-0000-0000-0000-0000000000b0' where id='{A2}';
 insert into vault_grants values ('{OWNER}', '{AURORA}', gen_random_uuid(), 'k'), ('{BOB}', '{AURORA}', gen_random_uuid(), 'k');""")
 BOBV = "00000000-0000-0000-0000-0000000000b0"
+# Company links: AURORA's for C1, and Bob's own for a company only he has links at.
+C4 = "00000000-0000-0000-0000-0000000000c4"
+psql(f"""insert into companies (id, name) values ('{C4}', 'Links Co');
+insert into company_links (company_id, vault_id, key_id, sealed) values
+  ('{C1}', '{AURORA}', gen_random_uuid(), 's'), ('{C4}', '{BOBV}', gen_random_uuid(), 's');""")
 
 failures = 0
 def case(who, sql, expect, label):
@@ -69,6 +77,10 @@ case("anon", "select count(*) from mail_sends", "ERR", "can't read sends")
 case("anon", n(f"update recruiters set is_valid=false where id='{A1}'"), "ERR", "can't touch contacts")
 case("anon", n("delete from vault_grants"), "ERR", "can't delete grants")
 case("anon", "select count(*) from companies_known_as('labs')", "ERR", "can't search other names")
+case("anon", "select count(*) from company_links", "ERR", "can't read company links")
+case("anon", n("delete from admins"), "ERR", "can't rewrite admins")
+case(OWNER, "select count(*) from admins", "ERR", "nor can anyone signed in")
+case("service", "select count(*) from admins", 1, "only the secret key reaches admins")
 
 print("owner")
 case(OWNER, "select count(*) from mail_sends", 1, "reads only their own sends")
@@ -90,6 +102,11 @@ case(OWNER, n(f"delete from companies where id='{C2}'"), 0, "can't delete a comp
 case(OWNER, n(f"update companies set sector='Tech' where id='{C2}'"), 1, "corrects the shared catalog")
 case(OWNER, n(f"delete from companies where id='{C3}'"), 1, "deletes a company no one else uses")
 case(OWNER, n("insert into companies (name) values ('New Co')"), 1, "adds a company")
+case(OWNER, "select count(*) from company_links", 1, "reads only their own vault's company links")
+case(OWNER, n(f"insert into company_links (company_id, vault_id, key_id, sealed) values ('{C2}', '{AURORA}', gen_random_uuid(), 's')"), 1, "adds company links to their vault")
+case(OWNER, n(f"insert into company_links (company_id, vault_id, key_id, sealed) values ('{C2}', '{BOBV}', gen_random_uuid(), 's')"), "ERR", "can't add links to Bob's vault")
+case(OWNER, n(f"update company_links set sealed='x' where vault_id='{BOBV}'"), 0, "can't change Bob's links")
+case(OWNER, n(f"delete from companies where id='{C4}'"), 0, "can't delete a company holding Bob's links")
 
 print("importer (Bob, holds a key to AURORA)")
 case(BOB, f"select count(*) from recruiters where vault_id='{AURORA}'", 2, "reads AURORA's sealed contacts")
@@ -105,9 +122,14 @@ case(BOB, n(f"insert into mail_sends (user_email, subject, body) values ('{OWNER
 case(BOB, n(f"update mail_sends set body='x' where user_email='{OWNER}'"), 0, "can't change the owner's sends")
 case(BOB, n(f"delete from tracked_companies where user_email='{BOB}'"), 1, "untracks his own company")
 case(BOB, "select count(*) from companies_known_as('labs')", 1, "searches other names")
+case(BOB, "select count(*) from company_links", 3, "reads AURORA's company links and his own")
+case(BOB, n(f"update company_links set sealed='mine' where vault_id='{AURORA}'"), 0, "can't change AURORA's links")
+case(BOB, n(f"insert into company_links (company_id, vault_id, key_id, sealed) values ('{C3}', '{AURORA}', gen_random_uuid(), 's')"), "ERR", "can't add links to AURORA")
+case(BOB, n(f"update company_links set sealed='new' where vault_id='{BOBV}'"), 1, "changes his own links")
 
 print("outsider (Carol, no key)")
 case(CAROL, n(f"update recruiters set is_valid=true where id='{A1}'"), 0, "can't mark a contact she can't read")
+case(CAROL, "select count(*) from company_links", 0, "reads no one's company links")
 case(CAROL, "select count(*) from vaults where code='AURORA'", 1, "looks a vault up by its code")
 case(CAROL, n(f"insert into vaults (code, owner_email) values ('CAROL', '{CAROL}')"), 1, "makes her own vault")
 case(CAROL, n(f"insert into vaults (code, owner_email) values ('FAKE', '{BOB}')"), "ERR", "can't make a vault in Bob's name")
@@ -120,7 +142,7 @@ case("service", "select count(*) from mail_sends", 2, "and read everything")
 
 print("rollback")
 load(SCRIPTS / "rls_rollback.sql")
-case("anon", "select count(*) from companies", 3, "the bare key reads again")
+case("anon", "select count(*) from companies", 4, "the bare key reads again")
 load(SCRIPTS / "rls_migration.sql")
 case("anon", "select count(*) from companies", "ERR", "and is refused once it's re-applied")
 

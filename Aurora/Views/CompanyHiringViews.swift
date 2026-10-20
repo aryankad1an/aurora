@@ -90,6 +90,8 @@ extension HiringRoute {
 struct HiringPanel: View {
     let job: Job
     let sources: [CompanySource]?
+    /// Its LinkedIn, X and Facebook pages, from the vault; nil until loaded.
+    var socialLinks: KeyRing.CompanyLinks?
     var onEdit: () -> Void
     var onShowSources: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -107,6 +109,9 @@ struct HiringPanel: View {
                          provenance: LinkProvenance.label(job.websiteSource), onAdd: onEdit)
                 LinkTile(title: "Careers", systemImage: "briefcase.fill", url: job.careersLink,
                          provenance: LinkProvenance.label(job.careersSource), onAdd: onEdit)
+            }
+            if let shown = socialLinks?.shown, !shown.isEmpty {
+                SocialLinksRow(links: shown)
             }
 
             if showsPackage || !facts.isEmpty {
@@ -179,6 +184,30 @@ struct HiringPanel: View {
             list.append(("Roles", Text(roles.joined(separator: ", "))))
         }
         return list
+    }
+}
+
+/// A company's LinkedIn, X and Facebook pages, one chip each, under its
+/// website and careers tiles.
+private struct SocialLinksRow: View {
+    let links: [(title: String, url: URL)]
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        WrappingHStack(spacing: 6, lineSpacing: 6) {
+            ForEach(links, id: \.title) { link in
+                Button {
+                    Haptics.tap()
+                    openURL(link.url)
+                } label: {
+                    TagChip(text: link.title, systemImage: "arrow.up.right", tint: .clay)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(link.title) page")
+                .accessibilityHint(CompanyLink.display(link.url))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

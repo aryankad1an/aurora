@@ -48,6 +48,7 @@ struct VaultVectors {
 
         let contexts: [String: String] = [
             "contact": Sealing.contactContext(id: id, vaultID: vaultID),
+            "company_links": Sealing.companyLinksContext(id: id, vaultID: vaultID),
             "send": Sealing.sendContext(id: id),
             "reply": Sealing.replyContext(id: id),
             "template": Sealing.templateContext(id: id),
@@ -66,14 +67,31 @@ struct VaultVectors {
         }
 
         let full = KeyRing.ContactFields(name: "Maya Rao", email: "maya.rao@example.com", position: "Talent Partner",
-                                         phone: "+91 98765 43210", greetingName: "Maya")
+                                         phone: "+91 98765 43210", greetingName: "Maya",
+                                         linkedIn: "https://www.linkedin.com/in/maya-rao-example",
+                                         location: "Pune, Maharashtra, India")
         let sparse = KeyRing.ContactFields(name: "Zoë Ünal", email: "zoe/unal@example.com", position: nil,
                                            phone: nil, greetingName: nil)
+        let noAddress = KeyRing.ContactFields(name: "Ravi Menon", email: nil, position: "Recruiter", phone: nil,
+                                              greetingName: nil, linkedIn: "https://www.linkedin.com/in/ravi-menon-example",
+                                              location: nil)
         var contacts: [[String: Any]] = []
-        for fields in [full, sparse] {
+        for fields in [full, sparse, noAddress] {
             contacts.append(["id": id, "vault_id": vaultID, "fields": fieldsJSON(fields),
                              "sealed": try Sealing.seal(json: fields, with: key,
                                                         context: Sealing.contactContext(id: id, vaultID: vaultID))])
+        }
+
+        let linkSets = [
+            KeyRing.CompanyLinks(linkedIn: "https://www.linkedin.com/company/acme-example",
+                                 x: "https://x.com/acme_example", facebook: "https://www.facebook.com/AcmeExample"),
+            KeyRing.CompanyLinks(linkedIn: nil, x: "https://x.com/zoe_example", facebook: nil),
+        ]
+        var companyLinks: [[String: Any]] = []
+        for links in linkSets {
+            companyLinks.append(["id": id, "vault_id": vaultID, "links": linksJSON(links),
+                                 "sealed": try Sealing.seal(json: links, with: key,
+                                                            context: Sealing.companyLinksContext(id: id, vaultID: vaultID))])
         }
 
         // Derived keys, including the normalisation's edges: Unicode spaces
@@ -105,6 +123,7 @@ struct VaultVectors {
 
         let out: [String: Any] = [
             "key_hex": hex(raw(key)), "contexts": contexts, "seals": seals, "contacts": contacts,
+            "company_links": companyLinks,
             "derived": derived,
             "vault": ["row": vault, "private_key": privateKey, "vault_key_hex": hex(raw(vaultKey))],
         ]
@@ -115,13 +134,19 @@ struct VaultVectors {
 
     static func fieldsJSON(_ f: KeyRing.ContactFields) -> [String: Any] {
         ["name": f.name ?? NSNull(), "email": f.email ?? NSNull(), "position": f.position ?? NSNull(),
-         "phone": f.phone ?? NSNull(), "greeting_name": f.greetingName ?? NSNull()]
+         "phone": f.phone ?? NSNull(), "greeting_name": f.greetingName ?? NSNull(),
+         "linkedin": f.linkedIn ?? NSNull(), "location": f.location ?? NSNull()]
+    }
+
+    static func linksJSON(_ l: KeyRing.CompanyLinks) -> [String: Any] {
+        ["linkedin": l.linkedIn ?? NSNull(), "x": l.x ?? NSNull(), "facebook": l.facebook ?? NSNull()]
     }
 
     // MARK: Swift opens what Python sealed
 
     /// Reads {"key_hex", "seals": [{plaintext_hex, context, sealed}],
-    /// "contacts": [{id, vault_id, fields, sealed}], "vault": {row, private_key, vault_key_hex},
+    /// "contacts": [{id, vault_id, fields, sealed}], "company_links": [{id, vault_id, links, sealed}],
+    /// "vault": {row, private_key, vault_key_hex},
     /// "rejects": [{sealed, context}]} and prints {"ok": Bool, "failures": [...]}.
     static func open() throws {
         let input = try JSONSerialization.jsonObject(with: FileHandle.standardInput.readDataToEndOfFile()) as! [String: Any]
@@ -141,6 +166,16 @@ struct VaultVectors {
                 failures.append("contact \(id) didn't open"); continue
             }
             if !NSDictionary(dictionary: fieldsJSON(got)).isEqual(to: want) { failures.append("contact \(id) fields differ") }
+        }
+        for item in input["company_links"] as? [[String: Any]] ?? [] {
+            let id = item["id"] as! String, vaultID = item["vault_id"] as! String
+            guard let got = try? Sealing.open(KeyRing.CompanyLinks.self, from: item["sealed"] as! String, with: key,
+                                              context: Sealing.companyLinksContext(id: id, vaultID: vaultID)) else {
+                failures.append("company links \(id) didn't open"); continue
+            }
+            if !NSDictionary(dictionary: linksJSON(got)).isEqual(to: item["links"] as! [String: Any]) {
+                failures.append("company links \(id) differ")
+            }
         }
         if let vault = input["vault"] as? [String: Any] {
             let row = vault["row"] as! [String: Any]

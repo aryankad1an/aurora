@@ -63,6 +63,7 @@ class SwiftSealedOpensHere(unittest.TestCase):
         id_, vault, key_id, email = ("6F9619FF-8B86-D011-B42D-00C04FC964FF", "0E984725-C51C-4BF4-9960-E1C80E27ABA0",
                                      "8C2D1A7E-5B3F-4E21-9A0B-7D6C5E4F3A21", "Maya.Rao@Example.com")
         self.assertEqual(vc.contact_context(id_, vault), c["contact"])
+        self.assertEqual(vc.company_links_context(id_, vault), c["company_links"])
         self.assertEqual(vc.send_context(id_), c["send"])
         self.assertEqual(vc.reply_context(id_), c["reply"])
         self.assertEqual(vc.template_context(id_), c["template"])
@@ -78,6 +79,13 @@ class SwiftSealedOpensHere(unittest.TestCase):
     def test_contacts_open(self):
         for c in VECTORS["contacts"]:
             self.assertEqual(vc.open_contact(c["sealed"], self.key, c["id"], c["vault_id"]), c["fields"])
+
+    def test_company_links_open(self):
+        for c in VECTORS["company_links"]:
+            self.assertEqual(vc.open_company_links(c["sealed"], self.key, c["id"], c["vault_id"]), c["links"])
+        c = VECTORS["company_links"][0]
+        with self.assertRaises(vc.CannotOpen):  # a contact's context isn't a company's
+            vc.open_sealed(c["sealed"], self.key, vc.contact_context(c["id"], c["vault_id"]))
 
     def test_derived_keys_match(self):
         for d in VECTORS["derived"]:
@@ -116,7 +124,8 @@ class Roundtrip(unittest.TestCase):
         inner = json.loads(vc.open_sealed(sealed, key, vc.contact_context(rid, vid)))
         self.assertEqual(inner, {"n": "A B", "e": "a@x.com"})
         self.assertEqual(vc.open_contact(sealed, key, rid, vid),
-                         {"name": "A B", "email": "a@x.com", "position": None, "phone": None, "greeting_name": None})
+                         {"name": "A B", "email": "a@x.com", "position": None, "phone": None, "greeting_name": None,
+                          "linkedin": None, "location": None})
 
     def test_each_seal_uses_a_fresh_nonce(self):
         key = vc.new_key()
@@ -168,18 +177,26 @@ class PythonSealedOpensInSwift(unittest.TestCase):
         seals = [{"plaintext_hex": t.encode().hex(), "context": vc.send_context(rid),
                   "sealed": vc.seal(t.encode(), key, vc.send_context(rid))} for t in texts]
         fields = [{"name": "Maya Rao", "email": "maya.rao@example.com", "position": "Talent Partner",
-                   "phone": "+91 98765 43210", "greeting_name": "Maya"},
+                   "phone": "+91 98765 43210", "greeting_name": "Maya",
+                   "linkedin": "https://www.linkedin.com/in/maya-rao-example", "location": "Pune, Maharashtra, India"},
                   {"name": "Zoë Ünal", "email": "zoe/unal@example.com", "position": None, "phone": None,
-                   "greeting_name": None}]
+                   "greeting_name": None, "linkedin": None, "location": None},
+                  {"name": "Ravi Menon", "email": None, "position": "Recruiter", "phone": None,
+                   "greeting_name": None, "linkedin": "https://www.linkedin.com/in/ravi-menon-example", "location": None}]
         contacts = [{"id": rid, "vault_id": vid, "fields": f, "sealed": vc.seal_contact(f, key, rid, vid)} for f in fields]
         salt, private = os.urandom(16), "  correct horse battery staple "
         vault_key = vc.new_key()
         row = {"id": vid, "key_id": kid, "kdf_salt": base64.b64encode(salt).decode(), "kdf_rounds": 1000,
                "sealed_key": vc.wrap(vault_key, vc.derive_key(private, salt, 1000), vc.vault_key_context(vid, kid))}
+        link_sets = [{"linkedin": "https://www.linkedin.com/company/acme-example", "x": "https://x.com/acme_example",
+                      "facebook": None}, {"linkedin": None, "x": None, "facebook": "https://www.facebook.com/Zoe"}]
+        company_links = [{"id": rid, "vault_id": vid, "links": l, "sealed": vc.seal_company_links(l, key, rid, vid)}
+                         for l in link_sets]
         rejects = [{"sealed": contacts[0]["sealed"], "context": vc.contact_context("other", vid), "why": "moved row"},
                    {"sealed": seals[1]["sealed"], "context": vc.reply_context(rid), "why": "other context"}]
         out = json.loads(self.swift("open", stdin=json.dumps({
-            "key_hex": key.hex(), "seals": seals, "contacts": contacts, "rejects": rejects,
+            "key_hex": key.hex(), "seals": seals, "contacts": contacts, "company_links": company_links,
+            "rejects": rejects,
             "vault": {"row": row, "private_key": private, "vault_key_hex": vault_key.hex()}})))
         self.assertEqual(out, {"ok": True, "failures": []})
 
@@ -191,6 +208,8 @@ class PythonSealedOpensInSwift(unittest.TestCase):
         key = bytes.fromhex(fresh["key_hex"])
         for c in fresh["contacts"]:
             self.assertEqual(vc.open_contact(c["sealed"], key, c["id"], c["vault_id"]), c["fields"])
+        for c in fresh["company_links"]:
+            self.assertEqual(vc.open_company_links(c["sealed"], key, c["id"], c["vault_id"]), c["links"])
 
 
 if __name__ == "__main__":

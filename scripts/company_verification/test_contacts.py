@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import company_links
 import contacts
 import supabase
 import vault_crypto
@@ -82,7 +83,13 @@ class FakePostgREST:
         self.writes.append((method, table, copy.deepcopy(filters), copy.deepcopy(body)))
         if method == "POST":
             got = []
+            conflict = (filters or {}).get("on_conflict", "").split(",") if "merge-duplicates" in prefer else []
             for b in body if isinstance(body, list) else [body]:
+                same = [r for r in rows if conflict and all(r.get(c) == b.get(c) for c in conflict)]
+                if same:   # an upsert: the row takes every column sent, its id too
+                    same[0].update(b)
+                    got.append(dict(same[0]))
+                    continue
                 row = {"id": f"gen-{len(rows)}", **b}
                 if any(r["id"] == row["id"] for r in rows):
                     raise supabase.APIError("HTTP 409: duplicate key")
@@ -147,6 +154,7 @@ class SealedPath(unittest.TestCase):
     def test_rows_open_into_the_shape_the_scripts_always_read(self):
         rows = {r["id"]: r for r in contacts.read_live()}
         self.assertEqual(rows["r1"], {"id": "r1", "company_id": "c1", "is_valid": True, "name": "Maya Rao",
+                                      "linkedin": None, "location": None,
                                       "email": "maya.rao@example.com", "position": None, "phone": None,
                                       "greeting_name": "Maya"})
         self.assertEqual(rows["r2"]["name"], "")
@@ -170,7 +178,7 @@ class SealedPath(unittest.TestCase):
                                 "greeting_name": None, "position": None, "phone": None, "is_valid": True}])
         row, fields = self.stored_fields(got[0]["id"])
         self.assertEqual((row["vault_id"], row["key_id"]), (VAULT_ID, KEY_ID))
-        self.assertTrue(all(row[f] is None for f in contacts.FIELDS))
+        self.assertTrue(all(row[f] is None for f in contacts.COLUMNS))
         self.assertEqual(fields["email"], "neha.mathur@example.com")
         self.assertEqual(fields["name"], "Neha Mathur")
         self.assertEqual(got[0]["id"], got[0]["id"].lower())   # made here: it's part of the seal
@@ -179,8 +187,28 @@ class SealedPath(unittest.TestCase):
         contacts.update("r1", {"name": "Maya R", "greeting_name": None})
         row, fields = self.stored_fields("r1")
         self.assertEqual(fields, {"name": "Maya R", "email": "maya.rao@example.com", "position": None,
-                                  "phone": None, "greeting_name": None})
+                                  "phone": None, "greeting_name": None, "linkedin": None, "location": None})
         self.assertIsNone(row["name"])
+
+    def test_linkedin_and_location_go_in_the_seal_only(self):
+        got = contacts.insert([{"company_id": "c9", "name": "Ravi Menon", "email": "", "position": "Recruiter",
+                                "linkedin": "https://www.linkedin.com/in/ravi-menon-example",
+                                "location": "Pune, Maharashtra, India", "is_valid": True}])
+        row, fields = self.stored_fields(got[0]["id"])
+        self.assertEqual(fields["linkedin"], "https://www.linkedin.com/in/ravi-menon-example")
+        self.assertEqual(fields["location"], "Pune, Maharashtra, India")
+        self.assertIsNone(fields["email"])                       # no address: left out of the seal
+        self.assertFalse({"linkedin", "location"} & set(row))    # no such columns
+        contacts.update(got[0]["id"], {"location": "Mumbai, Maharashtra, India"})
+        _, fields = self.stored_fields(got[0]["id"])
+        self.assertEqual((fields["location"], fields["linkedin"], fields["position"]),
+                         ("Mumbai, Maharashtra, India", "https://www.linkedin.com/in/ravi-menon-example", "Recruiter"))
+
+    def test_linkedin_has_nowhere_to_go_unsealed(self):
+        plain = contacts.Session(api=FakePostgREST({"recruiters": []}, migrated=False), environ={}, log=lambda m: None)
+        with self.assertRaises(SystemExit):
+            plain.insert([{"company_id": "c9", "name": "Ravi Menon", "linkedin": "linkedin.com/in/x"}])
+        plain.insert([{"company_id": "c9", "name": "Ravi Menon", "linkedin": None}])
 
     def test_update_of_a_row_the_app_has_not_sealed_seals_it(self):
         contacts.update("r4", {"greeting_name": "Asha"})
@@ -312,6 +340,71 @@ class SealedPath(unittest.TestCase):
         row, fields = self.stored_fields(log["recruiters"][0])
         self.assertEqual((fields["email"], fields["greeting_name"]), ("priya.nair@example.com", "Priya"))
         self.assertEqual((row["email"], row["name"], row["vault_id"]), (None, None, VAULT_ID))
+
+
+class CompanyLinks(unittest.TestCase):
+    """company_links.py: links only ever stored sealed, and kept through merges."""
+    OTHER = "11111111-2222-3333-4444-555555555555"
+
+    def setUp(self):
+        self.db = FakePostgREST({"vaults": [sealed_vault()], "company_links": []})
+        self.session = contacts.Session(api=self.db, environ={"AURORA_PRIVATE_KEY": PRIVATE_KEY},
+                                        prompt=lambda t: self.fail("prompted"), log=lambda m: None)
+        patcher = mock.patch.object(contacts, "_session", self.session)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def rows(self, cid=None):
+        return [r for r in self.db.tables["company_links"] if cid is None or r["company_id"] == cid]
+
+    def test_save_seals_and_a_second_save_updates_the_same_row(self):
+        company_links.save("c1", {"linkedin": "https://www.linkedin.com/company/acme"})
+        [row] = self.rows()
+        self.assertNotIn("acme", json.dumps(row))
+        self.assertEqual(vault_crypto.open_company_links(row["sealed"], VAULT_KEY, row["id"], VAULT_ID)["linkedin"],
+                         "https://www.linkedin.com/company/acme")
+        company_links.save("c1", {"linkedin": "https://www.linkedin.com/company/acme", "x": "https://x.com/acme"},
+                           row_id=row["id"])
+        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(company_links.read_live()["c1"]["x"], "https://x.com/acme")
+
+    def test_nothing_is_written_unsealed(self):
+        bare = contacts.Session(api=FakePostgREST({"vaults": [{**sealed_vault(), "key_id": None, "sealed_key": None}],
+                                                   "company_links": []}),
+                                environ={}, log=lambda m: None)
+        with self.assertRaises(SystemExit):
+            company_links.save("c1", {"x": "https://x.com/acme"}, s=bare)
+
+    def test_move_takes_the_row_across(self):
+        company_links.save("c1", {"x": "https://x.com/acme"})
+        self.assertEqual(company_links.move("c1", "c2"), 1)
+        self.assertEqual((self.rows("c1"), company_links.read_live()["c2"]["x"]), ([], "https://x.com/acme"))
+
+    def test_move_onto_our_own_links_merges_them_and_the_target_wins(self):
+        company_links.save("c1", {"x": "https://x.com/old", "facebook": "https://www.facebook.com/acme"})
+        company_links.save("c2", {"x": "https://x.com/acme"})
+        company_links.move("c1", "c2")
+        self.assertEqual(self.rows("c1"), [])
+        got = company_links.read_live()["c2"]
+        self.assertEqual((got["x"], got["facebook"]), ("https://x.com/acme", "https://www.facebook.com/acme"))
+
+    def test_move_refuses_where_both_hold_another_vaults_links(self):
+        self.db.tables["company_links"] += [
+            {"id": "l1", "company_id": "c1", "vault_id": self.OTHER, "key_id": KEY_ID, "sealed": "x"},
+            {"id": "l2", "company_id": "c2", "vault_id": self.OTHER, "key_id": KEY_ID, "sealed": "y"}]
+        with self.assertRaises(SystemExit):
+            company_links.move("c1", "c2")
+        self.assertEqual(len(self.rows("c1")), 1)
+
+    def test_other_vaults_links_are_counted_but_never_opened(self):
+        self.db.tables["company_links"].append(
+            {"id": "l1", "company_id": "c1", "vault_id": self.OTHER, "key_id": KEY_ID, "sealed": "x"})
+        self.assertEqual((company_links.count_at("c1"), company_links.read_live()), (1, {}))
+
+    def test_before_the_migration_there_are_none(self):
+        self.db.tables.pop("company_links")
+        self.assertEqual((company_links.read_live(), company_links.move("c1", "c2"), company_links.count_at("c1")),
+                         ({}, 0, 0))
 
 
 class PlainPath(unittest.TestCase):

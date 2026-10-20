@@ -23,6 +23,8 @@ struct ContactFormView: View {
     @State private var phone = ""
     @State private var position = ""
     @State private var greetingName = ""
+    @State private var linkedIn = ""
+    @State private var location = ""
 
     @State private var destination: JobStore.ContactDestination?
     /// Set once the user picks a company themselves, so a suggestion never
@@ -61,7 +63,7 @@ struct ContactFormView: View {
 
     /// Anything typed, or a company chosen other than the one it opened with.
     private var hasChanges: Bool {
-        ![email, name, phone, position, greetingName].allSatisfy { $0.isEmpty }
+        ![email, name, phone, position, greetingName, linkedIn, location].allSatisfy { $0.isEmpty }
             || selectedCompany?.id != initialCompany?.id
     }
 
@@ -69,7 +71,8 @@ struct ContactFormView: View {
         NavigationStack {
             PaperForm {
                 ContactFields(email: $email, name: $name, position: $position, phone: $phone,
-                              greetingName: $greetingName, focusesFirstField: true)
+                              greetingName: $greetingName, linkedIn: $linkedIn, location: $location,
+                              focusesFirstField: true)
                 companySection
             }
             .navigationTitle("Add Contact")
@@ -191,8 +194,10 @@ struct ContactFormView: View {
 
     private var companyFooter: String? {
         let emailKey = email.lowercased()
-        if let selectedCompany, selectedCompany.contacts.contains(where: { $0.email.lowercased() == emailKey }) {
-            return "\(email) is already a contact at \(selectedCompany.company). Saving updates their details."
+        // No address yet matches no one, however many there are without one.
+        if !emailKey.isEmpty, let selectedCompany,
+           selectedCompany.contacts.contains(where: { $0.email.lowercased() == emailKey }) {
+            return "\(email) is already a contact at \(selectedCompany.company). Open them there to change their details."
         }
         guard let domain, matchedDomain == domain, !isLookingUp else {
             if !email.isEmpty, email.contains("@"), domain == nil {
@@ -244,7 +249,9 @@ struct ContactFormView: View {
             name: name.trimmingCharacters(in: .whitespaces),
             phone: phone.isEmpty ? nil : phone,
             position: position,
-            greetingName: greetingName.isEmpty ? nil : greetingName
+            greetingName: greetingName.isEmpty ? nil : greetingName,
+            linkedIn: ContactFields.trimmed(linkedIn),
+            location: ContactFields.trimmed(location)
         ), destination)
         dismiss()
     }
@@ -337,6 +344,8 @@ struct ContactFields: View {
     @Binding var position: String
     @Binding var phone: String
     @Binding var greetingName: String
+    @Binding var linkedIn: String
+    @Binding var location: String
     var isEditing = true
     var header = "Contact"
     /// The `From:` of their reply, if they've replied: the greeting can come
@@ -347,10 +356,32 @@ struct ContactFields: View {
     var focusesFirstField = false
 
     @FocusState private var focus: Field?
-    private enum Field { case email, name, greeting, position, phone }
+    private enum Field { case email, name, greeting, position, phone, linkedIn, location }
 
+    /// A name, and an address if there is one. Someone can be on file without
+    /// an address — an imported list often has only their LinkedIn — and is
+    /// mailed once one is added.
     static func isValid(email: String, name: String) -> Bool {
-        MailDomain.isPlausibleAddress(email) && !name.trimmingCharacters(in: .whitespaces).isEmpty
+        (email.isEmpty || MailDomain.isPlausibleAddress(email)) && !name.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// An optional field as it's stored: trimmed, and nil when empty.
+    static func trimmed(_ text: String) -> String? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    /// The profile link as typed, opened in the browser from the card.
+    private var linkedInURL: URL? { Contact(linkedIn: linkedIn).linkedInURL }
+
+    /// A profile address the way it reads: no scheme, no "www.", no trailing slash.
+    private var linkedInLabel: String {
+        var text = linkedIn.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["https://", "http://", "www."] where text.lowercased().hasPrefix(prefix) {
+            text.removeFirst(prefix.count)
+        }
+        while text.hasSuffix("/") { text.removeLast() }
+        return text
     }
 
     /// What a mail to this contact would open with, as edited right now — the
@@ -406,24 +437,59 @@ struct ContactFields: View {
                     .keyboardType(.phonePad)
                     .textContentType(.telephoneNumber)
                     .focused($focus, equals: .phone)
+                TextField("LinkedIn (optional)", text: $linkedIn)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .focused($focus, equals: .linkedIn)
+                    .submitLabel(.next)
+                    .onSubmit { focus = .location }
+                TextField("Location (optional)", text: $location)
+                    .textContentType(.addressCityAndState)
+                    .textInputAutocapitalization(.words)
+                    .focused($focus, equals: .location)
             } else {
                 // Selectable, so a hold copies the address the way it does in
                 // Contacts — this screen is often where it's looked up.
                 if !name.isEmpty { LabeledContent("Name", value: name) }
-                LabeledContent("Email", value: email)
-                    .textSelection(.enabled)
+                if email.isEmpty {
+                    LabeledContent("Email") {
+                        Text("None yet").foregroundStyle(Color.inkFaint)
+                    }
+                } else {
+                    LabeledContent("Email", value: email)
+                        .textSelection(.enabled)
+                }
                 if !position.isEmpty { LabeledContent("Position", value: position) }
                 if !phone.isEmpty {
                     LabeledContent("Phone", value: phone)
                         .textSelection(.enabled)
                 }
+                if let linkedInURL {
+                    LabeledContent("LinkedIn") {
+                        Link(destination: linkedInURL) {
+                            Text(linkedInLabel)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                } else if !linkedIn.isEmpty {
+                    LabeledContent("LinkedIn", value: linkedIn)
+                        .textSelection(.enabled)
+                }
+                if !location.isEmpty { LabeledContent("Location", value: location) }
             }
         } header: {
             Text(header)
         } footer: {
-            Text(greetingPreview.isEmpty
-                 ? "Name not detected, so mail opens “Hi,”. Type a Greeting Name to greet them by name, or leave it empty."
-                 : "Mail opens “Hi \(greetingPreview),”")
+            if !isEditing && email.isEmpty {
+                Text("No address on file, so they can't be mailed yet. Add one with Edit.")
+            } else {
+                Text(greetingPreview.isEmpty
+                     ? "Name not detected, so mail opens “Hi,”. Type a Greeting Name to greet them by name, or leave it empty."
+                     : "Mail opens “Hi \(greetingPreview),”")
+            }
         }
     }
 }

@@ -17,7 +17,11 @@ python3 verify_companies.py --restore-typos-from ../../db_backups/<backup>
 python3 verify_names.py                    # dry run of the name pass
 python3 verify_names.py --apply            # back up, apply, re-check
 python3 audit.py ../../db_backups/<original>  # independent check vs a backup
-python3 -m unittest -v test_pipeline test_contacts   # the rules, pinned to cases
+python3 import_people.py plan <csv>      # a list of people without addresses: plan + report
+python3 import_people.py apply <csv>     # back up, re-plan, write, log
+python3 import_people.py verify <csv>    # independent check of the live DB against the list
+python3 import_people.py links plan|apply|verify <csv>   # the list's company LinkedIn / X / Facebook, sealed
+python3 -m unittest -v test_pipeline test_contacts test_import_people   # the rules, pinned to cases
 ```
 
 **Before `--apply`, always:** read the dry run's `report.md` (plan, moved
@@ -30,7 +34,7 @@ live DB.
 ## Sealed contacts (`contacts.py`)
 
 Once `scripts/vault_migration.sql` has run, the app seals each contact's name,
-email, position, phone and greeting into `recruiters.sealed` under its vault's
+email, position, phone, greeting, LinkedIn and location into `recruiters.sealed` under its vault's
 key, and empties those columns. Every script here reads and writes contacts
 through `contacts.py`, which notices which kind of DB it's talking to:
 
@@ -68,6 +72,46 @@ Good to know:
 - The crypto is `scripts/vault_crypto.py`. It's standard-library only and
   proven against the app's `Sealing.swift` by `scripts/test_vault_crypto.py`
   (run it from `scripts/`).
+
+## People without addresses (`import_people.py`)
+
+For lists that name people but give no address: name, job title, LinkedIn,
+location and company (the 1800+ HR sheet). Each person becomes a contact in
+the AURORA vault with their LinkedIn and location sealed beside the usual
+fields. With no address they show on the company's page and can't be mailed
+until one is added in the app.
+
+- **Companies** match by the website's domain (against each company's mail
+  domains and website), then by name and also-known-as. A name match whose
+  domain says otherwise, a domain several companies hold, or a new company
+  without a sector stops the plan until `data_verification/hr_import/
+  hr_review.py` decides it, with its reason. Matched companies only gain what
+  they lack (a sector, a website never over an edited one); a catalog name
+  made from a mail host ("Getsimpl") takes the company's own ("Simpl") only
+  when the review says so, keeping the old one as an also-known-as.
+- **People** are one per LinkedIn profile. A profile's address ends in an ID
+  that survives renames, so two rows with the same ID are one person under
+  two names; the fullest name is kept. Someone already in the vault at that
+  company under the same name gains their LinkedIn and location, and their
+  position if it's empty; someone whose LinkedIn is on file is skipped, so a
+  re-run adds nothing.
+- `apply` backs up, re-plans against the backup and refuses if anything
+  changed since the reviewed plan. Every write goes to `applied.json`, which
+  `rollback` undoes. `verify` re-reads the list and the live DB and checks
+  every person is on file once, under a company the list's own data points
+  to, and that nothing else changed.
+- **One person, another company.** When a list files people at two companies
+  under one name (its "Peak" rows are Peak Games at peak.com and Peak AI at
+  peak.ai), `hr_review.PERSON_COMPANY` gives that person's company by their
+  LinkedIn key, and `refile` moves anyone an earlier apply put elsewhere.
+- **Company links.** `links plan|apply|verify <csv>` (and `links rollback`)
+  give each company the LinkedIn, X and Facebook pages its rows list, told
+  apart by host whatever the column (twitter.com becomes x.com), the one most
+  rows agree on; a tie waits for `hr_review.LINKS`. Only missing links are
+  filled. They're stored by `company_links.py` in `company_links`
+  (`../company_links_migration.sql`), sealed under the vault's key like its
+  contacts: one row per vault and company, which the app shows and edits on
+  the company page. A company merge in `verify_companies.py` moves them along.
 
 ## Company pass (`verify_companies.py`)
 

@@ -2,7 +2,8 @@ import SwiftUI
 
 /// A form to create a new company or edit an existing one: its name and sector,
 /// its logo and links, how it hires freshers, and its mail domains. All fields
-/// write upstream to the shared catalog (for every user).
+/// write upstream to the shared catalog (for every user), except its LinkedIn,
+/// X and Facebook pages, which are sealed into this account's own vault.
 ///
 /// A company can have any number of domains. Most never need typing: adding a
 /// contact teaches the company its domain (see `JobStore.addContact`), and the
@@ -19,7 +20,12 @@ struct CompanyFormView: View {
     let suggestedDomains: [String]
     let onSave: (CompanyDetails) -> Void
 
-    private let initial: CompanyDetails
+    @State private var initial: CompanyDetails
+    /// Whether the company's links are on hand to edit. Until they are, their
+    /// fields stay off, so a save can't wipe links it never saw.
+    @State private var linksReady: Bool
+    /// Set when they couldn't be fetched, so the form stops showing them as loading.
+    @State private var linksUnavailable = false
     /// Where the links on file came from, to say so under them.
     private let websiteSource: String?
     private let careersSource: String?
@@ -33,7 +39,7 @@ struct CompanyFormView: View {
     @State private var logoNote: String?
     @FocusState private var isDomainFieldFocused: Bool
     @FocusState private var focus: Field?
-    private enum Field { case name, sector, otherName, website, careers, logo, batch, role }
+    private enum Field { case name, sector, otherName, website, careers, logo, batch, role, linkedIn, x, facebook }
     /// Other companies already using each domain, looked up as domains are added.
     @State private var owners: [String: [String]] = [:]
     @Environment(JobStore.self) private var jobStore
@@ -46,7 +52,8 @@ struct CompanyFormView: View {
          title: String, confirmLabel: String,
          onSave: @escaping (CompanyDetails) -> Void) {
         self.companyID = companyID
-        self.initial = details
+        _initial = State(initialValue: details)
+        _linksReady = State(initialValue: companyID == nil)
         self.websiteSource = websiteSource
         self.careersSource = careersSource
         self.suggestedDomains = suggestedDomains
@@ -105,6 +112,12 @@ struct CompanyFormView: View {
     /// The links and fresher details need the fresher-hiring migration.
     private var canStoreFresherDetails: Bool { !SupabaseAPI.fresherColumnsMissing }
 
+    /// LinkedIn, X and Facebook need the company-links table and this
+    /// account's own vault, unlocked, to seal them into.
+    private var canStoreSocialLinks: Bool {
+        !SupabaseAPI.companyLinksTableMissing && KeyRing.shared.ownVaultID != nil
+    }
+
     var body: some View {
         NavigationStack {
             PaperForm {
@@ -114,6 +127,11 @@ struct CompanyFormView: View {
                 }
                 if canStoreFresherDetails {
                     linksSection
+                }
+                if canStoreSocialLinks {
+                    socialLinksSection
+                }
+                if canStoreFresherDetails {
                     fresherSection
                 }
                 domainsSection
@@ -334,6 +352,53 @@ struct CompanyFormView: View {
                 .submitLabel(next == nil ? .done : .next)
                 .onSubmit { focus = next }
         }
+    }
+
+    // MARK: - Social links
+
+    private var socialLinksSection: some View {
+        Section {
+            linkField("LinkedIn", text: socialLink(\.linkedIn), prompt: "linkedin.com/company/…",
+                      field: .linkedIn, next: .x)
+            linkField("X", text: socialLink(\.x), prompt: "x.com/…", field: .x, next: .facebook)
+            linkField("Facebook", text: socialLink(\.facebook), prompt: "facebook.com/…",
+                      field: .facebook, next: nil)
+        } header: {
+            HStack(spacing: 6) {
+                Text("Social links")
+                if !linksReady && !linksUnavailable { ProgressView().controlSize(.mini) }
+            }
+        } footer: {
+            if linksUnavailable {
+                Text("Couldn't load them, so they can't be changed right now. The rest saves as usual.")
+            } else {
+                Text(companyID.flatMap { jobStore.companyLinks[$0]?.isImported } == true
+                     ? "These came with a vault you imported. Saving keeps a copy in yours."
+                     : "Sealed with your vault's key, so only you and anyone you've given its code and private key can see them.")
+            }
+        }
+        .disabled(!linksReady)
+        .task(id: companyID) { await loadLinks() }
+    }
+
+    /// A link as a text field edits it: an empty field is no link.
+    private func socialLink(_ path: WritableKeyPath<KeyRing.CompanyLinks, String?>) -> Binding<String> {
+        Binding(get: { draft.links[keyPath: path] ?? "" },
+                set: { draft.links[keyPath: path] = $0.isEmpty ? nil : $0 })
+    }
+
+    /// The company's links, when the form opened before they'd loaded.
+    private func loadLinks() async {
+        guard let companyID, !linksReady else { return }
+        if jobStore.companyLinks[companyID] == nil { await jobStore.loadCompanyLinks(companyID: companyID) }
+        // Still none: the request failed, and the fields stay off.
+        guard let loaded = jobStore.companyLinks[companyID]?.links else {
+            linksUnavailable = true
+            return
+        }
+        initial.links = loaded
+        if draft.links.isEmpty { draft.links = loaded }
+        linksReady = true
     }
 
     private func findLogo() {
@@ -723,7 +788,7 @@ private struct CompanyEditorSheet: ViewModifier {
         content.sheet(item: $company) { company in
             CompanyFormView(
                 companyID: company.id,
-                details: company.details,
+                details: company.details(links: jobStore.companyLinks[company.id]?.links),
                 websiteSource: company.websiteSource,
                 careersSource: company.careersSource,
                 suggestedDomains: company.contactDomains,

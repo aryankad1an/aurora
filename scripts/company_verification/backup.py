@@ -28,9 +28,11 @@ TABLES = {  # table -> stable sort order (tables without an id sort on their key
     # contacts are opened with the vault rows saved beside them.
     "vaults": "id.asc",
     "vault_grants": "account_email.asc,vault_id.asc,key_id.asc",
+    # Each vault's sealed LinkedIn, X and Facebook pages per company.
+    "company_links": "id.asc",
 }
 # Tables that only exist once their migration has run.
-OPTIONAL = {"company_sources", "vaults", "vault_grants"}
+OPTIONAL = {"company_sources", "vaults", "vault_grants", "company_links"}
 REPO = Path(__file__).resolve().parents[2]
 
 

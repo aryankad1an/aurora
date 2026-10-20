@@ -17,7 +17,9 @@
 --     code); only the owner can change theirs.
 --   * Companies and their sources stay a shared catalog anyone signed in can
 --     correct. A company can only be deleted when no one else has contacts
---     under it.
+--     or company links under it.
+--   * Company links (company_links_migration.sql): only the accounts holding
+--     a vault's key can read its rows; only the owner can change them.
 --   * The publishable key alone (no session) is refused everything.
 --
 -- Run it only after:
@@ -49,6 +51,18 @@ language sql stable as $$
   select vault_id from public.vault_grants where lower(account_email) = public.auth_email()
 $$;
 
+-- Whether a company holds another vault's links. Runs as its owner: the
+-- signed-in account can't see those rows, so a rule asking itself would
+-- always find none.
+create or replace function public.company_links_elsewhere(cid uuid) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+begin
+  return exists (select 1 from public.company_links l
+                 where l.company_id = cid and l.vault_id not in (select public.owned_vaults()));
+end $$;
+revoke execute on function public.company_links_elsewhere(uuid) from anon, public;
+grant execute on function public.company_links_elsewhere(uuid) to authenticated;
+
 -- Start every table from nothing: no access for the bare key, and none of the
 -- old allow-everything policies (policies add up, so one left behind would
 -- let everything through again).
@@ -58,7 +72,8 @@ declare
   p record;
 begin
   foreach t in array array['companies', 'company_sources', 'recruiters', 'mail_sends', 'profiles',
-                           'templates', 'tracked_companies', 'user_companies', 'vaults', 'vault_grants'] loop
+                           'templates', 'tracked_companies', 'user_companies', 'vaults', 'vault_grants',
+                           'company_links'] loop
     if to_regclass('public.' || t) is null then continue; end if;
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from anon', t);
@@ -69,6 +84,21 @@ begin
   end loop;
 end $$;
 grant usage on all sequences in schema public to authenticated;
+
+-- `admins` (one address) isn't used by the app or the scripts, and its old
+-- rules let the publishable key rewrite it. Only the secret key reaches it now.
+do $$
+declare
+  p record;
+begin
+  if to_regclass('public.admins') is not null then
+    alter table public.admins enable row level security;
+    revoke all on public.admins from anon, authenticated;
+    for p in select policyname from pg_policies where schemaname = 'public' and tablename = 'admins' loop
+      execute format('drop policy %I on public.admins', p.policyname);
+    end loop;
+  end if;
+end $$;
 
 -- The shared catalog.
 create policy "catalog: read" on companies for select to authenticated using (true);
@@ -147,6 +177,28 @@ create policy "vaults: delete yours" on vaults for delete to authenticated
 
 create policy "grants: yours" on vault_grants for all to authenticated
   using (lower(account_email) = public.auth_email()) with check (lower(account_email) = public.auth_email());
+
+-- Each vault's sealed company links (company_links_migration.sql): readable
+-- by the accounts holding the vault's key, written only by its owner. A
+-- company holding another vault's links can't be deleted, since its links
+-- would go with it.
+do $$
+begin
+  if to_regclass('public.company_links') is not null then
+    create policy "links: read the vaults you hold" on company_links for select to authenticated
+      using (vault_id in (select public.owned_vaults()) or vault_id in (select public.granted_vaults()));
+    create policy "links: write your own" on company_links for all to authenticated
+      using (vault_id in (select public.owned_vaults()))
+      with check (vault_id in (select public.owned_vaults()));
+    drop policy "catalog: delete when no one else has contacts there" on companies;
+    create policy "catalog: delete when no one else has contacts there" on companies for delete to authenticated
+      using (not exists (
+        select 1 from recruiters r
+        where r.company_id = companies.id
+          and (r.vault_id is null or r.vault_id not in (select public.owned_vaults()))
+      ) and not public.company_links_elsewhere(companies.id));
+  end if;
+end $$;
 
 -- Searching other names goes through a function: signed-in only, like the table.
 do $$

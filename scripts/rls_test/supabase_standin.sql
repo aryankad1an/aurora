@@ -39,6 +39,18 @@ grant execute on function companies_known_as(text) to anon, authenticated;
 -- An old allow-everything policy, as the project may have.
 alter table templates enable row level security;
 create policy "Enable all" on templates for all using (true) with check (true);
+-- Old policies naming anon alone, as the live project had (rls_bridge.sql widens them).
+do $$ declare t text; begin
+  foreach t in array array['profiles', 'mail_sends', 'user_companies'] loop
+    execute format('alter table %I enable row level security', t);
+    execute format('create policy "anon all" on %I for all to anon using (true) with check (true)', t);
+  end loop;
+end $$;
+-- An unused table anyone could rewrite.
+create table admins (email text primary key);
+alter table admins enable row level security;
+create policy "anon write admins" on admins for all using (true) with check (true);
+insert into admins values ('someone@example.com');
 
 -- Data: realaryankadian owns AURORA (the vault migration files every contact there).
 insert into companies (id, name, also_known_as) values

@@ -378,16 +378,16 @@ enum SupabaseAPI {
         for page in pages {
             for row in try decoder.decode(Rows.self, from: page).rows {
                 let c = row.contact
-                byID[c.id] = HeldContact(name: c.name, email: c.email, position: c.position, isValid: c.isValid,
-                                         vaultID: c.vaultID, company: row.companyName ?? "")
+                byID[c.id] = HeldContact(c, company: row.companyName ?? "")
             }
         }
 
         // One entry per send, keyed by the send's own id (unique per send).
         return sends.compactMap { send -> ActivityEntry? in
             guard let info = byID[send.contactID] else { return nil }
-            var contact = Contact(id: send.contactID, email: info.email, name: info.name,
-                                  position: info.position, isValid: info.isValid,
+            var contact = Contact(id: send.contactID, email: info.email, name: info.name, phone: info.phone,
+                                  position: info.position, greetingName: info.greetingName,
+                                  linkedIn: info.linkedIn, location: info.location, isValid: info.isValid,
                                   isSent: true, sentAt: send.sentAt,
                                   sentSubject: send.subject, sentBody: send.body,
                                   repliedAt: send.repliedAt, replyFrom: send.replyFrom,
@@ -398,13 +398,33 @@ enum SupabaseAPI {
     }
 
     /// What the Activity feed needs of a contact, and of the company they're at.
+    /// Every detail, not just what the feed shows: a contact opened from
+    /// Activity is edited and saved whole, and a field missing here would be
+    /// saved as cleared.
     struct HeldContact: Sendable {
         let name: String
         let email: String
+        let phone: String?
         let position: String
+        let greetingName: String?
+        let linkedIn: String?
+        let location: String?
         let isValid: Bool
         var vaultID: String?
         let company: String
+
+        init(_ contact: Contact, company: String) {
+            name = contact.name
+            email = contact.email
+            phone = contact.phone
+            position = contact.position
+            greetingName = contact.greetingName
+            linkedIn = contact.linkedIn
+            location = contact.location
+            isValid = contact.isValid
+            vaultID = contact.vaultID
+            self.company = company
+        }
     }
 
     /// A row that didn't open, stepped past.
@@ -989,6 +1009,89 @@ enum SupabaseAPI {
     /// Only the contacts of this account's own vault. Nil before it's unlocked.
     static func ownContacts() -> URLQueryItem? {
         KeyRing.shared.ownVaultID.map { URLQueryItem(name: "vault_id", value: "eq.\($0)") }
+    }
+
+    // MARK: - Company links (sealed, one row per vault)
+
+    /// Set once the database reports it has no `company_links` table: its
+    /// migration hasn't run. The company screen leaves the links out until it has.
+    private(set) static var companyLinksTableMissing = false
+
+    /// A company's links as this account sees them: its own vault's when it
+    /// has any, or else an imported vault's, which it can read but not change.
+    struct CompanyLinksOnFile: Equatable {
+        var links = KeyRing.CompanyLinks()
+        /// This account's own row for the company, which a save rewrites.
+        var ownRowID: String?
+        /// Whether `links` are someone else's, from an imported vault.
+        var isImported = false
+        /// Whether an imported vault has links here, shown or not: clearing
+        /// this account's own then keeps an empty row, or they'd come back.
+        var hasImported = false
+    }
+
+    private struct CompanyLinksRow: Decodable {
+        let id: String
+        let vaultID: String
+        let keyID: String
+        let sealed: String
+        enum CodingKeys: String, CodingKey {
+            case id, sealed
+            case vaultID = "vault_id"
+            case keyID = "key_id"
+        }
+    }
+
+    static func fetchCompanyLinks(companyID: String) async throws -> CompanyLinksOnFile {
+        let request = makeRequest(path: "company_links", query: [
+            URLQueryItem(name: "select", value: "id,vault_id,key_id,sealed"),
+            URLQueryItem(name: "company_id", value: "eq.\(companyID)"),
+            readableContacts(under: nil)
+        ])
+        let rows: [CompanyLinksRow]
+        do {
+            rows = try decoder.decode([CompanyLinksRow].self, from: try await send(request))
+            companyLinksTableMissing = false
+        } catch SupabaseError.schemaOutOfDate {
+            companyLinksTableMissing = true
+            return CompanyLinksOnFile()
+        }
+        func open(_ row: CompanyLinksRow) -> KeyRing.CompanyLinks? {
+            try? KeyRing.shared.openCompanyLinks(row.sealed, id: row.id, vaultID: row.vaultID, keyID: row.keyID)
+        }
+        let imported = rows.filter { !KeyRing.shared.owns(vault: $0.vaultID) }
+            .sorted { $0.vaultID < $1.vaultID }.lazy.compactMap(open).first { !$0.isEmpty }
+        if let own = rows.first(where: { KeyRing.shared.owns(vault: $0.vaultID) }) {
+            // One that won't open (sealed under a key this phone lacks) reads
+            // as none; saving replaces it.
+            return CompanyLinksOnFile(links: open(own) ?? KeyRing.CompanyLinks(), ownRowID: own.id,
+                                      hasImported: imported != nil)
+        }
+        return CompanyLinksOnFile(links: imported ?? KeyRing.CompanyLinks(), isImported: imported != nil,
+                                  hasImported: imported != nil)
+    }
+
+    /// Write a company's links into this account's own vault, sealed, and
+    /// return the row's id. Empty links delete the row and return nil, unless
+    /// `keepEmpty`: then the empty row stays, standing in front of an imported
+    /// vault's links.
+    static func saveCompanyLinks(companyID: String, links: KeyRing.CompanyLinks, rowID: String?,
+                                 keepEmpty: Bool = false) async throws -> String? {
+        guard let own = ownContacts() else { throw VaultError.notOwner }
+        if links.isEmpty && !keepEmpty {
+            if let rowID {
+                try await write(method: "DELETE", path: "company_links",
+                                query: [URLQueryItem(name: "id", value: "eq.\(rowID)"), own])
+            }
+            return nil
+        }
+        let id = rowID ?? UUID().uuidString.lowercased()
+        let (sealed, vaultID, keyID) = try KeyRing.shared.sealOwnCompanyLinks(links, id: id)
+        try await write(method: "POST", path: "company_links",
+                        body: ["id": id, "company_id": companyID, "vault_id": vaultID, "key_id": keyID,
+                               "sealed": sealed, "updated_at": iso(Date())],
+                        prefer: "return=minimal,resolution=merge-duplicates", onConflict: "company_id,vault_id")
+        return id
     }
 
     // MARK: - Plumbing

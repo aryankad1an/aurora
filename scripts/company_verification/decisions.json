@@ -1248,6 +1248,13 @@
         "Disney+ Hotstar"
       ],
       "why": "careers.hotstar.com 301-redirects to jiostar.com; hotstar.com sends mail from the same IPs as startv.com (14.143.96.163/.164), whose SPF uses JioStar's Cisco mail tenant (hc1549-65); Hotstar became JioHotstar under JioStar (2026-10-20)"
+    },
+    {
+      "into": "Sigmoid",
+      "from": [
+        "Sigmoidanalytics"
+      ],
+      "why": "sigmoidanalytics.com and www.sigmoidanalytics.com 301-redirect to www.sigmoid.com, and both rows already had sigmoid.com as their website; Sigmoid Analytics renamed itself Sigmoid (2026-10-20)"
     }
   ],
   "renames": {
@@ -1834,7 +1841,9 @@
     "Cruise": "d80df8a2-91c7-44a5-953a-834f43cef42c",
     "Telushealth": "34c50abd-d9f7-40f2-b1da-d8b300cac5c0",
     "Lifeworks": "2c78a0f9-1ba9-47eb-ac14-ef47b25795e6",
-    "Disney+ Hotstar": "cca408de-4854-47bc-a31a-6bccb1501192"
+    "Disney+ Hotstar": "cca408de-4854-47bc-a31a-6bccb1501192",
+    "Sigmoid": "36b1ba11-0f33-4609-bdfe-1679398bd7e3",
+    "Sigmoidanalytics": "d299c853-6142-4b85-9a67-ae9a1cc640e2"
   },
   "personal_contacts": {
     "action": "delete",

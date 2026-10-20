@@ -123,6 +123,7 @@ struct JobDetailView: View {
                         let sources = jobStore.sources[job.id]
                         Section {
                             HiringPanel(job: job, sources: sources,
+                                        socialLinks: jobStore.companyLinks[job.id]?.links,
                                         onEdit: { editingCompany = job },
                                         onShowSources: { showingSources = true })
                                 .cardRow(top: 0, bottom: 8)
@@ -345,11 +346,13 @@ struct JobDetailView: View {
         }
         .undoBanner()
         .task(id: jobID) {
-            // The sources come from their own table, so they load alongside.
+            // The sources and links come from their own tables, so they load alongside.
             async let sources: Void = jobStore.loadSources(companyID: jobID)
+            async let links: Void = jobStore.loadCompanyLinks(companyID: jobID)
             await jobStore.loadCompanyIfNeeded(id: jobID)
             isResolving = false
             await sources
+            await links
         }
     }
 
@@ -584,7 +587,7 @@ struct JobDetailView: View {
             ContactRow(
                 contact: contact,
                 isBounced: bounced.contains(contact.id),
-                onSend: contact.isValid ? { startCompose(preselect: [contact.id]) } : nil
+                onSend: contact.isMailable ? { startCompose(preselect: [contact.id]) } : nil
             )
             .cardRow()
             .tag(contact.id)
@@ -625,11 +628,12 @@ private struct ContactRow: View {
     /// title, else the address — unless the address is already the headline.
     private var subtitle: String {
         if !contact.position.isEmpty { return contact.position }
-        return contact.name.isEmpty ? "No name or title on file" : contact.email
+        if contact.name.isEmpty { return "No name or title on file" }
+        return contact.email.isEmpty ? "No address on file" : contact.email
     }
 
     private var subtitleIsPlaceholder: Bool {
-        contact.position.isEmpty && contact.name.isEmpty
+        contact.position.isEmpty && (contact.name.isEmpty || contact.email.isEmpty)
     }
 
     /// At large text sizes the status chip drops under the name: beside it, the chip
@@ -693,6 +697,9 @@ private struct ContactRow: View {
             BouncedPill()
         } else if contact.hasReplied {
             RepliedPill(at: contact.repliedAt)
+        } else if !contact.isMailable && contact.sentAt == nil {
+            // On file from a list without addresses: there's nothing to send to yet.
+            StatusChip(text: "No address", systemImage: "at", color: .inkFaint)
         } else {
             SentPill(sentAt: contact.sentAt)
         }

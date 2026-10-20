@@ -302,6 +302,10 @@ def contact_context(id, vault_id):
     return f"aurora.contact.v1|{id.lower()}|{vault_id.lower()}"
 
 
+def company_links_context(id, vault_id):
+    return f"aurora.companylinks.v1|{id.lower()}|{vault_id.lower()}"
+
+
 def send_context(id):
     return f"aurora.send.v1|{id.lower()}"
 
@@ -333,8 +337,11 @@ def account_context(email):
 # ----------------------------------------------------------------------------
 # Contacts — `KeyRing.ContactFields`
 
-# recruiters column -> the key it's sealed under.
-CONTACT_FIELDS = {"name": "n", "email": "e", "position": "p", "phone": "t", "greeting_name": "g"}
+# field -> the key it's sealed under. The first five are also recruiters
+# columns (left null once sealed); linkedin and location only exist sealed.
+CONTACT_FIELDS = {"name": "n", "email": "e", "position": "p", "phone": "t", "greeting_name": "g",
+                  "linkedin": "l", "location": "o"}
+CONTACT_COLUMNS = ("name", "email", "position", "phone", "greeting_name")
 
 
 def seal_contact(fields, key, id, vault_id):
@@ -357,6 +364,27 @@ def open_contact(sealed, key, id, vault_id):
         value = body.get(short)
         out[column] = value if isinstance(value, str) else None
     return out
+
+
+# ----------------------------------------------------------------------------
+# Company links — `KeyRing.CompanyLinks`, one `company_links` row per vault
+
+COMPANY_LINK_FIELDS = {"linkedin": "l", "x": "x", "facebook": "f"}
+
+
+def seal_company_links(links, key, id, vault_id):
+    """`links` by field name. Empty values are left out, as the app does."""
+    body = {short: links[f] for f, short in COMPANY_LINK_FIELDS.items() if links.get(f)}
+    return seal_json(body, key, company_links_context(id, vault_id))
+
+
+def open_company_links(sealed, key, id, vault_id):
+    """The links by field name; one the seal leaves out is None."""
+    body = open_json(sealed, key, company_links_context(id, vault_id))
+    if not isinstance(body, dict):
+        raise Malformed("Sealed company links must be a JSON object.")
+    return {f: body.get(short) if isinstance(body.get(short), str) else None
+            for f, short in COMPANY_LINK_FIELDS.items()}
 
 
 # ----------------------------------------------------------------------------

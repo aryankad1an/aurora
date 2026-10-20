@@ -84,6 +84,13 @@ final class JobStore {
     /// Companies whose sources are being fetched right now.
     private(set) var loadingSources: Set<String> = []
 
+    // MARK: - Company links (sealed, per vault)
+
+    /// Each company's LinkedIn, X and Facebook pages, once its screen has
+    /// asked for them. They live in the vault rather than the catalog (see
+    /// `SupabaseAPI.fetchCompanyLinks`), so each account sees its own.
+    private(set) var companyLinks: [String: SupabaseAPI.CompanyLinksOnFile] = [:]
+
     // MARK: - Server search
 
     /// Catalog matches from the server for `searchQuery`, covering companies on
@@ -413,12 +420,14 @@ final class JobStore {
     func createCompany(_ details: CompanyDetails) async {
         let details = details.trimmed
         guard !details.name.isEmpty else { return }
+        let id: String
         do {
-            _ = try await SupabaseAPI.addCompany(details)
+            id = try await SupabaseAPI.addCompany(details)
         } catch {
             report(error)
             return
         }
+        if !details.links.isEmpty { await writeCompanyLinks(companyID: id, links: details.links) }
         await reloadQuietly()
         warnIfDomainsDropped(details.domains)
         warnIfFresherDetailsDropped(details, previous: nil)
@@ -430,15 +439,64 @@ final class JobStore {
         let details = details.trimmed
         guard !details.name.isEmpty else { return }
         let previous = company(id: id)
+        // The links go to the vault, the rest to the catalog: each is written
+        // only when it changed. Links never loaded were never editable.
+        let previousLinks = companyLinks[id]?.links
+        let linksChanged = previousLinks.map { details.links != $0.normalized } ?? false
+        var catalog = details
+        catalog.links = KeyRing.CompanyLinks()
+        let catalogChanged = previous.map { catalog != $0.details.trimmed } ?? true
 
-        let saved = await saveCompany(id: id, details: details, sending: previous)
-        if saved, details.domains != previous?.domains { warnIfDomainsDropped(details.domains) }
-        if saved { warnIfFresherDetailsDropped(details, previous: previous) }
+        var undoesCatalog = false
+        if catalogChanged || !linksChanged {
+            guard await saveCompany(id: id, details: catalog, sending: previous) else { return }
+            if catalog.domains != previous?.domains { warnIfDomainsDropped(catalog.domains) }
+            warnIfFresherDetailsDropped(catalog, previous: previous)
+            undoesCatalog = previous != nil
+        }
+        var undoesLinks: KeyRing.CompanyLinks?
+        if linksChanged, let previousLinks, await writeCompanyLinks(companyID: id, links: details.links) {
+            undoesLinks = previousLinks
+        }
         // Only a write that landed has anything to undo.
-        guard saved, let previous else { return }
+        guard undoesCatalog || undoesLinks != nil else { return }
         UndoCoordinator.shared.stage(message: "Company details updated") { [weak self] in
-            // Restored as it was — including where its links came from.
-            await self?.saveCompany(id: id, details: previous.details, sending: nil, restoringLinksOf: previous)
+            if undoesCatalog, let previous {
+                // Restored as it was — including where its links came from.
+                await self?.saveCompany(id: id, details: previous.details, sending: nil, restoringLinksOf: previous)
+            }
+            if let undoesLinks { await self?.writeCompanyLinks(companyID: id, links: undoesLinks) }
+        }
+    }
+
+    /// Fetch a company's links. Quiet on failure, like its sources: the
+    /// screen leaves them out.
+    func loadCompanyLinks(companyID: String) async {
+        guard !KeyRing.shared.readableVaults.isEmpty else { return }
+        if let found = try? await SupabaseAPI.fetchCompanyLinks(companyID: companyID) {
+            companyLinks[companyID] = found
+        }
+    }
+
+    /// Show `links` on the company now and seal them into this account's own
+    /// vault, putting back what was shown if the write fails.
+    @discardableResult
+    private func writeCompanyLinks(companyID: String, links: KeyRing.CompanyLinks) async -> Bool {
+        let before = companyLinks[companyID]
+        companyLinks[companyID] = SupabaseAPI.CompanyLinksOnFile(links: links, ownRowID: before?.ownRowID,
+                                                                 hasImported: before?.hasImported == true)
+        do {
+            // Cleared over an imported vault's links: an empty row of its own
+            // keeps them from coming back.
+            let rowID = try await SupabaseAPI.saveCompanyLinks(companyID: companyID, links: links,
+                                                               rowID: before?.ownRowID,
+                                                               keepEmpty: before?.hasImported == true)
+            companyLinks[companyID]?.ownRowID = rowID
+            return true
+        } catch {
+            companyLinks[companyID] = before
+            report(error)
+            return false
         }
     }
 
@@ -609,13 +667,13 @@ final class JobStore {
     /// the database refuses.
     @discardableResult
     private func saveContact(_ contact: Contact, replacing previous: Contact?) async -> Bool {
-        changeContacts([contact.id]) { $0 = contact }
+        changeContacts([contact.id]) { $0.takeDetails(from: contact) }
         do {
             try await SupabaseAPI.updateContact(contact)
             directory = nil
             return true
         } catch {
-            if let previous { changeContacts([contact.id]) { $0 = previous } }
+            if let previous { changeContacts([contact.id]) { $0.takeDetails(from: previous) } }
             report(error)
             return false
         }
@@ -789,7 +847,9 @@ final class JobStore {
             let contact = entry.contact
             return ["id": contact.id, "company_id": entry.companyID, "name": contact.name, "email": contact.email,
                     "position": contact.position, "phone": contact.phone ?? NSNull(),
-                    "greeting_name": contact.greetingName ?? NSNull(), "is_valid": contact.isValid,
+                    "greeting_name": contact.greetingName ?? NSNull(),
+                    "linkedin": contact.linkedIn ?? NSNull(), "location": contact.location ?? NSNull(),
+                    "is_valid": contact.isValid,
                     "vault_id": contact.vaultID ?? NSNull(), "owned": contact.isOwned]
         }.sorted { ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "") }
         let sources = try await Self.optionalRows("company_sources", order: "id")
@@ -846,7 +906,7 @@ final class JobStore {
         guard let email = userEmail else {
             directory = nil
             jobs = []; allCompanies = []; detachedCompanies = [:]; searchResults = []
-            activity = []; sends = []; sources = [:]; scopeCounts = [:]; catalogScope = .all
+            activity = []; sends = []; sources = [:]; companyLinks = [:]; scopeCounts = [:]; catalogScope = .all
             companyOffset = 0; hasMoreCompanies = true; scopePages = [:]
             return
         }
@@ -1025,9 +1085,7 @@ final class JobStore {
         var held: [String: SupabaseAPI.HeldContact] = [:]
         for company in jobs + allCompanies + Array(detachedCompanies.values) {
             for contact in company.contacts where held[contact.id] == nil {
-                held[contact.id] = SupabaseAPI.HeldContact(name: contact.name, email: contact.email,
-                                                           position: contact.position, isValid: contact.isValid,
-                                                           vaultID: contact.vaultID, company: company.company)
+                held[contact.id] = SupabaseAPI.HeldContact(contact, company: company.company)
             }
         }
         activityTask = Task { [weak self, held] in

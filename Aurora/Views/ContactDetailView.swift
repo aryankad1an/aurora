@@ -27,6 +27,8 @@ struct ContactDetailView: View {
     @State private var phone: String
     @State private var position: String
     @State private var greetingName: String
+    @State private var linkedIn: String
+    @State private var location: String
     /// The last-saved values, so Cancel reverts correctly even after a save.
     @State private var committed: Contact
     /// Mirrors the contact's shared valid/invalid flag so the sheet updates the
@@ -56,6 +58,8 @@ struct ContactDetailView: View {
         _phone = State(initialValue: contact.phone ?? "")
         _position = State(initialValue: contact.position)
         _greetingName = State(initialValue: contact.greetingName ?? "")
+        _linkedIn = State(initialValue: contact.linkedIn ?? "")
+        _location = State(initialValue: contact.location ?? "")
         _committed = State(initialValue: contact)
         _isContactValid = State(initialValue: contact.isValid)
     }
@@ -69,8 +73,11 @@ struct ContactDetailView: View {
 
     /// Whether the edited fields are complete enough to save. (Not to be confused
     /// with `isContactValid`, which is whether the *person* is still worth mailing.)
+    /// Someone on file without an address can be saved without one, but an
+    /// address once on file can be corrected, not cleared: their sends and
+    /// replies are matched by it.
     private var canSave: Bool {
-        ContactFields.isValid(email: email, name: name)
+        ContactFields.isValid(email: email, name: name) && !(email.isEmpty && !committed.email.isEmpty)
     }
 
     /// True when at least one field differs from the last-saved state. Compared
@@ -82,14 +89,19 @@ struct ContactDetailView: View {
 
     /// The form as `save()` would store it.
     private var draft: Contact {
-        Contact(id: contact.id, email: email.lowercased(), name: name,
-                phone: phone.isEmpty ? nil : phone, position: position,
-                greetingName: greetingName.isEmpty ? nil : greetingName,
-                isValid: isContactValid)
+        var draft = committed
+        draft.takeDetails(from: Contact(email: email.lowercased(), name: name,
+                                        phone: phone.isEmpty ? nil : phone, position: position,
+                                        greetingName: greetingName.isEmpty ? nil : greetingName,
+                                        linkedIn: ContactFields.trimmed(linkedIn),
+                                        location: ContactFields.trimmed(location)))
+        draft.isValid = isContactValid
+        return draft
     }
 
     nonisolated private static func editableFields(of contact: Contact) -> [String?] {
-        [contact.email.lowercased(), contact.name, contact.phone, contact.position, contact.greetingName]
+        [contact.email.lowercased(), contact.name, contact.phone, contact.position, contact.greetingName,
+         contact.linkedIn, contact.location]
     }
 
     var body: some View {
@@ -115,7 +127,8 @@ struct ContactDetailView: View {
 
                 // No company header: the card above already names it.
                 ContactFields(email: $email, name: $name, position: $position, phone: $phone,
-                              greetingName: $greetingName, isEditing: isEditing, replyFrom: contact.replyFrom)
+                              greetingName: $greetingName, linkedIn: $linkedIn, location: $location,
+                              isEditing: isEditing, replyFrom: contact.replyFrom)
 
                 // The bounce section above has its own Mark as Invalid.
                 if bounce == nil || !isContactValid { validitySection }
@@ -362,7 +375,8 @@ struct ContactDetailView: View {
     private func contact(for send: MailSend) -> Contact {
         var c = Contact(id: contact.id, email: email, name: name,
                         phone: phone.isEmpty ? nil : phone, position: position,
-                        greetingName: greetingName.isEmpty ? nil : greetingName)
+                        greetingName: greetingName.isEmpty ? nil : greetingName,
+                        linkedIn: ContactFields.trimmed(linkedIn), location: ContactFields.trimmed(location))
         c.sentAt = send.sentAt
         c.sentSubject = send.subject
         c.sentBody = send.body
@@ -375,6 +389,8 @@ struct ContactDetailView: View {
         phone = committed.phone ?? ""
         position = committed.position
         greetingName = committed.greetingName ?? ""
+        linkedIn = committed.linkedIn ?? ""
+        location = committed.location ?? ""
         isEditing = false
     }
 

@@ -15,6 +15,12 @@ struct Contact: Identifiable, Decodable {
     /// greeting is derived from `name` and `email` instead, so most rows never
     /// need one. See `greeting`.
     var greetingName: String?
+    /// Their LinkedIn profile's address, and where they're based ("Pune,
+    /// Maharashtra, India"). Optional, like the phone: an imported list often
+    /// has these and no address, and they're how to reach someone until one
+    /// turns up.
+    var linkedIn: String?
+    var location: String?
     /// False when the address bounces or the person has left the company. Part of
     /// the shared contact row, not per-user: a dead address is dead for everyone.
     /// Invalid contacts are never suggested and can't be mailed — see
@@ -48,6 +54,7 @@ struct Contact: Identifiable, Decodable {
 
     init(id: String = "", email: String = "", name: String = "", phone: String? = nil,
          position: String = "", greetingName: String? = nil,
+         linkedIn: String? = nil, location: String? = nil,
          isValid: Bool = true, isSent: Bool = false, sentAt: Date? = nil,
          sentSubject: String? = nil, sentBody: String? = nil,
          repliedAt: Date? = nil, replyFrom: String? = nil, replySnippet: String? = nil) {
@@ -57,6 +64,8 @@ struct Contact: Identifiable, Decodable {
         self.phone = phone
         self.position = position
         self.greetingName = greetingName
+        self.linkedIn = linkedIn
+        self.location = location
         self.isValid = isValid
         self.isSent = isSent
         self.sentAt = sentAt
@@ -87,7 +96,8 @@ struct Contact: Identifiable, Decodable {
     /// Whether this contact has nothing better than its address to be greeted
     /// by, and so is worth looking up in the account's mail.
     var needsNameLookup: Bool {
-        RecipientName.needsLookup(name: name, email: email, greetingName: greetingName, replyFrom: replyFrom)
+        // Without an address there's nothing to look up in the mail.
+        email.contains("@") && RecipientName.needsLookup(name: name, email: email, greetingName: greetingName, replyFrom: replyFrom)
     }
 
     /// What to call this contact on screen: their name, or their address when
@@ -122,7 +132,30 @@ struct Contact: Identifiable, Decodable {
     var sealedFields: KeyRing.ContactFields {
         func value(_ s: String?) -> String? { (s?.isEmpty ?? true) ? nil : s }
         return KeyRing.ContactFields(name: value(name), email: value(email), position: value(position),
-                                     phone: value(phone), greetingName: value(greetingName))
+                                     phone: value(phone), greetingName: value(greetingName),
+                                     linkedIn: value(linkedIn), location: value(location))
+    }
+
+    /// Their profile as a link to open; nil when there's none or it isn't a
+    /// web address.
+    var linkedInURL: URL? {
+        guard var text = linkedIn?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        if !text.lowercased().hasPrefix("http") { text = "https://" + text }
+        guard let url = URL(string: text), url.scheme?.lowercased() == "https", url.host != nil else { return nil }
+        return url
+    }
+
+    /// `other`'s details — the fields sealed into the row — keeping this copy's
+    /// own state: whose it is, its validity, and this user's sends and replies.
+    /// Saving an edit changes the details only.
+    mutating func takeDetails(from other: Contact) {
+        email = other.email
+        name = other.name
+        phone = other.phone
+        position = other.position
+        greetingName = other.greetingName
+        linkedIn = other.linkedIn
+        location = other.location
     }
 
     /// What they said, without the quoted mail Gmail's snippet runs on into.
@@ -154,6 +187,8 @@ struct Contact: Identifiable, Decodable {
             phone = fields.phone
             position = fields.position ?? ""
             greetingName = fields.greetingName
+            linkedIn = fields.linkedIn
+            location = fields.location
         } else {
             email = try c.decodeIfPresent(String.self, forKey: .email) ?? ""
             name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
@@ -354,6 +389,14 @@ struct Job: Identifiable, Decodable {
         fresherRoles = details.fresherRoles
     }
 
+    /// Everything Edit Company can change, as it stands, with this account's
+    /// links for it when they've loaded.
+    func details(links: KeyRing.CompanyLinks?) -> CompanyDetails {
+        var d = details
+        if let links { d.links = links }
+        return d
+    }
+
     /// Everything Edit Company can change, as it stands.
     var details: CompanyDetails {
         CompanyDetails(
@@ -447,6 +490,10 @@ struct CompanyDetails: Equatable {
     var usuallyOpens = ""
     var batches: [String] = []
     var fresherRoles: [String] = []
+    /// LinkedIn, X and Facebook: not catalog fields but this account's own,
+    /// sealed in its vault (`JobStore.companyLinks`). Empty in `Job.details`;
+    /// Edit Company fills them in.
+    var links = KeyRing.CompanyLinks()
 
     /// The routes in their stored order, strongest first.
     var orderedRoutes: [HiringRoute] { HiringRoute.ordered.filter(hiringRoutes.contains) }
@@ -471,6 +518,7 @@ struct CompanyDetails: Equatable {
         d.usuallyOpens = clean(usuallyOpens)
         d.batches = list(batches)
         d.fresherRoles = list(fresherRoles)
+        d.links = links.normalized
         return d
     }
 
@@ -491,7 +539,33 @@ struct CompanyDetails: Equatable {
         if !t.website.isEmpty && CompanyLink.url(t.website) == nil { bad.append("Website") }
         if !t.careersURL.isEmpty && CompanyLink.url(t.careersURL) == nil { bad.append("Careers page") }
         if !t.logoURL.isEmpty && CompanyLink.url(t.logoURL)?.scheme?.lowercased() != "https" { bad.append("Logo") }
+        for (label, link) in [("LinkedIn", links.linkedIn), ("X", links.x), ("Facebook", links.facebook)] {
+            if let link = link?.trimmingCharacters(in: .whitespacesAndNewlines), !link.isEmpty,
+               CompanyLink.url(link) == nil {
+                bad.append(label)
+            }
+        }
         return bad
+    }
+}
+
+extension KeyRing.CompanyLinks {
+    /// Each link tidied as it's stored ("x.com/acme" becomes
+    /// "https://x.com/acme"), an empty one as none. One that isn't a web
+    /// address is kept as typed, so the form can say so.
+    var normalized: Self {
+        func clean(_ link: String?) -> String? {
+            guard let text = link?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            return CompanyLink.normalized(text) ?? text
+        }
+        return Self(linkedIn: clean(linkedIn), x: clean(x), facebook: clean(facebook))
+    }
+
+    /// The ones on file, in the order they're shown.
+    var shown: [(title: String, url: URL)] {
+        [("LinkedIn", linkedIn), ("X", x), ("Facebook", facebook)].compactMap { title, link in
+            CompanyLink.url(link).map { (title, $0) }
+        }
     }
 }
 

@@ -83,9 +83,14 @@ nonisolated final class KeyRing: @unchecked Sendable {
         var position: String?
         var phone: String?
         var greetingName: String?
+        /// Their LinkedIn profile, and where they're based. Added after the
+        /// rest: older builds open the other fields and step past these.
+        var linkedIn: String? = nil
+        var location: String? = nil
 
         enum CodingKeys: String, CodingKey {
             case name = "n", email = "e", position = "p", phone = "t", greetingName = "g"
+            case linkedIn = "l", location = "o"
         }
     }
 
@@ -105,12 +110,39 @@ nonisolated final class KeyRing: @unchecked Sendable {
 
     /// Seal a contact for the user's own vault. Throws when nothing is unlocked.
     func sealOwnContact(_ fields: ContactFields, id: String) throws -> (sealed: String, vaultID: String, keyID: String) {
+        try sealOwn(fields) { Sealing.contactContext(id: id, vaultID: $0) }
+    }
+
+    /// A company's LinkedIn, X and Facebook pages, as one vault keeps them.
+    struct CompanyLinks: Codable, Equatable {
+        var linkedIn: String?
+        var x: String?
+        var facebook: String?
+
+        enum CodingKeys: String, CodingKey { case linkedIn = "l", x, facebook = "f" }
+
+        var isEmpty: Bool { [linkedIn, x, facebook].allSatisfy { ($0 ?? "").isEmpty } }
+    }
+
+    func openCompanyLinks(_ sealed: String, id: String, vaultID: String, keyID: String) throws -> CompanyLinks {
+        guard canRead(vault: vaultID) else { throw Locked.notReadable }
+        guard let key = vaultKey(keyID) else { throw Locked.missingKey }
+        return try Sealing.open(CompanyLinks.self, from: sealed, with: key,
+                                context: Sealing.companyLinksContext(id: id, vaultID: vaultID))
+    }
+
+    /// Seal a company's links for the user's own vault, as row `id`.
+    func sealOwnCompanyLinks(_ links: CompanyLinks, id: String) throws -> (sealed: String, vaultID: String, keyID: String) {
+        try sealOwn(links) { Sealing.companyLinksContext(id: id, vaultID: $0) }
+    }
+
+    private func sealOwn<Value: Encodable>(_ value: Value, context: (String) -> String) throws
+        -> (sealed: String, vaultID: String, keyID: String) {
         let (vaultID, keyID, key): (String?, String?, SymmetricKey?) = lock.withLock {
             (_ownVaultID, _ownKeyID, _ownKeyID.flatMap { _vaultKeys[$0] })
         }
         guard let vaultID, let keyID, let key else { throw Locked.missingKey }
-        let sealed = try Sealing.seal(json: fields, with: key, context: Sealing.contactContext(id: id, vaultID: vaultID))
-        return (sealed, vaultID, keyID)
+        return (try Sealing.seal(json: value, with: key, context: context(vaultID)), vaultID, keyID)
     }
 
     /// Open something sealed under the account key. Nil when it can't be — a

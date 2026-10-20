@@ -1,32 +1,73 @@
 {
+  "company_links" : [
+    {
+      "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "links" : {
+        "facebook" : "https:\/\/www.facebook.com\/AcmeExample",
+        "linkedin" : "https:\/\/www.linkedin.com\/company\/acme-example",
+        "x" : "https:\/\/x.com\/acme_example"
+      },
+      "sealed" : "v1.p5b7mg1Fh+9pcCxLiH2AMRfUHCTt3WnXG0oS\/RRo4dKTztcG7rdogfC2HGJpzyquelCr9Zva+1F+Ce54Td6cyjXpgZ3f8KmDX\/8YLmN4vxsyVYfd0GEwx8PqckYusNAPEhrR89BHB03D3a+16ciHdm2zKs5T17IfFhAFcNCLRH9\/Zs5CHuM1a7uobvulxkYJbkagFZrdK7+OB7EOf82nYIoUif8Az+U=",
+      "vault_id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0"
+    },
+    {
+      "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "links" : {
+        "facebook" : null,
+        "linkedin" : null,
+        "x" : "https:\/\/x.com\/zoe_example"
+      },
+      "sealed" : "v1.tKrr6\/KgDGsfDppwg6+exhc08WmPfouJxF3XeG2F8moqqH8oDbTM34AgHtKNsWWLF0HAHWUsIIIYxXr8aM2Yhg==",
+      "vault_id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0"
+    }
+  ],
   "contacts" : [
     {
       "fields" : {
         "email" : "maya.rao@example.com",
         "greeting_name" : "Maya",
+        "linkedin" : "https:\/\/www.linkedin.com\/in\/maya-rao-example",
+        "location" : "Pune, Maharashtra, India",
         "name" : "Maya Rao",
         "phone" : "+91 98765 43210",
         "position" : "Talent Partner"
       },
       "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
-      "sealed" : "v1.eMcVdOMx\/hb4XizKhOVLVQVfTNysMtrm3re7ymKI+GgdZiP0GvQWPGEs7ERAgjdzcpuOqCiRZIlLzCQJk4eHoXFDLB4AAhkzgYTFQkNDE+FeT7YnbDbRyVyrurF6MweucfAFarqV8nw9Dt8FxgVnLRJ9ruYdrfVaESXCSFo=",
+      "sealed" : "v1.oRVIOpeokoz\/hrB0Zybrs9TVt2wMuMOTEaelSzqu7jC4Q6JcYzkrm3w8fTl0RoeNUHYLQdZxdbZOpzg6doqiwdAqoPTo1ZqlcBBQX6k34Gt8C\/mRESC3G+DwvtbPg4ZuJCIyEkHxFN7dp7j2vFywvUmv2TkbW8gZ7rNQz+sbTfEJTPCkmqL4+cgIbQkwN1\/gzEdOTarwAaiSqa+OxAY0Vl9nlvqxLrH9ryiMmfYoNXBtX\/nSmbHyWz2\/Po\/8DvUniYqDvzp9lxxIUAAUbgoh+aLVDQ==",
       "vault_id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0"
     },
     {
       "fields" : {
         "email" : "zoe\/unal@example.com",
         "greeting_name" : null,
+        "linkedin" : null,
+        "location" : null,
         "name" : "Zoë Ünal",
         "phone" : null,
         "position" : null
       },
       "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
-      "sealed" : "v1.ic3tB4WUU48N6zn1pN8yXJh\/+FWz8ADUCfRl\/k8KTqRTbJqA6BYtw0DQ+oNZl5NzkwLeBwlMcS8M76lKmjTJxVqPe53JBhF12j0=",
+      "sealed" : "v1.OO8+AjsZSV4QME7Vm0NBTiTFBZ5Wxn9Tre22t72scRfYlSzd9dVioILUh8uIQxG+Q4OtQERkEx0CezaUGdH+iaCVqzNiICSEiVI=",
+      "vault_id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0"
+    },
+    {
+      "fields" : {
+        "email" : null,
+        "greeting_name" : null,
+        "linkedin" : "https:\/\/www.linkedin.com\/in\/ravi-menon-example",
+        "location" : null,
+        "name" : "Ravi Menon",
+        "phone" : null,
+        "position" : "Recruiter"
+      },
+      "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "sealed" : "v1.5X54KaEE54btkOFljd6lhofVOn38fp4bPPOCM4wTRfMZjF9lueZbuQgqUAjhp80OO4ZpWRvyg3GPkafTT189mO08+aCii4I50AE\/k97P4ySP2+zK0awRzipyUb36Dq2PAPK3YjRzoseSK5zSO4AqHqItaj16j3w=",
       "vault_id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0"
     }
   ],
   "contexts" : {
     "account" : "aurora.account.v1|maya.rao@example.com",
+    "company_links" : "aurora.companylinks.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff|0e984725-c51c-4bf4-9960-e1c80e27aba0",
     "contact" : "aurora.contact.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff|0e984725-c51c-4bf4-9960-e1c80e27aba0",
     "grant" : "aurora.grant.v1|maya.rao@example.com|0e984725-c51c-4bf4-9960-e1c80e27aba0|8c2d1a7e-5b3f-4e21-9a0b-7d6c5e4f3a21",
     "profile" : "aurora.profile.v1|maya.rao@example.com",
@@ -102,22 +143,22 @@
     {
       "context" : "",
       "plaintext_hex" : "",
-      "sealed" : "v1.2Vfo\/RYH1g8McN6ijrGsCTa8mW9I8eSnVLuLYw=="
+      "sealed" : "v1.WgH36f6QjSQ2N6zphMFgj2qnvohepzurkXFYQw=="
     },
     {
       "context" : "aurora.send.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
       "plaintext_hex" : "68656c6c6f",
-      "sealed" : "v1.iEeOchFdKCjtJUwbuhN3alBglx1BONjLdN2QuK0MVaW+"
+      "sealed" : "v1.EtZ757mUuCQptJAusmREHiVMDPIKmOwuYJR8xK\/DZKLa"
     },
     {
       "context" : "aurora.send.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
       "plaintext_hex" : "7369787465656e2062797465732121217369787465656e2062797465732121217369787465656e206279746573212121",
-      "sealed" : "v1.ZacZNKCF1Tm4niVMivlRTjfA02hYtijEQklWlZSwGpFOXvA2p9Gn\/NoakzrrfwskUL\/4+mC\/ra762\/tx4B2JLWMsVI3xiIZZrEj\/Bw=="
+      "sealed" : "v1.JPOYXKtQ\/rb7I4DMHioJ2Sf\/2OTRJD6wHwG4GIqbu57tzVCtlRr26VRIehCB48cXCamLEQxY1IP893WPxy8A+TnCAfvLGULS6udaPg=="
     },
     {
       "context" : "aurora.send.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
       "plaintext_hex" : "5a6fc3ab20e2809420636166c3a920e29895efb88f20e5908de5898d",
-      "sealed" : "v1.+\/pajL4I2fASxNhnrTcQJ8bZxOxLOMKu\/dHWMaiR9oL2VeNdk1WWEP5UIgNZmVbsvihWh6QPhEE="
+      "sealed" : "v1.Q9j3HaKjAiwzLD2bfpBvQgBVoTQLbqD2ScIv19iPpRDUqVv+k0EtaffdXcZUKoUN0YZka6QFL2U="
     }
   ],
   "vault" : {
@@ -128,7 +169,7 @@
       "kdf_rounds" : 1000,
       "kdf_salt" : "ABEiM0RVZneImaq7zN3u\/w==",
       "key_id" : "8c2d1a7e-5b3f-4e21-9a0b-7d6c5e4f3a21",
-      "sealed_key" : "v1.Yv4w7nzHsZRW\/G3xZSORZwjeyn\/mVyVDb5fL3rL2oy4NiPI18GQQADlZe1WPms0NAa1PBgTwOSin7cZx"
+      "sealed_key" : "v1.Ixi+YV2kR833sEKJU0URVjtk7KTqi6bKLRv1y3yO79iVeFxWws29eAOTk\/2ecR3vdFS\/A+Zdjc25ytJZ"
     },
     "vault_key_hex" : "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978"
   }

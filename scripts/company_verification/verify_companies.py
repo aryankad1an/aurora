@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 import backup as backup_mod
+import company_links
 import contacts
 import supabase
 from domains import brand, clean, is_personal, registrable
@@ -845,8 +846,12 @@ def apply(st, plan):
 
     # A folded company's fresher-hiring sources and flag go with its contacts:
     # deleting it would cascade to the sources.
+    # So do its sealed company links, every vault's.
     for cid, tgt in plan.get("fold_into", {}).items():
         move_fresher_data(cid, real(tgt))
+        moved = company_links.move(cid, real(tgt))
+        if moved:
+            print(f"  moved {moved} vaults' company links from {st.companies[cid]['name']}")
 
     # Deleting a company cascades to its contacts and their sends: refuse
     # unless the DB confirms it's empty and untracked right now.
@@ -855,10 +860,11 @@ def apply(st, plan):
         tracked = (supabase.get("tracked_companies", {"company_id": f"eq.{cid}"}, select="user_email")
                    + supabase.get("user_companies", {"company_id": f"eq.{cid}"}, select="user_email"))
         sources = company_sources(cid)
-        if left or tracked or sources:
+        links = company_links.count_at(cid)
+        if left or tracked or sources or links:
             raise SystemExit(f"refusing to delete {st.companies[cid]['name']}: "
                              f"{len(left)} contacts, {len(tracked)} tracked rows, "
-                             f"{len(sources)} hiring sources remain")
+                             f"{len(sources)} hiring sources, {links} vaults' company links remain")
         supabase.write("DELETE", "companies", {"id": f"eq.{cid}"}, prefer="return=minimal")
     print(f"  deleted {len(plan['delete_companies'])} folded companies, "
           f"{len(plan.get('delete_emptied', []))} emptied companies")
@@ -870,6 +876,8 @@ def apply(st, plan):
             raise SystemExit(f"refusing to delete junk {st.companies[cid]['name']}: it has sends")
         if company_sources(cid):
             raise SystemExit(f"refusing to delete junk {st.companies[cid]['name']}: it has hiring sources")
+        if company_links.count_at(cid):
+            raise SystemExit(f"refusing to delete junk {st.companies[cid]['name']}: it has company links")
         if rids:
             supabase.write("DELETE", "recruiters", {"id": supabase.in_filter(rids)}, prefer="return=minimal")
         supabase.write("DELETE", "companies", {"id": f"eq.{cid}"}, prefer="return=minimal")

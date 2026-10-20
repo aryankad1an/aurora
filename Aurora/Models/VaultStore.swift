@@ -429,6 +429,19 @@ final class VaultStore {
             }
             return try Self.contactRow(row, fields: fields)
         }
+        // The vault's company links, the same way. A database without their
+        // table has none to move.
+        do {
+            try await reseal(path: "company_links", filters: filters, label: "Re-encrypting your company links…") { row in
+                guard let id = row["id"] as? String, let sealed = row["sealed"] as? String,
+                      let keyID = row["key_id"] as? String,
+                      let links = try? KeyRing.shared.openCompanyLinks(sealed, id: id, vaultID: vault.id, keyID: keyID)
+                else { return nil }
+                var out = row
+                (out["sealed"], out["vault_id"], out["key_id"]) = try KeyRing.shared.sealOwnCompanyLinks(links, id: id)
+                return out
+            }
+        } catch SupabaseError.schemaOutOfDate {}
         try await VaultAPI.updateVault(id: vault.id, [
             "key_id": newKeyID, "kdf_salt": pendingSalt,
             "kdf_rounds": vault.pendingKdfRounds ?? Sealing.defaultRounds, "sealed_key": pendingSealed

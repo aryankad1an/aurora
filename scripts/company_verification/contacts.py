@@ -6,7 +6,8 @@ the plain columns (see ../vault_crypto.py). This module hides that from the
 pipeline:
 
 - Reading: `open_rows` turns rows as stored into rows as the scripts always
-  saw them: the five fields filled in, the storage columns (vault_id, key_id,
+  saw them: the contact fields filled in (plus linkedin and location, which
+  only exist sealed), the storage columns (vault_id, key_id,
   sealed) dropped. Rows still plain (a DB without the migration, or contacts
   the app hasn't sealed yet) pass through. Rows in a vault this key can't open
   read as blank and are counted in `locked`; nothing rewrites their fields.
@@ -30,11 +31,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import vault_crypto  # noqa: E402
 import supabase  # noqa: E402
 
-FIELDS = tuple(vault_crypto.CONTACT_FIELDS)        # name, email, position, phone, greeting_name
+FIELDS = tuple(vault_crypto.CONTACT_FIELDS)        # name, email, position, phone, greeting_name, linkedin, location
+COLUMNS = vault_crypto.CONTACT_COLUMNS             # the ones with a plain column too
+SEALED_ONLY = tuple(f for f in FIELDS if f not in COLUMNS)
 STORAGE = ("vault_id", "key_id", "sealed")
 CODE_ENV = "AURORA_VAULT_CODE"
 # The vault tables: backed up with the rest, but not part of any pipeline's tables.
-VAULT_TABLES = ("vaults", "vault_grants")
+VAULT_TABLES = ("vaults", "vault_grants", "company_links")
 
 
 def canonical(row):
@@ -43,9 +46,16 @@ def canonical(row):
     the app sealed compares equal to the plain row it came from."""
     for f in ("name", "email"):
         row[f] = row.get(f) or ""
-    for f in ("position", "phone", "greeting_name"):
+    for f in ("position", "phone", "greeting_name") + SEALED_ONLY:
         row[f] = row.get(f) or None
     return row
+
+
+def _plain(row):
+    """A row going in unsealed: linkedin and location have no column to go to."""
+    if any(row.get(f) for f in SEALED_ONLY):
+        raise SystemExit("LinkedIn and location are only stored sealed, and this vault has no key to seal with")
+    return {k: v for k, v in row.items() if k not in SEALED_ONLY}
 
 
 class Session:
@@ -198,16 +208,18 @@ class Session:
         body["id"] = str(body.get("id") or uuid.uuid4()).lower()
         body["vault_id"] = vault["id"]
         if key is None:
-            return body
+            return _plain(body)
         body["key_id"] = key_id
         body["sealed"] = vault_crypto.seal_contact(row, key, body["id"], vault["id"])
-        body.update({f: None for f in FIELDS})
+        for f in SEALED_ONLY:
+            body.pop(f, None)
+        body.update({f: None for f in COLUMNS})
         return body
 
     def insert(self, rows, prefer="return=representation"):
         """POST contacts. Sealed rows get their id here: it's part of the seal."""
         if not self.migrated():
-            return self.api.write("POST", "recruiters", body=rows, prefer=prefer)
+            return self.api.write("POST", "recruiters", body=[_plain(r) for r in rows], prefer=prefer)
         return self.api.write("POST", "recruiters", body=[self.sealed_body(r) for r in rows], prefer=prefer)
 
     def update(self, contact_id, changes):
@@ -215,13 +227,13 @@ class Session:
         only lands if the row is still what was read (another phone may have
         changed it). Returns the written rows, like `supabase.write`."""
         if not self.migrated():
-            return self.api.write("PATCH", "recruiters", {"id": f"eq.{contact_id}"}, changes)
+            return self.api.write("PATCH", "recruiters", {"id": f"eq.{contact_id}"}, _plain(changes))
         fields = {k: v for k, v in changes.items() if k in FIELDS}
         if not fields:  # company, validity: outside the seal
             return self.api.write("PATCH", "recruiters", {"id": f"eq.{contact_id}"}, changes)
         vault, key_id, key = self.writing_vault()
         found = self.api.get("recruiters", {"id": f"eq.{contact_id}"},
-                             select=",".join(("id",) + STORAGE + FIELDS))
+                             select=",".join(("id",) + STORAGE + COLUMNS))
         if not found:
             return []
         row = found[0]
@@ -234,12 +246,12 @@ class Session:
         else:
             current = canonical({f: row.get(f) for f in FIELDS})
         if key is None:
-            body = dict(changes)
+            body = _plain(changes)
         else:
             merged = {**{f: current.get(f) for f in FIELDS}, **fields}
             body = {**{k: v for k, v in changes.items() if k not in FIELDS}, "key_id": key_id,
                     "sealed": vault_crypto.seal_contact(merged, key, contact_id, vault["id"]),
-                    **{f: None for f in FIELDS}}
+                    **{f: None for f in COLUMNS}}
         got = self.api.write("PATCH", "recruiters", filters, body)
         if not got:
             raise SystemExit(f"contact {contact_id} changed while it was being updated; run this again")

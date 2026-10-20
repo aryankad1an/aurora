@@ -8,7 +8,8 @@ declare
   p record;
 begin
   foreach t in array array['companies', 'company_sources', 'recruiters', 'mail_sends', 'profiles',
-                           'templates', 'tracked_companies', 'user_companies', 'vaults', 'vault_grants'] loop
+                           'templates', 'tracked_companies', 'user_companies', 'vaults', 'vault_grants',
+                           'company_links', 'admins'] loop
     if to_regclass('public.' || t) is null then continue; end if;
     for p in select policyname from pg_policies where schemaname = 'public' and tablename = t loop
       execute format('drop policy %I on public.%I', p.policyname, t);
