@@ -1087,6 +1087,167 @@
         "Citadelgroup"
       ],
       "why": "citadelgroup.com 301-redirects to citadel.com and both domains use the same Proofpoint mail tenant (mxa-001f6701): Citadel's older mail domain (2026-10-20)"
+    },
+    {
+      "into": "Foundit",
+      "from": [
+        "Monsterindia"
+      ],
+      "why": "monsterindia.com redirects to foundit.in, whose own title reads \"foundit (Formerly Monster)\": Monster India's new name (2026-10-20)"
+    },
+    {
+      "into": "Go Yubi",
+      "from": [
+        "Credavenue"
+      ],
+      "why": "credavenue.com redirects to go-yubi.com; CredAvenue rebranded as Yubi in June 2022 (2026-10-20)"
+    },
+    {
+      "into": "Cornerstone",
+      "from": [
+        "Csod"
+      ],
+      "why": "csod.com redirects to cornerstoneondemand.com and both domains use the same Proofpoint mail tenant (002d2501): Cornerstone OnDemand (2026-10-20)"
+    },
+    {
+      "into": "JioStar",
+      "from": [
+        "Viacom18"
+      ],
+      "why": "viacom18.com redirects to jiostar.com and both domains use the same IronPort mail tenant (hc1549-65): Viacom18 became JioStar (2026-10-20)"
+    },
+    {
+      "into": "Trilogy",
+      "from": [
+        "Codenation"
+      ],
+      "why": "codenation.co.in redirects to innovations.trilogy.com; Trilogy Innovations was formerly CodeNation Innovation Labs (2026-10-20)"
+    },
+    {
+      "into": "Infibeam",
+      "from": [
+        "Ia Ooo"
+      ],
+      "why": "ia.ooo was Infibeam Avenues' corporate site (Feb 2026 NSE filing moving it to avenuesai.com); ia.ooo and infibeam.com both redirect to avenuesai.com (2026-10-20)"
+    },
+    {
+      "into": "Caterpillar",
+      "from": [
+        "Cat"
+      ],
+      "why": "cat.com's own page title reads \"Cat | Caterpillar\" and Caterpillar's Workday board is cat.wd5: one company (2026-10-20)"
+    },
+    {
+      "into": "Societe Generale",
+      "from": [
+        "Socgen"
+      ],
+      "why": "societegenerale.com's mail servers are mail.iap.socgen.com: socgen.com is Société Générale's mail domain (2026-10-20)"
+    },
+    {
+      "into": "Trellix",
+      "from": [
+        "Fireeye"
+      ],
+      "why": "fireeye.com redirects to trellix.com and both domains use the same FireEye mail cloud: FireEye became Trellix (2026-10-20)"
+    },
+    {
+      "into": "Info Edge",
+      "from": [
+        "Firstnaukri"
+      ],
+      "why": "firstnaukri.com redirects to naukri.com/campus, an Info Edge property (2026-10-20)"
+    },
+    {
+      "into": "Huron",
+      "from": [
+        "Hcg"
+      ],
+      "why": "hcg.com redirects to huronconsultinggroup.com and Huron's SEC filings give @hcg.com contacts (2026-10-20)"
+    },
+    {
+      "into": "Viavi Solutions",
+      "from": [
+        "Jdsu"
+      ],
+      "why": "JDSU renamed itself Viavi Solutions in 2015 (SEC 8-K) and jdsu.com redirects to viavisolutions.com (2026-10-20)"
+    },
+    {
+      "into": "Axis Max Life",
+      "from": [
+        "Maxlifeinsurance"
+      ],
+      "why": "Max Life Insurance renamed Axis Max Life in Dec 2024 (exchange filing) and maxlifeinsurance.com redirects to axismaxlife.com (2026-10-20)"
+    },
+    {
+      "into": "Disys",
+      "from": [
+        "Sigconsult"
+      ],
+      "why": "sigconsult.com redirects to dexian.com and shares Disys/Dexian's Proofpoint mail tenant (008e0101); Signature Consultants and DISYS combined as Dexian in 2022 (2026-10-20)"
+    },
+    {
+      "into": "Elevancehealth",
+      "from": [
+        "Anthem"
+      ],
+      "why": "Anthem, Inc. renamed itself Elevance Health in 2022; anthem.com and elevancehealth.com share one Proofpoint mail tenant (001bee01, identical SPF) and Anthem's careers page is careers.elevancehealth.com. anthem.com stays the insurance brand, kept as an alias (2026-10-20)"
+    },
+    {
+      "into": "Juspay",
+      "from": [
+        "Justpay"
+      ],
+      "why": "justpay.in is registered to Juspay Technologies Pvt. Ltd. (WHOIS registrant) and redirects to juspay.io/in, same as juspay.in (2026-10-20)"
+    },
+    {
+      "into": "Tencent",
+      "from": [
+        "Tencent Games"
+      ],
+      "why": "tencentgames.com links careers.tencent.com and tencent.com, and its mail runs on Tencent's qq.com servers; Tencent Games is Tencent's games division, hiring through Tencent careers (2026-10-20)"
+    },
+    {
+      "into": "Activision Blizzard",
+      "from": [
+        "Blizzard Entertainment"
+      ],
+      "why": "blizzard.com and activisionblizzard.com share one Proofpoint mail tenant (00381101) and careers.blizzard.com names Activision Blizzard; Blizzard is its studio (2026-10-20)"
+    },
+    {
+      "into": "Block",
+      "from": [
+        "Cash App"
+      ],
+      "why": "cash.app, block.xyz and squareup.com share one Route 53 delegation set (ns-311/810/1248/1816) and the same Valimail SPF setup; Cash App is Block's product (2026-10-20)"
+    },
+    {
+      "into": "Mr. Cooper",
+      "from": [
+        "Nationstarmail"
+      ],
+      "why": "nationstarmail.com and mrcooper.com share one Proofpoint mail tenant (00219602) and Mr. Cooper's Workday tenant is 'nationstar' (nationstar.wd5); Nationstar Mortgage operates as Mr. Cooper (2026-10-20)"
+    },
+    {
+      "into": "General Motors",
+      "from": [
+        "Cruise"
+      ],
+      "why": "getcruise.com redirects to gm.com/innovation/autonomous-driving and its MX (mx1/mx2.imr.gm.com) and SPF (_spf-a/_spf-b.gm.com) are GM's; GM folded Cruise into itself (2026-10-20)"
+    },
+    {
+      "into": "Telushealth",
+      "from": [
+        "Lifeworks"
+      ],
+      "why": "lifeworks.com is registered to TELUS Health (Canada) Ltd. (WHOIS) and signs mail through the same Microsoft 365 tenant as telushealth.com (DKIM selector1 -> msoit.onmicrosoft.com); LifeWorks became TELUS Health in 2022 (2026-10-20)"
+    },
+    {
+      "into": "JioStar",
+      "from": [
+        "Disney+ Hotstar"
+      ],
+      "why": "careers.hotstar.com 301-redirects to jiostar.com; hotstar.com sends mail from the same IPs as startv.com (14.143.96.163/.164), whose SPF uses JioStar's Cisco mail tenant (hc1549-65); Hotstar became JioHotstar under JioStar (2026-10-20)"
     }
   ],
   "renames": {
@@ -1629,7 +1790,51 @@
     "General Electric (GE)": "fc9367d4-f962-408e-8530-c3008e10ad0e",
     "GE Aerospace": "b5f5c156-af8a-4d22-a232-0c8a7e18b748",
     "Citadel": "e3a0dcbf-6090-493f-b594-094f2698ca67",
-    "Citadelgroup": "77decd0d-b499-460b-8fa1-6677f2b27a3c"
+    "Citadelgroup": "77decd0d-b499-460b-8fa1-6677f2b27a3c",
+    "Monsterindia": "458da835-96f7-437c-9cab-a77ef304dab3",
+    "Foundit": "e3a7384f-2a75-4887-bf94-b928b02a9eda",
+    "Credavenue": "66aa8d6c-3900-4611-9d67-51baa27143d9",
+    "Go Yubi": "374c1221-2301-4909-a71d-f581a5159c5f",
+    "Csod": "8cd13174-a1c8-4675-b7cc-b0bed7828d03",
+    "Cornerstone": "6bdb5b84-71e2-4ea4-9a0e-6f7bf46f86f7",
+    "Viacom18": "5a90bb5c-1983-49ff-8567-4d3102b85ab5",
+    "JioStar": "f978d5d2-2ab3-4cf7-8d0a-d898cb6130e9",
+    "Codenation": "592dc1b8-6dc0-4cb3-941e-f09c90d1fa7e",
+    "Trilogy": "d6d67538-e4c7-4975-b472-0a9dc69a6eca",
+    "Ia Ooo": "8bb646db-2196-42d8-a7aa-1714b66b1f17",
+    "Infibeam": "f755bf47-ddd3-4616-aacc-40f6586e0cc1",
+    "Cat": "c6695c66-6ea3-4579-8204-3e929d860c91",
+    "Caterpillar": "b878b400-d552-46da-90aa-ac1a53b12da1",
+    "Socgen": "4517408e-1c08-461f-a0f4-e49b1f9e7584",
+    "Societe Generale": "dbf8fa80-74d7-4752-b6f7-f8c7fc1a8277",
+    "Fireeye": "9be95ec2-b287-4d2d-9bfb-61cfd4858a9e",
+    "Trellix": "cfb576a7-6b20-4cc5-b57c-e4c66f63f99f",
+    "Firstnaukri": "c6bf2f23-07fe-4e46-8e29-1055a8e6a172",
+    "Hcg": "d05448ec-5d11-4e55-a7a8-db9e7d966c4a",
+    "Huron": "b11af0d8-ef7c-49a0-8e20-9baca57a02d2",
+    "Jdsu": "e37e5124-14eb-4781-95bd-3037721463ee",
+    "Viavi Solutions": "dc39f4d1-58bb-4eec-97da-7bb6dcef1ca9",
+    "Maxlifeinsurance": "b0f541e1-08e2-4723-8113-54592389f85b",
+    "Axis Max Life": "0775d3d0-5515-4f6b-abde-8efaec562084",
+    "Sigconsult": "8326ecaf-526d-415e-8116-821b3d391ca1",
+    "Disys": "33687e50-c7cb-4c3f-8f80-7ace27687c0f",
+    "Elevancehealth": "c3e3d9d2-2437-4e99-9721-e2218c312f69",
+    "Anthem": "d9c88502-2b4d-4323-b549-ec9f725d20fd",
+    "Juspay": "90032315-5b72-441a-9e9a-a00c7595dc05",
+    "Justpay": "19a0264b-fd3d-4dab-98ab-603a55ad26e8",
+    "Tencent": "2442c814-5001-46e2-88d0-6f93a96f2054",
+    "Tencent Games": "74e38477-ce1e-463e-b77d-8ab81b4cbaf9",
+    "Activision Blizzard": "dba3257e-a2b8-49dd-ac9b-7b5ade3e8bf4",
+    "Blizzard Entertainment": "f94a1330-4633-4145-969e-d5f2be53a67a",
+    "Block": "004d18c1-847a-403d-ba73-31f357594d79",
+    "Cash App": "c8b98edb-72af-43b1-a342-7bf15925343d",
+    "Mr. Cooper": "10b08309-b0bb-4552-ae0d-b34336d88b07",
+    "Nationstarmail": "e4ae5871-c905-4f69-aac1-8abfb5ca658f",
+    "General Motors": "4a37411b-ee9d-423f-9747-566208f49e6f",
+    "Cruise": "d80df8a2-91c7-44a5-953a-834f43cef42c",
+    "Telushealth": "34c50abd-d9f7-40f2-b1da-d8b300cac5c0",
+    "Lifeworks": "2c78a0f9-1ba9-47eb-ac14-ef47b25795e6",
+    "Disney+ Hotstar": "cca408de-4854-47bc-a31a-6bccb1501192"
   },
   "personal_contacts": {
     "action": "delete",
