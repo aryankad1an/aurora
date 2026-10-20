@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ledger import is_personal, load_ledger, match, registrable  # noqa: E402
+import contacts  # noqa: E402  (ledger put company_verification on the path)
 
 DEAD = set(json.loads((Path(__file__).resolve().parent.parent / "company_verification" / "decisions.json")
                       .read_text())["dead_domains"])
@@ -17,7 +18,7 @@ DEAD = set(json.loads((Path(__file__).resolve().parent.parent / "company_verific
 def main(ledger_path, backup, out):
     _, ledger = load_ledger(ledger_path)
     companies = json.loads((Path(backup) / "companies.json").read_text())
-    recruiters = json.loads((Path(backup) / "recruiters.json").read_text())
+    recruiters = contacts.open_backup(backup)  # sealed addresses opened with the backup's vault rows
     matches, _ = match(ledger, companies, recruiters)
     matched = {cid for cid, _ in matches.values() if cid}
     targets = [{"key": "ledger:" + c["id"], "url": c["website"], "name": c["name"]} for c in ledger]

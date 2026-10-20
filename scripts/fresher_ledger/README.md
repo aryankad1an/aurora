@@ -8,6 +8,13 @@ website.
 Run from this folder. Outputs go to `data_verification/fresher_ledger/` and
 backups to `db_backups/` at the repo root; both are git-ignored.
 
+`targets.py` and `import_ledger.py` match companies by their contacts' mail
+domains. Once the DB has vaults (`scripts/vault_migration.sql`), those
+addresses are sealed. The scripts open them through
+`../company_verification/contacts.py` with AURORA's private key, from
+`AURORA_PRIVATE_KEY` or a hidden prompt (see "Sealed contacts" in that folder's
+README). Nothing here writes contacts.
+
 ```bash
 # 0. Once: run migration.sql in the Supabase SQL editor (it's also in the main README).
 # 1. Download companies.json from the ledger's data files.

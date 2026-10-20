@@ -3,6 +3,9 @@
 Uses the app's anon key from Aurora/AppConfig.swift (it ships in the app, so
 it is not a secret). Every write goes through `write`, which logs and raises on
 anything but 2xx so a half-applied plan stops instead of carrying on.
+
+Contacts are sealed once vault_migration.sql has run: read and write their
+fields through contacts.py, not straight through here.
 """
 import json
 import re
@@ -72,3 +75,21 @@ def write(method, table, filters=None, body=None, prefer="return=representation"
 
 def in_filter(ids):
     return "in.(" + ",".join(ids) + ")"
+
+
+def missing_table(error, table=None):
+    """Whether an APIError says a table doesn't exist (its migration hasn't run)."""
+    text = str(error)
+    return ("PGRST205" in text or "42P01" in text) and (table is None or table in text)
+
+
+def has_table(table):
+    """Whether `table` exists: `vaults` tells a DB with sealed contacts
+    (vault_migration.sql has run) from one without."""
+    try:
+        _request("GET", table, {"select": "*", "limit": "1"})
+        return True
+    except APIError as e:
+        if missing_table(e):
+            return False
+        raise

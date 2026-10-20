@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 import backup as backup_mod
+import contacts
 import supabase
 from domains import brand, clean, is_personal, registrable
 
@@ -58,13 +59,21 @@ SUBDOMAIN_WORDS = {
 # ----------------------------------------------------------------------------
 # Loading
 
+# The vault tables are backed up too, but only to open the contacts with.
+TABLES = {t: o for t, o in backup_mod.TABLES.items() if t not in contacts.VAULT_TABLES}
+
+
 def load_live():
-    return {t: supabase.get_all(t, order=o) for t, o in backup_mod.TABLES.items()}
+    tables = {t: supabase.get_all(t, order=o) for t, o in TABLES.items() if t != "recruiters"}
+    tables["recruiters"] = contacts.read_live()
+    return tables
 
 
 def load_snapshot(path):
     path = Path(path)
-    return {t: json.loads((path / f"{t}.json").read_text()) for t in backup_mod.TABLES}
+    tables = {t: json.loads((path / f"{t}.json").read_text()) for t in TABLES}
+    tables["recruiters"] = contacts.open_backup(path, tables["recruiters"])
+    return tables
 
 
 class State:
@@ -798,17 +807,22 @@ def apply(st, plan):
             assert len(got) == len(part), f"moved {len(got)} of {len(part)} into {tgt}"
     print(f"  moved {sum(len(v) for v in plan['moves'].values())} contacts")
 
+    # Addresses are sealed, so the server can't be asked whether one exists:
+    # read every address fresh and check here.
+    in_use = (contacts.emails_in_use()
+              if plan.get("rewrite_emails") or plan.get("restore_contacts") else {})
     for x in plan.get("rewrite_emails", []):
-        clash = [c for c in supabase.get("recruiters", {"email": ilike_exact(x["to"])}, select="id") if c["id"] != x["id"]]
-        if clash:
+        if in_use.get(x["to"].strip().lower(), set()) - {x["id"]}:
             raise SystemExit(f"refusing to rewrite {x['from']}: {x['to']} already exists")
-        got = supabase.write("PATCH", "recruiters", {"id": f"eq.{x['id']}"}, {"email": x["to"], "is_valid": True})
+        got = contacts.update(x["id"], {"email": x["to"], "is_valid": True})
         assert len(got) == 1, f"no row for {x['from']}"
+        in_use.setdefault(x["to"].strip().lower(), set()).add(x["id"])
     print(f"  corrected {len(plan.get('rewrite_emails', []))} typo addresses")
     for row in plan.get("restore_contacts", []):
-        if supabase.get("recruiters", {"email": ilike_exact(row["email"])}, select="id"):
+        if in_use.get(row["email"].strip().lower()):
             raise SystemExit(f"refusing to restore {row['email']}: it already exists")
-        supabase.write("POST", "recruiters", body=row, prefer="return=minimal")
+        contacts.insert([row], prefer="return=minimal")
+        in_use.setdefault(row["email"].strip().lower(), set()).add(row["id"])
     print(f"  restored {len(plan.get('restore_contacts', []))} typo contacts with corrected addresses")
 
     for t in plan["tracking"]:
@@ -956,8 +970,7 @@ def main():
     else:
         before = State(load_snapshot(args.snapshot) if args.snapshot else load_live())
 
-    restore_rows = (json.loads((Path(args.restore_typos_from) / "recruiters.json").read_text())
-                    if args.restore_typos_from else ())
+    restore_rows = contacts.open_backup(args.restore_typos_from) if args.restore_typos_from else ()
     plan = build_plan(before, restore_rows)
     plan["domains"] = domain_ops(State(simulate(before, plan)))
     v, w = verify(before)

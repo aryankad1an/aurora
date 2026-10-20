@@ -1,0 +1,135 @@
+{
+  "contacts" : [
+    {
+      "fields" : {
+        "email" : "maya.rao@example.com",
+        "greeting_name" : "Maya",
+        "name" : "Maya Rao",
+        "phone" : "+91 98765 43210",
+        "position" : "Talent Partner"
+      },
+      "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "sealed" : "v1.eMcVdOMx\/hb4XizKhOVLVQVfTNysMtrm3re7ymKI+GgdZiP0GvQWPGEs7ERAgjdzcpuOqCiRZIlLzCQJk4eHoXFDLB4AAhkzgYTFQkNDE+FeT7YnbDbRyVyrurF6MweucfAFarqV8nw9Dt8FxgVnLRJ9ruYdrfVaESXCSFo=",
+      "vault_id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0"
+    },
+    {
+      "fields" : {
+        "email" : "zoe\/unal@example.com",
+        "greeting_name" : null,
+        "name" : "Zoë Ünal",
+        "phone" : null,
+        "position" : null
+      },
+      "id" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "sealed" : "v1.ic3tB4WUU48N6zn1pN8yXJh\/+FWz8ADUCfRl\/k8KTqRTbJqA6BYtw0DQ+oNZl5NzkwLeBwlMcS8M76lKmjTJxVqPe53JBhF12j0=",
+      "vault_id" : "0E984725-C51C-4BF4-9960-E1C80E27ABA0"
+    }
+  ],
+  "contexts" : {
+    "account" : "aurora.account.v1|maya.rao@example.com",
+    "contact" : "aurora.contact.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff|0e984725-c51c-4bf4-9960-e1c80e27aba0",
+    "grant" : "aurora.grant.v1|maya.rao@example.com|0e984725-c51c-4bf4-9960-e1c80e27aba0|8c2d1a7e-5b3f-4e21-9a0b-7d6c5e4f3a21",
+    "profile" : "aurora.profile.v1|maya.rao@example.com",
+    "reply" : "aurora.reply.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
+    "send" : "aurora.send.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
+    "template" : "aurora.template.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
+    "vault_key" : "aurora.vault.v1|0e984725-c51c-4bf4-9960-e1c80e27aba0|8c2d1a7e-5b3f-4e21-9a0b-7d6c5e4f3a21"
+  },
+  "derived" : [
+    {
+      "key_hex" : "1ab1dde879f99827de1b0778ad7c6aaa6b9f268ab294793ed83b385bb30eea67",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "correct horse"
+    },
+    {
+      "key_hex" : "1ab1dde879f99827de1b0778ad7c6aaa6b9f268ab294793ed83b385bb30eea67",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "  correct horse\n"
+    },
+    {
+      "key_hex" : "d520843888ed25c0ba79e4e6f71a114a79d438782aa438ace08ab2e9841d8785",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "  　 x \t"
+    },
+    {
+      "key_hex" : "83d2b37e4c5bfd955cc9b506cb39f2fba95ae87cb8f5a6c218463698bd20520e",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "​x﻿"
+    },
+    {
+      "key_hex" : "4ce3200d372c786fa3308069a777a5e2f82d6d763f9c18df53fc653d358fcc8a",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "  x ᠎"
+    },
+    {
+      "key_hex" : "dd660f6c2d6f10b59db225f5dab0ee8f9248debf79810985796ba4beeeec8b84",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "\u001cx\u001f"
+    },
+    {
+      "key_hex" : "6d661198457130f42ec16e44980a3cc28cca287b21c500673284dc48a1c3d8fa",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "café"
+    },
+    {
+      "key_hex" : "6d661198457130f42ec16e44980a3cc28cca287b21c500673284dc48a1c3d8fa",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "café"
+    },
+    {
+      "key_hex" : "03f1743dc15ce0f1b270908266ffa0ed982112b79a53213b5ca99f9476a1aba1",
+      "rounds" : 1000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "Ω≈ç√ 鍵"
+    },
+    {
+      "key_hex" : "a8e8348316ad6b49318c681e7b2d3e3e1ebaa66baae272ee6f583464d1181e5b",
+      "rounds" : 600000,
+      "salt_hex" : "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "secret" : "AURORA private key"
+    }
+  ],
+  "key_hex" : "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978",
+  "seals" : [
+    {
+      "context" : "",
+      "plaintext_hex" : "",
+      "sealed" : "v1.2Vfo\/RYH1g8McN6ijrGsCTa8mW9I8eSnVLuLYw=="
+    },
+    {
+      "context" : "aurora.send.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
+      "plaintext_hex" : "68656c6c6f",
+      "sealed" : "v1.iEeOchFdKCjtJUwbuhN3alBglx1BONjLdN2QuK0MVaW+"
+    },
+    {
+      "context" : "aurora.send.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
+      "plaintext_hex" : "7369787465656e2062797465732121217369787465656e2062797465732121217369787465656e206279746573212121",
+      "sealed" : "v1.ZacZNKCF1Tm4niVMivlRTjfA02hYtijEQklWlZSwGpFOXvA2p9Gn\/NoakzrrfwskUL\/4+mC\/ra762\/tx4B2JLWMsVI3xiIZZrEj\/Bw=="
+    },
+    {
+      "context" : "aurora.send.v1|6f9619ff-8b86-d011-b42d-00c04fc964ff",
+      "plaintext_hex" : "5a6fc3ab20e2809420636166c3a920e29895efb88f20e5908de5898d",
+      "sealed" : "v1.+\/pajL4I2fASxNhnrTcQJ8bZxOxLOMKu\/dHWMaiR9oL2VeNdk1WWEP5UIgNZmVbsvihWh6QPhEE="
+    }
+  ],
+  "vault" : {
+    "private_key" : "  correct horse battery staple ",
+    "row" : {
+      "code" : "TESTVAULT",
+      "id" : "0e984725-c51c-4bf4-9960-e1c80e27aba0",
+      "kdf_rounds" : 1000,
+      "kdf_salt" : "ABEiM0RVZneImaq7zN3u\/w==",
+      "key_id" : "8c2d1a7e-5b3f-4e21-9a0b-7d6c5e4f3a21",
+      "sealed_key" : "v1.Yv4w7nzHsZRW\/G3xZSORZwjeyn\/mVyVDb5fL3rL2oy4NiPI18GQQADlZe1WPms0NAa1PBgTwOSin7cZx"
+    },
+    "vault_key_hex" : "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978"
+  }
+}

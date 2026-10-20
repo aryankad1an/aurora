@@ -17,7 +17,7 @@ python3 verify_companies.py --restore-typos-from ../../db_backups/<backup>
 python3 verify_names.py                    # dry run of the name pass
 python3 verify_names.py --apply            # back up, apply, re-check
 python3 audit.py ../../db_backups/<original>  # independent check vs a backup
-python3 -m unittest -v test_pipeline       # the rules, pinned to cases
+python3 -m unittest -v test_pipeline test_contacts   # the rules, pinned to cases
 ```
 
 **Before `--apply`, always:** read the dry run's `report.md` (plan, moved
@@ -26,6 +26,48 @@ pipeline refuses to apply a plan whose simulated result has any violation.
 
 `--snapshot <db_backups/…>` runs either dry run against a backup instead of the
 live DB.
+
+## Sealed contacts (`contacts.py`)
+
+Once `scripts/vault_migration.sql` has run, the app seals each contact's name,
+email, position, phone and greeting into `recruiters.sealed` under its vault's
+key, and empties those columns. Every script here reads and writes contacts
+through `contacts.py`, which notices which kind of DB it's talking to:
+
+- **No `vaults` table** (migration not run): plain rows, read and written
+  exactly as before. No key is asked for.
+- **Vaults:** rows are opened with the vault's key (the vault named by
+  `AURORA_VAULT_CODE`, default `AURORA`), so the pipeline sees the same fields
+  as before. New contacts and changed fields are sealed into that vault:
+  `vault_id`, `key_id` and `sealed` are written and the plain columns left
+  null. A field change re-seals the whole row, and the write only lands if
+  the row is still what was read.
+
+The vault's key is opened with its private key. Set it for the shell session,
+or type it at the hidden prompt the first time a sealed row needs it. Never put
+it on a command line or in a file:
+
+```bash
+read -rs AURORA_PRIVATE_KEY && export AURORA_PRIVATE_KEY
+```
+
+Good to know:
+
+- Contacts the app hasn't sealed yet (the first sign-in after the migration
+  seals them, resumably) are read from their plain columns.
+- Until the owner chooses AURORA's private key in the app, new contacts go in
+  plain under the vault, and the app seals them at that sign-in.
+- Other people's contacts (other vaults) read as blank. They keep their company
+  and are never rewritten; a run says how many there were.
+- Writes stop while a private-key change is half done. Finish it in the app.
+- Backups keep rows as stored, with `vaults.json` and `vault_grants.json`
+  beside them, so `--snapshot`, `audit.py` and `verify_import.py` open a
+  backup's contacts with the key it was taken under.
+- Address lookups (does this address exist already?) can't run on the server
+  any more. The scripts read every address fresh and check locally.
+- The crypto is `scripts/vault_crypto.py`. It's standard-library only and
+  proven against the app's `Sealing.swift` by `scripts/test_vault_crypto.py`
+  (run it from `scripts/`).
 
 ## Company pass (`verify_companies.py`)
 

@@ -41,7 +41,12 @@ TAGS = {"contractor", "ext", "external", "fut", "wv", "consultant", "contr", "te
 
 
 def load(path):
-    return {t: json.loads((Path(path) / f"{t}.json").read_text()) for t in TABLES}
+    """A backup, its sealed contacts opened (contacts.py: storage, not planning)."""
+    sys.path.insert(0, str(HERE))
+    import contacts
+    tables = {t: json.loads((Path(path) / f"{t}.json").read_text()) for t in TABLES}
+    tables["recruiters"] = contacts.open_backup(path, tables["recruiters"])
+    return tables
 
 
 def sheet_addresses(xlsx):
@@ -108,10 +113,12 @@ def main():
     if len(sys.argv) > 2:
         post = load(sys.argv[2])
     else:
+        import contacts
         import supabase
         order = {"tracked_companies": "user_email.asc,company_id.asc", "user_companies": "user_email.asc,company_id.asc",
                  "profiles": "email.asc"}
-        post = {t: supabase.get_all(t, order=order.get(t, "id.asc")) for t in TABLES}
+        post = {t: supabase.get_all(t, order=order.get(t, "id.asc")) for t in TABLES if t != "recruiters"}
+        post["recruiters"] = contacts.read_live()
     plan = json.loads((OUT / "plan.json").read_text())
     problems, notes = [], collections.Counter()
     report = {}

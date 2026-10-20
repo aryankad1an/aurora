@@ -11,6 +11,10 @@ gets wrong) are recorded with their reasons in data_verification/cdc_import/
 cdc_review.py (git-ignored: it names people), never inferred
 silently: a work domain that isn't owned by a catalog company and isn't in the
 review stops the plan.
+
+Once the DB has vaults (vault_migration.sql), the backup's contacts are opened
+with the vault's private key (AURORA_PRIVATE_KEY, or a prompt) and new ones are
+sealed into it; see contacts.py.
 """
 import collections
 import csv
@@ -26,6 +30,7 @@ import backup as backup_mod
 # personal data in the git-ignored data_verification/ folder.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "data_verification" / "cdc_import"))
 import cdc_review as R  # noqa: E402
+import contacts
 import supabase
 from domains import clean, is_personal, registrable
 from verify_companies import DECISIONS, State, dead_hosts, ilike_exact, load_live, load_snapshot, verify
@@ -488,7 +493,7 @@ def apply():
             for c in fresh["contacts"]]
     for i in range(0, len(rows), 100):
         batch = rows[i:i + 100]
-        got = supabase.write("POST", "recruiters", body=batch)
+        got = contacts.insert(batch)  # sealed into the vault once the DB has vaults
         assert len(got) == len(batch), f"batch {i}: wrote {len(got)} of {len(batch)}"
         log["recruiters"] += [g["id"] for g in got]
         save()

@@ -41,6 +41,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "company_verification"))
 sys.path.insert(0, str(HERE))
+import contacts  # noqa: E402
 import supabase  # noqa: E402
 from backup import backup  # noqa: E402
 from domains import brand, registrable  # noqa: E402
@@ -382,7 +383,7 @@ def main():
     _, ledger = load_ledger(args[0])
     crawl = json.loads(Path(args[1]).read_text())
     companies = supabase.get_all("companies")
-    recruiters = supabase.get_all("recruiters", select="id,company_id,email")
+    recruiters = contacts.read_live(select="id,company_id,email")  # addresses are sealed once the DB has vaults
     if "--apply" in sys.argv and companies and "is_fresher" not in companies[0]:
         raise SystemExit("run migration.sql first: companies has no is_fresher column")
     by_id = {c["id"]: c for c in companies}

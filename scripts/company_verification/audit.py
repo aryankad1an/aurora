@@ -19,14 +19,22 @@ TABLES = ["companies", "recruiters", "mail_sends", "tracked_companies", "user_co
 DECISIONS = json.loads((HERE / "decisions.json").read_text())
 
 
+# Sealed contacts are opened by contacts.py: storage, not planning logic, so
+# sharing it doesn't let a pipeline bug hide here.
 def load(path):
-    return {t: json.loads((Path(path) / f"{t}.json").read_text()) for t in TABLES}
+    import contacts
+    tables = {t: json.loads((Path(path) / f"{t}.json").read_text()) for t in TABLES}
+    tables["recruiters"] = contacts.open_backup(path, tables["recruiters"])
+    return tables
 
 
 def load_live():
+    import contacts
     import supabase
     order = {"tracked_companies": "user_email.asc,company_id.asc", "user_companies": "user_email.asc,company_id.asc"}
-    return {t: supabase.get_all(t, order=order.get(t, "id.asc")) for t in TABLES}
+    tables = {t: supabase.get_all(t, order=order.get(t, "id.asc")) for t in TABLES if t != "recruiters"}
+    tables["recruiters"] = contacts.read_live()
+    return tables
 
 
 def host(email):

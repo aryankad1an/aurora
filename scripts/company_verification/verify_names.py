@@ -35,7 +35,7 @@ import re
 import sys
 
 import backup as backup_mod
-import supabase
+import contacts
 from verify_companies import DECISIONS, REPO, load_live, load_snapshot
 
 # The same lists as `RecipientName.roleWords` / `fillerWords` in the app.
@@ -104,8 +104,9 @@ def review(tables):
     test_ids = {c["id"] for c in tables["companies"] if c["name"] in DECISIONS["test_companies"]}
     names = {c["id"]: c["name"] for c in tables["companies"]}
     fixes = []
+    locked = contacts.session().locked  # other people's contacts: nothing to read, never rewritten
     for r in tables["recruiters"]:
-        if r["company_id"] in test_ids:
+        if r["company_id"] in test_ids or r["id"] in locked:
             continue
         email = r["email"] or ""
         name, greet = (r["name"] or "").strip(), (r.get("greeting_name") or "").strip()
@@ -145,7 +146,7 @@ def write(out, fixes, label):
 def apply(fixes):
     for f in fixes:
         body = {k[4:]: v for k, v in f.items() if k.startswith("new_")}
-        got = supabase.write("PATCH", "recruiters", {"id": f"eq.{f['id']}"}, body)
+        got = contacts.update(f["id"], body)  # re-sealed whole once the DB has vaults
         assert len(got) == 1, f"no row for {f['email']}"
 
 
