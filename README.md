@@ -62,6 +62,7 @@ sent and read through the Gmail API under Google OAuth.
   - [Bounces](#bounces)
   - [Greetings](#greetings)
   - [Writing help](#writing-help)
+  - [Private contacts and sharing](#private-contacts-and-sharing)
 - [Architecture](#architecture)
 - [Design system](#design-system)
 - [Testing](#testing)
@@ -112,6 +113,12 @@ Cloud OAuth client for iOS.
 
 Changes the app expects, newest first. Run them in the Supabase SQL editor; each
 is safe to re-run.
+
+The newest is in its own file: [`scripts/vault_migration.sql`](scripts/vault_migration.sql)
+adds the vault tables and sealed columns for [private contacts](#private-contacts-and-sharing),
+and files every existing contact under realaryankadian@gmail.com's code,
+AURORA. Back up the database first. Until it's run, the app stops after
+sign-in and says the database needs the update.
 
 ```sql
 -- Other names a company goes by: its brands, a former name, the name it
@@ -734,6 +741,47 @@ still doesn't. What comes back is shown as a word-by-word comparison
 the text is edited again. `Tests/WritingActionTests.swift` and
 `Tests/TextDiffTests.swift` cover the rules and the comparison.
 
+### Private contacts and sharing
+
+Contacts, mail history, templates and the profile are encrypted on the phone
+(AES-256-GCM) before they reach Supabase. The server stores sealed text and
+can't read it.
+
+- **Vaults.** Each user's contacts live in a vault with a public **code**
+  (like `AURORA`) and a **private key**. The vault's data key is sealed under
+  a key derived from the private key (PBKDF2-SHA256, 600,000 rounds).
+  Neither the private key nor the data key leaves the phone in the clear.
+- **Account key.** Each account has its own key, kept in iCloud Keychain and
+  backed up by a 24-character recovery phrase shown once at setup. Mail
+  history, templates and the profile are sealed under it. Each vault the
+  account can read (its own and every import) has a grant: that vault's key
+  sealed under the account key.
+- **Onboarding.** At the first sign-in the user picks a code and a private
+  key, and can import other codes. Each import needs that code's private key.
+  An account whose vault was made ahead of time (AURORA) keeps its code and
+  only chooses the key, and then its contacts are sealed in place, with
+  progress shown. The work is resumable.
+- **On a new phone.** Signing in unlocks with iCloud Keychain. Without it,
+  the recovery phrase restores everything. The private key alone reopens the
+  user's own contacts, but not imports or past mail.
+- **Ownership.** Every contact records which vault owns it. Imported contacts
+  can be mailed and marked invalid, but only the owner can edit or delete
+  them. Writes and deletes are pinned to the user's own vault. A user can
+  only share their own code, so contacts they imported can't be passed on.
+  A company that holds other people's contacts can't be deleted.
+- **Changing keys.** Settings › Sharing & Keys changes the code (importers
+  keep access) or the private key. A key change re-seals every contact under
+  a new data key, so anyone who imported the old one loses access and is
+  shown the import as needing the new key. The change survives being
+  interrupted.
+- **Search.** The server can't search sealed fields, so the app keeps an
+  in-memory directory of the contacts it can read for search and
+  domain lookup.
+
+Company names, which company a contact is filed under, its valid/invalid
+flag, and when mail was sent or answered stay readable. So "already mailed"
+still works even if an account key is lost.
+
 ## Architecture
 
 | Layer | Where |
@@ -810,7 +858,10 @@ swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift \
   Tests/ReplyCheckCoverageTests.swift -o /tmp/cc && /tmp/cc
 swiftc -parse-as-library -default-isolation MainActor \
   Aurora/Models/Job.swift Aurora/Models/FresherHiring.swift \
-  Aurora/Models/RecipientName.swift Tests/AlsoKnownAsTests.swift -o /tmp/aka && /tmp/aka
+  Aurora/Models/RecipientName.swift Aurora/Models/Sealing.swift Aurora/Models/KeyRing.swift \
+  Tests/AlsoKnownAsTests.swift -o /tmp/aka && /tmp/aka
+swiftc -parse-as-library Aurora/Models/Sealing.swift Aurora/Models/KeyRing.swift \
+  Tests/SealingTests.swift -o /tmp/seal && /tmp/seal
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift
@@ -853,9 +904,13 @@ docs/screenshots/              Screenshots used in this README and SCREENSHOTS.m
 - Mail is sent and read only through your own Gmail account. Reply tracking,
   bounce detection and name lookups are read-only Gmail queries, and what they
   find stays on the phone or in your own rows.
+- Contacts, mail history, templates and the profile are end-to-end encrypted
+  (see [Private contacts and sharing](#private-contacts-and-sharing)). The
+  database holds only sealed text for them.
 - The Supabase anon key and the Google iOS client ID ship inside the app and
-  aren't secrets; the database's Row Level Security policies are what protect
-  the data. Never commit service-role keys, client secrets or provisioning
+  aren't secrets. The vault and grant rows are protected only by Row Level
+  Security policies, which aren't per-user yet. Someone holding the anon key
+  can't read sealed data, but could delete or overwrite rows. Never commit service-role keys, client secrets or provisioning
   profiles.
 - `data_verification/`, `db_backups/` and the CSV exports at the root are
   git-ignored because they contain people's addresses and sent mail.

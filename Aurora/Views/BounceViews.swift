@@ -180,7 +180,8 @@ struct BounceListRow: View {
 struct BounceSection: View {
     let bounce: Bounce
     let onMarkInvalid: () -> Void
-    let onFixAddress: () -> Void
+    /// Nil for a contact this account can't edit (one that came with an import).
+    let onFixAddress: (() -> Void)?
     let onDismiss: () -> Void
 
     var body: some View {
@@ -219,8 +220,10 @@ struct BounceSection: View {
             }
 
             // Row buttons, full width, so each is an easy target.
-            Button(action: onFixAddress) {
-                Label("Fix the Address", systemImage: "pencil")
+            if let onFixAddress {
+                Button(action: onFixAddress) {
+                    Label("Fix the Address", systemImage: "pencil")
+                }
             }
             Button(action: onMarkInvalid) {
                 Label {

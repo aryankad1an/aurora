@@ -97,8 +97,8 @@ struct ValidityChange: Identifiable {
     var message: String {
         let they = ids.count == 1 ? "They" : "These contacts"
         return isValid
-            ? "\(they) go back into Suggested and can be mailed again — for every user."
-            : "\(they) drop out of Suggested and can't be mailed — for every user. Sent mail is kept, and you can mark them valid again later."
+            ? "\(they) go back into Suggested and can be mailed again — for everyone who has them."
+            : "\(they) drop out of Suggested and can't be mailed — for everyone who has them. Sent mail is kept, and you can mark them valid again later."
     }
 }
 

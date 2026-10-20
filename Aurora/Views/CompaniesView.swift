@@ -145,7 +145,7 @@ struct CompaniesView: View {
                 all: rows.map(\.id),
                 noun: SelectionNoun(singular: "company", plural: "companies"),
                 confirmingDelete: $confirmingDelete,
-                deleteMessage: "This permanently deletes the selected companies — and their contacts — from the shared database, for every user. This can't be undone.",
+                deleteMessage: "This permanently deletes the selected companies and your contacts at them, for every user. A company with other people's contacts is kept. This can't be undone.",
                 sendableCount: selectedCompanies.reduce(0) { $0 + $1.validContacts.count },
                 onSend: { sendingTo = SendTarget(companies: selectedCompanies) },
                 bulkAction: trackAction,
@@ -154,7 +154,7 @@ struct CompaniesView: View {
             .uniformDeleteAlert(
                 item: $pendingDelete,
                 title: { "Delete “\($0.company)”?" },
-                message: "This permanently deletes the company and its contacts from the shared database, for every user. This can't be undone."
+                message: "This permanently deletes the company and your contacts at it, for every user. A company with other people's contacts is kept. This can't be undone."
             ) { company in
                 Task { await jobStore.deleteCompanies([company.id]) }
             }

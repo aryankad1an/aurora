@@ -18,6 +18,7 @@ struct RootView: View {
     @State private var mailQueue = MailQueue()
     @State private var replySync = ReplySync()
     @State private var selectionChrome = SelectionChrome()
+    @State private var vaultStore = VaultStore()
     @State private var selectedTab: Tab = .home
     /// Taps on scheduled-mail notifications, which can arrive before the app
     /// has finished opening.
@@ -53,11 +54,20 @@ struct RootView: View {
     var body: some View {
         Group {
             if let email = gmailAuth.connectedEmail {
-                signedInContent
-                    // One launch, for the whole app. Re-runs if the connected
-                    // account changes, which is a new launch as far as the data
-                    // is concerned.
-                    .task(id: email) { await boot(email: email) }
+                Group {
+                    // Nothing loads until this account's keys are open: every
+                    // contact and most of the mail history is sealed under them.
+                    if vaultStore.isReady {
+                        signedInContent
+                            // One launch, for the whole app. Re-runs if the connected
+                            // account changes, which is a new launch as far as the data
+                            // is concerned.
+                            .task(id: email) { await boot(email: email) }
+                    } else {
+                        VaultGateView()
+                    }
+                }
+                .task(id: email) { await vaultStore.start(email: email) }
             } else {
                 LoginView()
             }
@@ -78,6 +88,11 @@ struct RootView: View {
         .environment(mailQueue)
         .environment(replySync)
         .environment(selectionChrome)
+        .environment(vaultStore)
+        // Signed out: the keys leave memory with the account.
+        .onChange(of: gmailAuth.connectedEmail) { _, email in
+            if email == nil { vaultStore.signOut() }
+        }
         // A failed write is the one thing on this screen the user has to act on,
         // so it announces itself before the alert has finished animating in.
         .sensoryFeedback(trigger: activeError != nil) { _, hasError in
@@ -182,6 +197,9 @@ struct RootView: View {
         isBooted = false
         bootDone = 0
         jobStore.userEmail = email
+        // An import added or removed, or a key changed: the lists are fetched
+        // again through the vaults this account now reads.
+        vaultStore.onAccessChanged = { [jobStore] in await jobStore.accessChanged() }
         connectMailQueue()
         mailQueue.load(account: email)
         personalisedLines.load(account: email)

@@ -81,6 +81,8 @@ struct MailSend: Decodable, Identifiable {
         case repliedAt = "replied_at"
         case replyFrom = "reply_from"
         case replySnippet = "reply_snippet"
+        case sealed
+        case sealedReply = "sealed_reply"
     }
 
     /// Every reply column is optional at the decoder level, not just in Swift:
@@ -91,12 +93,48 @@ struct MailSend: Decodable, Identifiable {
         id = try c.decode(String.self, forKey: .id)
         contactID = try c.decode(String.self, forKey: .contactID)
         sentAt = try c.decodeIfPresent(Date.self, forKey: .sentAt)
-        subject = try c.decodeIfPresent(String.self, forKey: .subject)
-        body = try c.decodeIfPresent(String.self, forKey: .body)
         gmailMessageID = try c.decodeIfPresent(String.self, forKey: .gmailMessageID)
         gmailThreadID = try c.decodeIfPresent(String.self, forKey: .gmailThreadID)
         repliedAt = try c.decodeIfPresent(Date.self, forKey: .repliedAt)
-        replyFrom = try c.decodeIfPresent(String.self, forKey: .replyFrom)
-        replySnippet = try c.decodeIfPresent(String.self, forKey: .replySnippet)
+        // Sealed under the account key once the account is set up; plain on a
+        // row from before. A seal that won't open (a key since replaced) reads
+        // as no text — the send itself, and that it was sent, still count.
+        if let sealed = try c.decodeIfPresent(String.self, forKey: .sealed) {
+            let mail = KeyRing.shared.openPersonal(SealedMail.self, from: sealed, context: Sealing.sendContext(id: id))
+            subject = mail?.subject
+            body = mail?.body
+        } else {
+            subject = try c.decodeIfPresent(String.self, forKey: .subject)
+            body = try c.decodeIfPresent(String.self, forKey: .body)
+        }
+        if let sealed = try c.decodeIfPresent(String.self, forKey: .sealedReply) {
+            let reply = KeyRing.shared.openPersonal(SealedReply.self, from: sealed, context: Sealing.replyContext(id: id))
+            replyFrom = reply?.from
+            replySnippet = reply?.snippet
+        } else {
+            replyFrom = try c.decodeIfPresent(String.self, forKey: .replyFrom)
+            replySnippet = try c.decodeIfPresent(String.self, forKey: .replySnippet)
+        }
     }
+}
+
+// MARK: - Sealed parts of the user's own rows
+
+/// A sent mail's subject and body, as sealed into `mail_sends.sealed`.
+nonisolated struct SealedMail: Codable {
+    var subject: String?
+    var body: String?
+}
+
+/// Who answered a send and what they said, as sealed into `mail_sends.sealed_reply`.
+nonisolated struct SealedReply: Codable {
+    var from: String?
+    var snippet: String?
+}
+
+/// A template's text, as sealed into `templates.sealed`.
+nonisolated struct SealedTemplate: Codable {
+    var name: String
+    var subject: String
+    var content: String
 }

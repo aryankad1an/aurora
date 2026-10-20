@@ -73,12 +73,13 @@ struct JobDetailView: View {
         return group == .valid ? contacts.filter(\.isValid) : invalid
     }
 
-    /// Sent mails are a permanent record, so only unsent ones can actually be
-    /// removed. The bar counts what's selected; the delete dialog counts what will
+    /// Sent mails are a permanent record, and imported contacts are their
+    /// owner's, so only this account's unsent ones can actually be removed.
+    /// The bar counts what's selected; the delete dialog counts what will
     /// really go.
     private var deletableCount: Int {
         guard let job else { return 0 }
-        return job.contacts.filter { selection.contains($0.id) && !$0.isSent }.count
+        return job.contacts.filter { selection.contains($0.id) && $0.isDeletable }.count
     }
 
     /// The selected contacts that can actually be mailed.
@@ -269,7 +270,7 @@ struct JobDetailView: View {
             all: job.map { visibleContacts($0).map(\.id) } ?? [],
             noun: SelectionNoun(singular: "contact", plural: "contacts"),
             confirmingDelete: $confirmingDelete,
-            deleteMessage: "This permanently deletes the selected contacts from the shared database, for every user. Sent ones are kept. This can't be undone.",
+            deleteMessage: "This permanently deletes the selected contacts, for you and everyone you've shared them with. Sent ones and imported ones are kept. This can't be undone.",
             deletableCount: deletableCount,
             sendableCount: sendableCount,
             onSend: {
@@ -283,7 +284,7 @@ struct JobDetailView: View {
         .uniformDeleteAlert(
             item: $pendingDelete,
             title: { "Delete “\($0.displayName)”?" },
-            message: "This permanently deletes the contact from the shared database, for every user. This can't be undone."
+            message: "This permanently deletes the contact, for you and everyone you've shared it with. This can't be undone."
         ) { contact in
             Task { await jobStore.deleteContact(contact) }
         }
@@ -558,8 +559,8 @@ struct JobDetailView: View {
                 }
             }
             // Sent mails are a permanent record, so a contact who's been mailed
-            // can't be deleted — the same rule as the swipe.
-            if contacts.contains(where: { !$0.isSent }) {
+            // can't be deleted, nor can an imported one — the same rule as the swipe.
+            if contacts.contains(where: \.isDeletable) {
                 Divider()
                 Button(role: .destructive) {
                     Haptics.warning()
@@ -588,7 +589,7 @@ struct JobDetailView: View {
             .cardRow()
             .tag(contact.id)
             .swipeActions(edge: .trailing) {
-                if !contact.isSent {
+                if contact.isDeletable {
                     Button(role: .destructive) {
                         Haptics.warning()
                         pendingDelete = contact

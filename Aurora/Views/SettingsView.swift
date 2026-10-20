@@ -13,6 +13,7 @@ struct SettingsView: View {
     @Environment(JobStore.self) private var jobStore
     @Environment(GmailAuthStore.self) private var gmail
     @Environment(ReplySync.self) private var replySync
+    @Environment(VaultStore.self) private var vaults
 
     @State private var isEditingProfile = false
     @State private var isReconnecting = false
@@ -28,6 +29,7 @@ struct SettingsView: View {
             PaperForm {
                 accountSection
                 if gmail.isConnected { gmailSection }
+                sharingSection
                 dataSection
                 helpSection
                 aboutSection
@@ -60,7 +62,7 @@ struct SettingsView: View {
             // Signing out drops the Gmail connection, and getting it back means
             // the whole Google sign-in again — so it asks, as Settings does.
             .confirmAlert("Sign out of Gmail?",
-                          message: "You'll need to sign in again to send or track mail. Nothing you've saved is deleted.",
+                          message: "You'll need to sign in again to send or track mail. Nothing you've saved is deleted, and your keys stay in iCloud Keychain.",
                           confirmLabel: "Sign Out", role: .destructive,
                           isPresented: $confirmingSignOut) { signOut() }
         }
@@ -155,6 +157,32 @@ struct SettingsView: View {
             Text(replySync.needsReconnect
                  ? "Reconnecting signs in to the same account again. Nothing is deleted."
                  : "Used to send your mails and to check which ones were answered.")
+        }
+    }
+
+    // MARK: - Sharing
+
+    /// This account's code and keys, and the codes it imports.
+    private var sharingSection: some View {
+        Section {
+            NavigationLink {
+                SharingSettingsView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "lock.shield")
+                        .foregroundStyle(Color.clay)
+                        .frame(minWidth: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sharing & Keys")
+                            .foregroundStyle(.ink)
+                        Text(vaults.ownVault.map { "Your code is \($0.code)" } ?? "Your code, private key and imports")
+                            .font(.caption)
+                            .foregroundStyle(.inkMuted)
+                    }
+                }
+            }
+        } header: {
+            Text("Private Contacts")
         }
     }
 

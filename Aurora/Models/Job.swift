@@ -20,6 +20,10 @@ struct Contact: Identifiable, Decodable {
     /// Invalid contacts are never suggested and can't be mailed — see
     /// `JobStore.setValidity`.
     var isValid = true
+    /// The vault that owns this contact: the user's own, or one imported with
+    /// its code. Only the owner can edit, delete or share a contact; anyone who
+    /// can read it can mail it and mark it invalid. Nil for an unsaved draft.
+    var vaultID: String?
     // Sent state is per-user (from `mail_sends`), overlaid after decoding —
     // never part of the shared contact row.
     var isSent = false
@@ -37,6 +41,9 @@ struct Contact: Identifiable, Decodable {
         case id, email, name, phone, position
         case greetingName = "greeting_name"
         case isValid = "is_valid"
+        case vaultID = "vault_id"
+        case keyID = "key_id"
+        case sealed
     }
 
     init(id: String = "", email: String = "", name: String = "", phone: String? = nil,
@@ -103,6 +110,21 @@ struct Contact: Identifiable, Decodable {
     /// Whether this contact wrote back to the last mail we sent them.
     var hasReplied: Bool { repliedAt != nil }
 
+    /// Whether it's the user's own: theirs to edit, delete and share. A draft
+    /// not saved yet is.
+    var isOwned: Bool { vaultID == nil || KeyRing.shared.owns(vault: vaultID) }
+
+    /// Whether it can be deleted here: the user's own, and never mailed (a sent
+    /// mail is a permanent record).
+    var isDeletable: Bool { isOwned && !isSent }
+
+    /// The private fields, as they're sealed into the row.
+    var sealedFields: KeyRing.ContactFields {
+        func value(_ s: String?) -> String? { (s?.isEmpty ?? true) ? nil : s }
+        return KeyRing.ContactFields(name: value(name), email: value(email), position: value(position),
+                                     phone: value(phone), greetingName: value(greetingName))
+    }
+
     /// What they said, without the quoted mail Gmail's snippet runs on into.
     /// Nil when no preview was captured.
     var replyPreview: String? {
@@ -111,18 +133,57 @@ struct Contact: Identifiable, Decodable {
     }
 
     /// Rows carry nulls for optional columns, so decode leniently and default.
+    ///
+    /// A row from a vault this account can't read throws, and the lists that
+    /// hold contacts skip it (see `LossyContacts`): another user's contacts
+    /// never reach the screen. A readable row's fields come out of its seal; one
+    /// the owner hasn't sealed yet (the first sign-in after the migration) is
+    /// read from its plain columns.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
-        email = try c.decodeIfPresent(String.self, forKey: .email) ?? ""
-        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
-        phone = try c.decodeIfPresent(String.self, forKey: .phone)
-        position = try c.decodeIfPresent(String.self, forKey: .position) ?? ""
-        // Absent entirely until the `greeting_name` migration has been run.
-        greetingName = try c.decodeIfPresent(String.self, forKey: .greetingName)
+        vaultID = try c.decodeIfPresent(String.self, forKey: .vaultID)
+        guard let vaultID, KeyRing.shared.canRead(vault: vaultID) else { throw KeyRing.Locked.notReadable }
         // Rows written before the column existed come back null — those are valid.
         isValid = try c.decodeIfPresent(Bool.self, forKey: .isValid) ?? true
+        if let sealed = try c.decodeIfPresent(String.self, forKey: .sealed) {
+            let keyID = try c.decode(String.self, forKey: .keyID)
+            let fields = try KeyRing.shared.openContact(sealed, id: id, vaultID: vaultID, keyID: keyID)
+            email = fields.email ?? ""
+            name = fields.name ?? ""
+            phone = fields.phone
+            position = fields.position ?? ""
+            greetingName = fields.greetingName
+        } else {
+            email = try c.decodeIfPresent(String.self, forKey: .email) ?? ""
+            name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+            phone = try c.decodeIfPresent(String.self, forKey: .phone)
+            position = try c.decodeIfPresent(String.self, forKey: .position) ?? ""
+            greetingName = try c.decodeIfPresent(String.self, forKey: .greetingName)
+        }
     }
+}
+
+/// A list of contact rows with the ones this account can't open left out — a
+/// company's contacts are every user's, and only the readable ones are kept.
+struct LossyContacts: Decodable {
+    let contacts: [Contact]
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var kept: [Contact] = []
+        while !container.isAtEnd {
+            if let contact = try? container.decode(Contact.self) {
+                kept.append(contact)
+            } else {
+                // Step past the row that didn't open.
+                _ = try? container.decode(Skipped.self)
+            }
+        }
+        contacts = kept
+    }
+
+    private struct Skipped: Decodable {}
 }
 
 /// The rendered mail that was actually sent to a contact.
@@ -236,7 +297,7 @@ struct Job: Identifiable, Decodable {
         sector = try c.decodeIfPresent(String.self, forKey: .sector)
         domains = (try c.decodeIfPresent([String].self, forKey: .domains) ?? []).compactMap(MailDomain.clean)
         alsoKnownAs = try c.decodeIfPresent([String].self, forKey: .alsoKnownAs) ?? []
-        contacts = try c.decodeIfPresent([Contact].self, forKey: .contacts) ?? []
+        contacts = try c.decodeIfPresent(LossyContacts.self, forKey: .contacts)?.contacts ?? []
         // Every one of these is absent until the fresher-hiring migration has run.
         website = try c.decodeIfPresent(String.self, forKey: .website)
         websiteSource = try c.decodeIfPresent(String.self, forKey: .websiteSource)

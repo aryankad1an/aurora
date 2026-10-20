@@ -608,7 +608,9 @@ struct SendMailView: View {
         guard !name.isEmpty else { return }
         var contact = letter.contact
         contact.greetingName = name
-        Task { await jobStore.updateContact(contact) }
+        // An imported contact's greeting is used for this mail only: the
+        // contact is its owner's to change.
+        if contact.isOwned { Task { await jobStore.updateContact(contact) } }
         let profile = profileStore.profile
         batch.letters = batch.letters.map { other in
             guard other.contact.id == contact.id, !other.isEdited else { return other }

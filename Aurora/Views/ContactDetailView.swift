@@ -102,15 +102,15 @@ struct ContactDetailView: View {
                 // A bounced address is the one thing about this contact that
                 // needs deciding, so it comes before the fields.
                 if let bounce, isContactValid, !isEditing {
-                    BounceSection(bounce: bounce) {
+                    BounceSection(bounce: bounce, onMarkInvalid: {
                         pendingValidity = ValidityChange([committed], isValid: false)
-                    } onFixAddress: {
+                    }, onFixAddress: contact.isOwned ? {
                         Haptics.tap()
                         withAnimation(Theme.Motion.bouncy) { isEditing = true }
-                    } onDismiss: {
+                    } : nil, onDismiss: {
                         Haptics.tap(0.5)
                         withAnimation(Theme.Motion.snappy) { replySync.dismissBounce(contact.id) }
-                    }
+                    })
                 }
 
                 // No company header: the card above already names it.
@@ -170,7 +170,8 @@ struct ContactDetailView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if isEditing {
                         Button("Save") { save() }.disabled(!canSave || !hasChanges)
-                    } else {
+                    } else if contact.isOwned {
+                        // An imported contact is its owner's to change.
                         Button("Edit") {
                             Haptics.tap()
                             withAnimation(Theme.Motion.bouncy) { isEditing = true }
@@ -327,8 +328,10 @@ struct ContactDetailView: View {
             }
         } footer: {
             Text(isContactValid
-                 ? "For a bounced address or someone who has left. They stay on the company page for the record, but drop out of Suggested and can no longer be mailed — for every user."
-                 : "Ruled out for every user. Fix the address above if it was wrong, then mark them valid to put them back in Suggested.")
+                 ? "For a bounced address or someone who has left. They stay on the company page for the record, but drop out of Suggested and can no longer be mailed — for everyone who has them."
+                 : (contact.isOwned
+                    ? "Ruled out for everyone who has them. Fix the address above if it was wrong, then mark them valid to put them back in Suggested."
+                    : "Ruled out for everyone who has them. Mark them valid to put them back in Suggested."))
         }
     }
 

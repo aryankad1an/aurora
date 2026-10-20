@@ -91,6 +91,14 @@ final class JobStore {
     /// The connected Gmail address whose data we show. Set on sign-in.
     var userEmail: String?
 
+    // MARK: - Contact directory
+
+    /// Every contact this account can read, with the company it's filed
+    /// under. The server holds contacts sealed, so finding one by name,
+    /// address or domain happens here. Fetched on first need (a search, an
+    /// address typed) and dropped whenever the contacts change.
+    @ObservationIgnored private var directory: Task<[(companyID: String, contact: Contact)], Error>?
+
     /// Told the old and new name when a company is renamed (an edit, or the undo
     /// of one), so what's filed under the name — the personalised line — follows.
     @ObservationIgnored var onRename: ((_ from: String, _ to: String) -> Void)?
@@ -180,7 +188,8 @@ final class JobStore {
     }
 
     /// Search the full catalog on Supabase for companies matching `query` (by name,
-    /// sector, or contact info), overlaying user send state onto any returned items.
+    /// sector, or another name), and the companies of the contacts it matches
+    /// here, overlaying user send state onto any returned items.
     ///
     /// Meant to be driven from `.task(id: query)`: typing cancels the previous
     /// call, and the short sleep up front debounces keystrokes so only a pause
@@ -198,7 +207,9 @@ final class JobStore {
         guard await Task.debounce(.milliseconds(250)) else { return }
 
         do {
-            var results = try await SupabaseAPI.searchCompanies(query: trimmed)
+            let matched = await companyIDs(withContactsMatching: trimmed)
+            guard !Task.isCancelled else { return }
+            var results = try await SupabaseAPI.searchCompanies(query: trimmed, contactCompanyIDs: matched)
             guard !Task.isCancelled else { return }
             overlaySends(latestSendByContact, into: &results)
             searchQuery = trimmed
@@ -209,6 +220,13 @@ final class JobStore {
             guard !Task.isCancelled else { return }
         }
         isSearchingServer = false
+    }
+
+    /// Companies matching `query` by their own fields or a contact's, for a
+    /// picker: the Companies tab's search is left as it is.
+    func companiesMatching(_ query: String) async throws -> [Job] {
+        try await SupabaseAPI.searchCompanies(query: query,
+                                              contactCompanyIDs: await companyIDs(withContactsMatching: query))
     }
 
     /// Whether the company is on this user's Home.
@@ -298,24 +316,28 @@ final class JobStore {
     }
 
     /// Save a name to each of `contacts` that their own reply or this account's
-    /// mail gives them. Returns how many were named.
+    /// mail gives them. Returns how many were named. Only this account's own
+    /// contacts are written; an imported one is its owner's to change.
     private func nameFromMail(_ contacts: [Contact]) async -> Int {
         var replyFrom: [Contact.ID: String] = [:]
         for send in sends where send.replyFrom != nil && replyFrom[send.contactID] == nil {
             replyFrom[send.contactID] = send.replyFrom
         }
         var named = 0
-        for contact in contacts {
+        for contact in contacts where contact.isOwned {
             let entries = [replyFrom[contact.id], MailboxNames.shared.entry(for: contact.email)].compactMap { $0 }
             guard let name = entries.lazy.compactMap({ RecipientName.fullName(in: $0, for: contact.email) }).first
             else { continue }
+            var renamed = contact
+            renamed.name = name
             do {
-                try await SupabaseAPI.fillContactName(id: contact.id, name: name, replacing: contact.name)
+                try await SupabaseAPI.updateContact(renamed)
                 named += 1
             } catch {
                 continue  // tried again on the next check
             }
         }
+        if named > 0 { directory = nil }
         return named
     }
 
@@ -487,8 +509,22 @@ final class JobStore {
     /// Delete catalog companies (upstream, for everyone) in one request. They leave
     /// every list at once; the reload after reconciles Home's cache and the
     /// filter counts against the server.
+    ///
+    /// A company holding contacts this account doesn't own — someone else's,
+    /// imported or private — isn't deleted: they'd go with it.
     func deleteCompanies(_ ids: [String]) async {
         guard !ids.isEmpty else { return }
+        do {
+            guard let own = KeyRing.shared.ownVaultID else { throw VaultError.notSetUp }
+            let others = try await VaultAPI.count("recruiters", [
+                URLQueryItem(name: "company_id", value: "in.(\(ids.joined(separator: ",")))"),
+                URLQueryItem(name: "or", value: "(vault_id.is.null,vault_id.neq.\(own))")
+            ])
+            guard others == 0 else { throw VaultError.othersContacts }
+        } catch {
+            report(error)
+            return
+        }
         removeCompanies(Set(ids))
         do {
             try await SupabaseAPI.deleteCompanies(ids: ids)
@@ -501,7 +537,8 @@ final class JobStore {
     /// Every company already on file for a mail domain, with this user's sent
     /// state overlaid — what the contact form suggests while an address is typed.
     func companies(forDomain domain: String) async throws -> [Job] {
-        var found = try await SupabaseAPI.companies(forDomain: domain)
+        var found = try await SupabaseAPI.companies(forDomain: domain,
+                                                    contactCompanyIDs: await companyIDs(withContactsAt: domain))
         overlaySends(latestSendByContact, into: &found)
         return found.sortedByName()
     }
@@ -530,9 +567,19 @@ final class JobStore {
         do {
             switch destination {
             case .existing(let job):
-                try await SupabaseAPI.addContact(companyID: job.id, contact: contact)
+                // The database can't see addresses any more, so it can't refuse
+                // a second copy of one; this account's view of the company can.
+                let address = contact.email.lowercased()
+                if !address.isEmpty, try await contactDirectory().contains(where: {
+                    $0.companyID == job.id && $0.contact.email.lowercased() == address
+                }) {
+                    throw SupabaseError.duplicateContact
+                }
+                _ = try await SupabaseAPI.addContact(companyID: job.id, contact: contact)
+                directory = nil
                 if let domain, !job.domains.contains(domain) {
-                    let owners = try await SupabaseAPI.companies(forDomain: domain)
+                    let owners = try await SupabaseAPI.companies(forDomain: domain,
+                                                                 contactCompanyIDs: await companyIDs(withContactsAt: domain))
                     if owners.allSatisfy({ $0.id == job.id }) {
                         try await SupabaseAPI.setDomains(companyID: job.id, domains: job.domains + [domain])
                     }
@@ -541,7 +588,8 @@ final class JobStore {
             case .new(let name):
                 let id = try await SupabaseAPI.addCompany(name: name, sector: nil,
                                                           domains: domain.map { [$0] } ?? [])
-                try await SupabaseAPI.addContact(companyID: id, contact: contact)
+                _ = try await SupabaseAPI.addContact(companyID: id, contact: contact)
+                directory = nil
                 // A company that didn't exist: it belongs in the sorted catalog, which
                 // only a reload can place.
                 await reloadQuietly()
@@ -554,6 +602,13 @@ final class JobStore {
     /// Save an edited contact upstream, with a short window to undo it.
     func updateContact(_ contact: Contact) async {
         let previous = self.contact(id: contact.id)
+        // Whose it is comes from the contact as held, not from the edit.
+        var contact = contact
+        contact.vaultID = previous?.vaultID ?? contact.vaultID
+        guard contact.isOwned else {
+            report(VaultError.notOwner)
+            return
+        }
         let saved = await saveContact(contact, replacing: previous)
         guard saved, let previous else { return }
         UndoCoordinator.shared.stage(message: "Contact details updated") { [weak self] in
@@ -568,6 +623,7 @@ final class JobStore {
         changeContacts([contact.id]) { $0 = contact }
         do {
             try await SupabaseAPI.updateContact(contact)
+            directory = nil
             return true
         } catch {
             if let previous { changeContacts([contact.id]) { $0 = previous } }
@@ -606,12 +662,13 @@ final class JobStore {
     }
 
     /// Delete several contacts in one request, skipping any that have been
-    /// mailed. They leave the screen at once; if the database refuses, the
-    /// reload that follows brings them back.
+    /// mailed or that came with an import. They leave the screen at once; if
+    /// the database refuses, the reload that follows brings them back.
     func deleteContacts(_ contacts: [Contact]) async {
-        let ids = contacts.filter { !$0.isSent }.map(\.id)
+        let ids = contacts.filter(\.isDeletable).map(\.id)
         guard !ids.isEmpty else { return }
         removeContacts(Set(ids))
+        directory = nil
         do {
             try await SupabaseAPI.deleteContacts(ids: ids)
         } catch {
@@ -728,26 +785,59 @@ final class JobStore {
 
     // MARK: - Export
 
-    /// Everything the database holds that this account can see: the shared
-    /// catalog (companies, contacts, hiring sources) and this account's own
-    /// rows (sends, templates, profile, Home's companies). Other people's
-    /// sends and templates are theirs, and stay out.
+    /// Everything the database holds that this account can see, opened: the
+    /// shared catalog (companies, hiring sources), the contacts of every vault
+    /// it reads, and this account's own rows (sends, templates, profile,
+    /// Home's companies). Other people's sends and templates are theirs, and
+    /// stay out; sealed fields are written out as plain text.
     func exportSnapshot() async throws -> DataExport {
         guard let email = userEmail else { throw ExportError.signedOut }
         let mine = [URLQueryItem(name: "user_email", value: "eq.\(email)")]
         // One table after another: an export is a few seconds once, and the
         // rows are raw JSON objects, which can't be handed between tasks.
         let companies = try await SupabaseAPI.fetchRows("companies", order: "name")
-        let contacts = try await SupabaseAPI.fetchRows("recruiters", order: "id")
+        let contacts = try await SupabaseAPI.fetchContactDirectory().map { entry -> [String: Any] in
+            let contact = entry.contact
+            return ["id": contact.id, "company_id": entry.companyID, "name": contact.name, "email": contact.email,
+                    "position": contact.position, "phone": contact.phone ?? NSNull(),
+                    "greeting_name": contact.greetingName ?? NSNull(), "is_valid": contact.isValid,
+                    "vault_id": contact.vaultID ?? NSNull(), "owned": contact.isOwned]
+        }.sorted { ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "") }
         let sources = try await Self.optionalRows("company_sources", order: "id")
-        let sends = try await SupabaseAPI.fetchRows("mail_sends", filters: mine, order: "sent_at.desc")
-        let templates = try await SupabaseAPI.fetchRows("templates", filters: mine, order: "name")
+        let sends = try await SupabaseAPI.fetchRows("mail_sends", filters: mine, order: "sent_at.desc").map { row in
+            var row = Self.unsealing(row, column: "sealed", context: (row["id"] as? String).map(Sealing.sendContext))
+            row = Self.unsealing(row, column: "sealed_reply", context: (row["id"] as? String).map(Sealing.replyContext),
+                                 renaming: ["from": "reply_from", "snippet": "reply_snippet"])
+            return row
+        }
+        let templates = try await SupabaseAPI.fetchRows("templates", filters: mine, order: "name").map {
+            Self.unsealing($0, column: "sealed", context: ($0["id"] as? String).map(Sealing.templateContext))
+        }
         let profile = try await SupabaseAPI.fetchRows("profiles", filters: [URLQueryItem(name: "email", value: "eq.\(email)")],
-                                                      order: "email")
+                                                      order: "email").map {
+            Self.unsealing($0, column: "sealed", context: Sealing.profileContext(email: email))
+        }
         let tracked = try await SupabaseAPI.fetchRows("tracked_companies", filters: mine, order: "company_id")
         return DataExport(account: email, exportedAt: Date(), companies: companies, contacts: contacts,
                           sources: sources, sends: sends, templates: templates, profile: profile,
                           tracked: tracked)
+    }
+
+    /// `row` with its sealed `column` opened under the account key and spread
+    /// back into plain columns (`renaming` maps a sealed field to its column).
+    /// One that won't open is left out rather than exported as cipher text.
+    private static func unsealing(_ row: [String: Any], column: String, context: String?,
+                                  renaming: [String: String] = [:]) -> [String: Any] {
+        var row = row
+        guard let sealed = row[column] as? String, let context, let key = KeyRing.shared.accountKey,
+              let data = try? Sealing.open(sealed, with: key, context: context),
+              let fields = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            row.removeValue(forKey: column)
+            return row
+        }
+        for (field, value) in fields { row[renaming[field] ?? field] = value }
+        row.removeValue(forKey: column)
+        return row
     }
 
     /// A table that may not exist yet (its migration pending) reads as empty.
@@ -765,6 +855,7 @@ final class JobStore {
     /// sent records, and rebuild the Activity feed.
     private func reloadAll() async throws {
         guard let email = userEmail else {
+            directory = nil
             jobs = []; allCompanies = []; detachedCompanies = [:]; searchResults = []
             activity = []; sends = []; sources = [:]; scopeCounts = [:]; catalogScope = .all
             companyOffset = 0; hasMoreCompanies = true; scopePages = [:]
@@ -800,7 +891,9 @@ final class JobStore {
         async let history = SupabaseAPI.fetchSends(userEmail: email, limit: 0)
         async let detached = Self.refetch(Array(detachedCompanies.keys))
         async let search: [Job] = query.isEmpty
-            ? [] : ((try? await SupabaseAPI.searchCompanies(query: query)) ?? previousSearch)
+            ? [] : ((try? await SupabaseAPI.searchCompanies(query: query,
+                                                             contactCompanyIDs: await companyIDs(withContactsMatching: query)))
+                    ?? previousSearch)
 
         let companies = try await tracked
         let all = try await catalog
@@ -932,8 +1025,8 @@ final class JobStore {
         for company in jobs + allCompanies + Array(detachedCompanies.values) {
             for contact in company.contacts where held[contact.id] == nil {
                 held[contact.id] = SupabaseAPI.HeldContact(name: contact.name, email: contact.email,
-                                                           position: contact.position,
-                                                           isValid: contact.isValid, company: company.company)
+                                                           position: contact.position, isValid: contact.isValid,
+                                                           vaultID: contact.vaultID, company: company.company)
             }
         }
         activityTask = Task { [weak self, held] in
@@ -1169,6 +1262,50 @@ final class JobStore {
         guard !fresh.isEmpty else { return }
         let byContact = latestSendByContact
         for company in fresh.values { replaceCompany(Self.overlaying(byContact, onto: company)) }
+    }
+
+    /// The vaults this account reads changed (an import added or removed, a
+    /// key changed): everything is fetched again through the new set.
+    func accessChanged() async {
+        directory = nil
+        searchResults = []
+        detachedCompanies = [:]
+        scopePages = [:]
+        await load()
+    }
+
+    /// The contact directory, fetched once and shared by every caller until
+    /// the contacts change. A failed fetch is tried again on the next ask.
+    private func contactDirectory() async throws -> [(companyID: String, contact: Contact)] {
+        if let directory { return try await directory.value }
+        let task = Task { try await SupabaseAPI.fetchContactDirectory() }
+        directory = task
+        do {
+            return try await task.value
+        } catch {
+            if directory == task { directory = nil }
+            throw error
+        }
+    }
+
+    /// The companies of the contacts whose name, address or position holds
+    /// `query`. Empty when the directory can't be fetched: the search still
+    /// finds companies by their own fields.
+    private func companyIDs(withContactsMatching query: String) async -> Set<String> {
+        guard let entries = try? await contactDirectory() else { return [] }
+        return Set(entries.lazy.filter { entry in
+            let contact = entry.contact
+            return contact.name.localizedCaseInsensitiveContains(query)
+                || contact.email.localizedCaseInsensitiveContains(query)
+                || contact.position.localizedCaseInsensitiveContains(query)
+        }.map(\.companyID))
+    }
+
+    /// The companies with a contact at `domain`.
+    private func companyIDs(withContactsAt domain: String) async -> Set<String> {
+        let suffix = "@" + domain.lowercased()
+        guard let entries = try? await contactDirectory() else { return [] }
+        return Set(entries.lazy.filter { $0.contact.email.lowercased().hasSuffix(suffix) }.map(\.companyID))
     }
 
     /// A full reload with no veil over the screen, for the few changes that can't

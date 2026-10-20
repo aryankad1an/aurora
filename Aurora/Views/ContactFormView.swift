@@ -312,7 +312,7 @@ struct CompanyPickerView: View {
         .task(id: query) {
             guard !query.isEmpty else { remote = []; return }
             guard await Task.debounce(.milliseconds(250)) else { return }
-            if let found = try? await SupabaseAPI.searchCompanies(query: query), !Task.isCancelled {
+            if let found = try? await jobStore.companiesMatching(query), !Task.isCancelled {
                 remote = found
             }
         }

@@ -1,9 +1,12 @@
 import Foundation
 
-/// Talks to Supabase's auto-generated REST API (PostgREST). Companies and
-/// contacts are a shared catalog; each user's Home selection
-/// (`tracked_companies`), sent records (`mail_sends`), profile and templates are
-/// rows keyed by their Gmail address.
+/// Talks to Supabase's auto-generated REST API (PostgREST). Companies are a
+/// shared catalog. Contacts belong to vaults and are sealed (see `Sealing`):
+/// every request that brings contacts back asks only for the vaults this
+/// account can read (`readableContacts`), and each row is opened on the phone.
+/// Each user's Home selection (`tracked_companies`), sent records
+/// (`mail_sends`), profile and templates are rows keyed by their Gmail
+/// address, with their private parts sealed under the account key.
 enum SupabaseAPI {
     // MARK: - Catalog (every company, with contacts)
 
@@ -24,6 +27,7 @@ enum SupabaseAPI {
                                   scope: CatalogScope = .all) async throws -> [Job] {
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "select", value: "*,recruiters(*)"),
+            readableContacts(),
             URLQueryItem(name: "order", value: "name")
         ] + scope.filters
         if limit > 0 {
@@ -60,7 +64,13 @@ enum SupabaseAPI {
     /// chip. Counted by the server (a one-row request asking for the total), so
     /// it's right before any page of that scope has loaded.
     static func countCompanies(scope: CatalogScope) async throws -> Int {
-        var request = makeRequest(path: "companies", query: [URLQueryItem(name: "select", value: "id")] + scope.filters)
+        try await count("companies", scope.filters)
+    }
+
+    /// How many rows of `path` match `filters`, counted by the server. `column`
+    /// is any column the table has — `profiles` has no `id`.
+    static func count(_ path: String, _ filters: [URLQueryItem], column: String = "id") async throws -> Int {
+        var request = makeRequest(path: path, query: [URLQueryItem(name: "select", value: column)] + filters)
         request.setValue("count=exact", forHTTPHeaderField: "Prefer")
         request.setValue("0-0", forHTTPHeaderField: "Range")
         request.setValue("items", forHTTPHeaderField: "Range-Unit")
@@ -76,8 +86,12 @@ enum SupabaseAPI {
     }
 
     /// Search the shared catalog for companies matching a query string across company name,
-    /// sector, domain, and contact name/email/position.
-    static func searchCompanies(query: String, limit: Int = defaultPageSize) async throws -> [Job] {
+    /// sector, domain and other names. Contacts are sealed, so the server can't
+    /// search them: `contactCompanyIDs` are the companies of the contacts that
+    /// matched on the phone (`JobStore.contactCompanies(matching:)`), fetched here
+    /// alongside.
+    static func searchCompanies(query: String, contactCompanyIDs: Set<String> = [],
+                                limit: Int = defaultPageSize) async throws -> [Job] {
         // Characters that carry meaning in a PostgREST `or=(…)` filter would change
         // the shape of the filter rather than the value searched for.
         let reserved = CharacterSet(charactersIn: ",()*\"\\%")
@@ -87,23 +101,15 @@ enum SupabaseAPI {
         let pattern = "*\(cleaned)*"
 
         // 1. Companies by name or sector — and by domain, when the query is one.
-        // 2. Companies that employ a matching contact (by name, email or
-        //    position). Independent of the first search, so both are in flight
-        //    at once.
-        let contactReq = makeRequest(path: "recruiters", query: [
-            URLQueryItem(name: "select", value: "company_id"),
-            URLQueryItem(name: "or", value: "(name.ilike.\(pattern),email.ilike.\(pattern),position.ilike.\(pattern))"),
-            URLQueryItem(name: "limit", value: String(limit))
-        ])
+        // 2. Companies by another name they go by. Both in flight at once.
         async let byCompany = searchCompanyRows(pattern: pattern, domain: MailDomain.clean(cleaned), limit: limit)
-        async let byContact = send(contactReq)
         async let byOtherName = companiesKnownAs(cleaned, limit: limit)
         var foundCompanies = try await byCompany
         let knownAs = await byOtherName
         foundCompanies += knownAs.filter { found in !foundCompanies.contains { $0.id == found.id } }
-        let employers = try decoder.decode([CompanyRef].self, from: try await byContact)
-        foundCompanies += try await fetchCompanies(ids: Set(employers.compactMap(\.company_id))
-                                                        .subtracting(foundCompanies.map(\.id)))
+        // 3. Companies that employ a matching contact, matched on the phone.
+        let employers = Array(contactCompanyIDs.subtracting(foundCompanies.map(\.id)).sorted().prefix(limit))
+        foundCompanies += try await fetchCompanies(ids: Set(employers))
         return foundCompanies.sortedByName()
     }
 
@@ -116,6 +122,7 @@ enum SupabaseAPI {
         let request = makeRequest(path: "rpc/companies_known_as", query: [
             URLQueryItem(name: "q", value: query),
             URLQueryItem(name: "select", value: "*,recruiters(*)"),
+            readableContacts(),
             URLQueryItem(name: "limit", value: String(limit))
         ])
         return (try? decoder.decode([Job].self, from: try await send(request))) ?? []
@@ -131,6 +138,7 @@ enum SupabaseAPI {
             if includingDomains, let domain { filters.append("domains.cs.{\(domain)}") }
             return makeRequest(path: "companies", query: [
                 URLQueryItem(name: "select", value: "*,recruiters(*)"),
+                readableContacts(),
                 URLQueryItem(name: "or", value: "(" + filters.joined(separator: ",") + ")"),
                 URLQueryItem(name: "limit", value: String(limit)),
                 URLQueryItem(name: "order", value: "name")
@@ -145,22 +153,14 @@ enum SupabaseAPI {
     }
 
     /// Every company that `domain` belongs to: the ones listing it on their row,
-    /// and the ones with a contact at that domain. Used to point a new contact at
+    /// and the ones with a contact at that domain (`contactCompanyIDs`, found on
+    /// the phone, since addresses are sealed). Used to point a new contact at
     /// the company it most likely belongs to, so the same company never gets
     /// entered twice under two names.
-    static func companies(forDomain domain: String) async throws -> [Job] {
+    static func companies(forDomain domain: String, contactCompanyIDs: Set<String> = []) async throws -> [Job] {
         guard MailDomain.isWellFormed(domain) else { return [] }
-        // The two lookups are independent, so both are in flight at once.
-        let contactReq = makeRequest(path: "recruiters", query: [
-            URLQueryItem(name: "select", value: "company_id"),
-            URLQueryItem(name: "email", value: "ilike.*@\(domain)"),
-            URLQueryItem(name: "limit", value: "200")
-        ])
-        async let listed = companiesListing(domain)
-        async let byContact = send(contactReq)
-        var found = try await listed
-        let employers = try decoder.decode([CompanyRef].self, from: try await byContact)
-        found += try await fetchCompanies(ids: Set(employers.compactMap(\.company_id)).subtracting(found.map(\.id)))
+        var found = try await companiesListing(domain)
+        found += try await fetchCompanies(ids: contactCompanyIDs.subtracting(found.map(\.id)))
         return found
     }
 
@@ -181,6 +181,7 @@ enum SupabaseAPI {
             }
             return makeRequest(path: "companies", query: [
                 URLQueryItem(name: "select", value: "*,recruiters(*)"),
+                readableContacts(),
                 URLQueryItem(name: "or", value: "(" + filters.joined(separator: ",") + ")")
             ])
         }
@@ -195,14 +196,12 @@ enum SupabaseAPI {
         }
     }
 
-    /// A contact row reduced to the company it belongs to.
-    private struct CompanyRef: Decodable { let company_id: String? }
-
     /// Companies by id, with their contacts. One request; none when `ids` is empty.
     private static func fetchCompanies(ids: Set<String>) async throws -> [Job] {
         guard !ids.isEmpty else { return [] }
         let request = makeRequest(path: "companies", query: [
             URLQueryItem(name: "select", value: "*,recruiters(*)"),
+            readableContacts(),
             URLQueryItem(name: "id", value: "in.(\(ids.sorted().joined(separator: ",")))")
         ])
         return try decoder.decode([Job].self, from: try await send(request))
@@ -212,6 +211,7 @@ enum SupabaseAPI {
     static func fetchCompany(id: String) async throws -> Job? {
         let request = makeRequest(path: "companies", query: [
             URLQueryItem(name: "select", value: "*,recruiters(*)"),
+            readableContacts(),
             URLQueryItem(name: "id", value: "eq.\(id)")
         ])
         let data = try await send(request)
@@ -227,6 +227,7 @@ enum SupabaseAPI {
     static func fetchTrackedCompanies(userEmail: String) async throws -> [Job] {
         let request = makeRequest(path: "tracked_companies", query: [
             URLQueryItem(name: "select", value: "companies(*,recruiters(*))"),
+            readableContacts(under: "companies.recruiters"),
             URLQueryItem(name: "user_email", value: "eq.\(userEmail)")
         ])
         let data = try await send(request)
@@ -335,23 +336,38 @@ enum SupabaseAPI {
         guard !sends.isEmpty else { return [] }
         let allIDs = Array(Set(sends.map(\.contactID))).filter { held[$0] == nil }
 
+        // The contact (opened from its seal) and the name of its company. A
+        // contact this account can no longer read leaves its sends out of the
+        // feed.
         struct Row: Decodable {
-            let id: String
-            let name: String?
-            let email: String?
-            let position: String?
-            /// Selected so a ruled-out contact reads as one here too; left out,
-            /// every contact in the feed defaulted to valid.
-            let is_valid: Bool?
-            struct Company: Decodable { let name: String }
-            let companies: Company?
+            let contact: Contact
+            let companyName: String?
+            private enum Key: String, CodingKey { case companies }
+            private struct Company: Decodable { let name: String }
+            init(from decoder: Decoder) throws {
+                contact = try Contact(from: decoder)
+                companyName = try decoder.container(keyedBy: Key.self)
+                    .decodeIfPresent(Company.self, forKey: .companies)?.name
+            }
+        }
+        struct Rows: Decodable {
+            let rows: [Row]
+            init(from decoder: Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                var kept: [Row] = []
+                while !container.isAtEnd {
+                    if let row = try? container.decode(Row.self) { kept.append(row) } else { _ = try? container.decode(Skipped.self) }
+                }
+                rows = kept
+            }
         }
 
         // 50 ids per request (a longer `in.(…)` list overflows the URL), all
         // chunks at once rather than one after another.
         let requests = stride(from: 0, to: allIDs.count, by: defaultPageSize).map { start in
             makeRequest(path: "recruiters", query: [
-                URLQueryItem(name: "select", value: "id,name,email,position,is_valid,companies(name)"),
+                URLQueryItem(name: "select", value: "*,companies(name)"),
+                readableContacts(under: nil),
                 URLQueryItem(name: "id", value: "in.(\(allIDs[start..<min(start + defaultPageSize, allIDs.count)].joined(separator: ",")))")
             ])
         }
@@ -361,21 +377,23 @@ enum SupabaseAPI {
         }
         var byID = held
         for page in pages {
-            for row in try decoder.decode([Row].self, from: page) {
-                byID[row.id] = HeldContact(name: row.name ?? "", email: row.email ?? "", position: row.position ?? "",
-                                           isValid: row.is_valid ?? true, company: row.companies?.name ?? "")
+            for row in try decoder.decode(Rows.self, from: page).rows {
+                let c = row.contact
+                byID[c.id] = HeldContact(name: c.name, email: c.email, position: c.position, isValid: c.isValid,
+                                         vaultID: c.vaultID, company: row.companyName ?? "")
             }
         }
 
         // One entry per send, keyed by the send's own id (unique per send).
         return sends.compactMap { send -> ActivityEntry? in
             guard let info = byID[send.contactID] else { return nil }
-            let contact = Contact(id: send.contactID, email: info.email, name: info.name,
+            var contact = Contact(id: send.contactID, email: info.email, name: info.name,
                                   position: info.position, isValid: info.isValid,
                                   isSent: true, sentAt: send.sentAt,
                                   sentSubject: send.subject, sentBody: send.body,
                                   repliedAt: send.repliedAt, replyFrom: send.replyFrom,
                                   replySnippet: send.replySnippet)
+            contact.vaultID = info.vaultID
             return ActivityEntry(id: send.id, company: info.company, contact: contact)
         }
     }
@@ -386,8 +404,12 @@ enum SupabaseAPI {
         let email: String
         let position: String
         let isValid: Bool
+        var vaultID: String?
         let company: String
     }
+
+    /// A row that didn't open, stepped past.
+    private struct Skipped: Decodable {}
 
     // MARK: - Company catalog writes
 
@@ -666,45 +688,27 @@ enum SupabaseAPI {
 
     // MARK: - Contact writes
 
-    /// Add a contact (upserting on (company_id, email) so it's identified by
-    /// email within a company) and return its id, so the caller can record a send.
+    /// Add a contact to the user's own vault and return its id, so the caller
+    /// can record a send. The id is made here, since it's sealed into the row.
+    /// Nothing on the server can tell two sealed addresses apart, so the
+    /// caller checks for a duplicate first (`JobStore.addContact`).
     @discardableResult
     static func addContact(companyID: String, contact: Contact) async throws -> String {
-        var body = contactBody(contact)
+        let id = UUID().uuidString.lowercased()
+        var body = try contactBody(contact, id: id)
+        body["id"] = id
         body["company_id"] = companyID
-        do {
-            return try await insertReturningID(path: "recruiters", body: body,
-                                               onConflict: "company_id,email")
-        } catch SupabaseError.schemaOutOfDate where !greetingColumnMissing {
-            greetingColumnMissing = true
-            return try await insertReturningID(path: "recruiters",
-                                               body: withoutGreetingName(body),
-                                               onConflict: "company_id,email")
-        }
+        return try await insertReturningID(path: "recruiters", body: body)
     }
 
+    /// Save a contact's fields. Only the owner's own contacts are written.
+    /// The write only matches a row in this account's own vault, so a contact
+    /// read from an import can't be taken over by saving it.
     static func updateContact(_ contact: Contact) async throws {
-        let query = [URLQueryItem(name: "id", value: "eq.\(contact.id)")]
-        do {
-            try await write(method: "PATCH", path: "recruiters", query: query,
-                            body: contactBody(contact))
-        } catch SupabaseError.schemaOutOfDate where !greetingColumnMissing {
-            greetingColumnMissing = true
-            try await write(method: "PATCH", path: "recruiters", query: query,
-                            body: withoutGreetingName(contactBody(contact)))
-        }
-    }
-
-    /// Set once a write comes back reporting `greeting_name` doesn't exist. The
-    /// rest of the row is saved regardless — losing a whole contact edit over an
-    /// optional greeting override would be the worse trade — and the greeting
-    /// falls back to what `RecipientName` derives, as it did before the column.
-    private(set) static var greetingColumnMissing = false
-
-    private static func withoutGreetingName(_ body: [String: Any]) -> [String: Any] {
-        var body = body
-        body["greeting_name"] = nil
-        return body
+        guard contact.isOwned, let own = ownContacts() else { throw VaultError.notOwner }
+        try await write(method: "PATCH", path: "recruiters",
+                        query: [URLQueryItem(name: "id", value: "eq.\(contact.id)"), own],
+                        body: try contactBody(contact, id: contact.id))
     }
 
     /// Flag contacts valid or invalid in the shared catalog — the whole set in
@@ -718,7 +722,8 @@ enum SupabaseAPI {
                         body: ["is_valid": isValid])
     }
 
-    /// Contacts by id, wherever they're filed, a hundred to a request.
+    /// Contacts by id, wherever they're filed, a hundred to a request. Ones
+    /// this account can't read are left out.
     static func fetchContacts(ids: [String]) async throws -> [Contact] {
         // A hundred ids a request keeps the URL short, and the requests go out
         // together: one after another, a few hundred mailed contacts held up
@@ -726,6 +731,7 @@ enum SupabaseAPI {
         let requests = stride(from: 0, to: ids.count, by: 100).map { start in
             makeRequest(path: "recruiters", query: [
                 URLQueryItem(name: "select", value: "*"),
+                readableContacts(under: nil),
                 URLQueryItem(name: "id", value: "in.(\(ids[start..<min(start + 100, ids.count)].joined(separator: ",")))")
             ])
         }
@@ -735,29 +741,76 @@ enum SupabaseAPI {
             }
             var contacts: [Contact] = []
             for try await data in group {
-                contacts += try decoder.decode([Contact].self, from: data)
+                contacts += try decoder.decode(LossyContacts.self, from: data).contacts
             }
             return contacts
         }
     }
 
-    /// Give a contact a name found for them, but only if their name is still
-    /// `replacing` (empty, or the mailbox copied over): a name someone typed in
-    /// the meantime is never overwritten.
-    static func fillContactName(id: String, name: String, replacing current: String) async throws {
-        try await write(method: "PATCH", path: "recruiters", query: [
-            URLQueryItem(name: "id", value: "eq.\(id)"),
-            current.isEmpty
-                ? URLQueryItem(name: "or", value: "(name.is.null,name.eq.)")
-                : URLQueryItem(name: "name", value: "eq.\(current)")
-        ], body: ["name": name])
+    /// Every contact this account can read, with the company each is filed
+    /// under: what searching contacts and matching an address's domain run
+    /// over, now the server can't read either. A thousand rows a request (the
+    /// server's cap), all in flight at once once the total is known.
+    static func fetchContactDirectory() async throws -> [(companyID: String, contact: Contact)] {
+        let filter = readableContacts(under: nil)
+        var head = makeRequest(path: "recruiters", query: [URLQueryItem(name: "select", value: "id"), filter])
+        head.setValue("count=exact", forHTTPHeaderField: "Prefer")
+        head.setValue("0-0", forHTTPHeaderField: "Range")
+        head.setValue("items", forHTTPHeaderField: "Range-Unit")
+        let (_, response) = try await URLSession.shared.data(for: head)
+        guard let range = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Range"),
+              let total = range.split(separator: "/").last.flatMap({ Int($0) }) else {
+            throw SupabaseError.badResponse
+        }
+        struct Row: Decodable {
+            let companyID: String
+            let contact: Contact
+            private enum Key: String, CodingKey { case company_id }
+            init(from decoder: Decoder) throws {
+                companyID = try decoder.container(keyedBy: Key.self).decode(String.self, forKey: .company_id)
+                contact = try Contact(from: decoder)
+            }
+        }
+        struct Rows: Decodable {
+            let rows: [Row]
+            init(from decoder: Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                var kept: [Row] = []
+                while !container.isAtEnd {
+                    if let row = try? container.decode(Row.self) { kept.append(row) } else { _ = try? container.decode(Skipped.self) }
+                }
+                rows = kept
+            }
+        }
+        let page = 1000
+        let requests = stride(from: 0, to: total, by: page).map { offset in
+            makeRequest(path: "recruiters", query: [
+                URLQueryItem(name: "select", value: "*"), filter,
+                URLQueryItem(name: "order", value: "id"),
+                URLQueryItem(name: "limit", value: String(page)),
+                URLQueryItem(name: "offset", value: String(offset))
+            ])
+        }
+        let pages = try await withThrowingTaskGroup(of: Data.self) { group in
+            for request in requests { group.addTask { try await send(request) } }
+            return try await group.reduce(into: [Data]()) { $0.append($1) }
+        }
+        var seen = Set<String>()
+        var rows: [(companyID: String, contact: Contact)] = []
+        for data in pages {
+            for row in try decoder.decode(Rows.self, from: data).rows where seen.insert(row.contact.id).inserted {
+                rows.append((row.companyID, row.contact))
+            }
+        }
+        return rows
     }
 
     /// Delete several contacts in one request.
     static func deleteContacts(ids: [String]) async throws {
         guard !ids.isEmpty else { return }
+        guard let own = ownContacts() else { throw VaultError.notOwner }
         try await write(method: "DELETE", path: "recruiters",
-                        query: [URLQueryItem(name: "id", value: "in.(\(ids.joined(separator: ",")))")])
+                        query: [URLQueryItem(name: "id", value: "in.(\(ids.joined(separator: ",")))"), own])
     }
 
     // MARK: - Per-user sent records (mail_sends)
@@ -777,13 +830,18 @@ enum SupabaseAPI {
         guard !records.isEmpty else { return }
         func value(_ s: String?) -> Any { (s?.isEmpty ?? true) ? NSNull() : s! }
 
-        let rows: [[String: Any]] = records.map { id, mail in
-            [
+        // The subject and body are sealed under the account key; when it was
+        // sent, to which contact, and Gmail's ids stay readable, so "already
+        // mailed" holds whatever happens to the key.
+        let rows: [[String: Any]] = try records.map { id, mail in
+            let sendID = UUID().uuidString.lowercased()
+            return [
+                "id": sendID,
                 "user_email": userEmail,
                 "recruiter_id": id,
                 "sent_at": iso(date),
-                "subject": value(mail.subject),
-                "body": value(mail.body),
+                "sealed": try KeyRing.shared.sealPersonal(SealedMail(subject: mail.subject, body: mail.body),
+                                                          context: Sealing.sendContext(id: sendID)),
                 "gmail_message_id": value(mail.gmailMessageID),
                 "gmail_thread_id": value(mail.gmailThreadID)
             ]
@@ -823,10 +881,12 @@ enum SupabaseAPI {
     /// row that already has a `replied_at`, so the first reply is the one kept.
     static func recordReply(sendID: String, at date: Date,
                             from sender: String, snippet: String?) async throws {
+        let reply = SealedReply(from: sender, snippet: (snippet?.isEmpty ?? true) ? nil : snippet)
         let body: [String: Any] = [
             "replied_at": iso(date),
-            "reply_from": sender,
-            "reply_snippet": (snippet?.isEmpty ?? true) ? NSNull() : snippet!
+            "sealed_reply": try KeyRing.shared.sealPersonal(reply, context: Sealing.replyContext(id: sendID)),
+            "reply_from": NSNull(),
+            "reply_snippet": NSNull()
         ]
         try await write(method: "PATCH", path: "mail_sends",
                         query: [URLQueryItem(name: "id", value: "eq.\(sendID)")],
@@ -836,7 +896,8 @@ enum SupabaseAPI {
     /// Take back a reply that wasn't one — an auto-answer saying the address
     /// is no longer in service, recorded as a reply before those were known.
     static func clearReply(sendID: String) async throws {
-        let body: [String: Any] = ["replied_at": NSNull(), "reply_from": NSNull(), "reply_snippet": NSNull()]
+        let body: [String: Any] = ["replied_at": NSNull(), "sealed_reply": NSNull(),
+                                   "reply_from": NSNull(), "reply_snippet": NSNull()]
         try await write(method: "PATCH", path: "mail_sends",
                         query: [URLQueryItem(name: "id", value: "eq.\(sendID)")],
                         body: body)
@@ -844,25 +905,34 @@ enum SupabaseAPI {
 
     // MARK: - Profile (per Gmail user)
 
+    /// The profile, opened from its seal. Nil when there's none — or when it
+    /// was sealed under an account key since replaced, which reads the same:
+    /// the profile is asked for again.
     static func fetchProfile(email: String) async throws -> Profile? {
         let request = makeRequest(path: "profiles", query: [
-            URLQueryItem(name: "select", value: "name,is_studying,college,is_working,company,position,resume_link"),
+            URLQueryItem(name: "select", value: "name,is_studying,college,is_working,company,position,resume_link,sealed"),
             URLQueryItem(name: "email", value: "eq.\(email)")
         ])
         let data = try await send(request)
-        return try decoder.decode([Profile].self, from: data).first
+        struct Row: Decodable { let sealed: String? }
+        guard let row = try decoder.decode([Row].self, from: data).first else { return nil }
+        guard let sealed = row.sealed else { return try decoder.decode([Profile].self, from: data).first }
+        return KeyRing.shared.openPersonal(Profile.self, from: sealed, context: Sealing.profileContext(email: email))
     }
 
+    /// The plain columns are blanked rather than nulled: empty says nothing,
+    /// and it keeps whatever the table requires of them.
     static func upsertProfile(email: String, profile: Profile) async throws {
         let body: [String: Any] = [
             "email": email,
-            "name": profile.name,
-            "is_studying": profile.isStudying,
-            "college": profile.college,
-            "is_working": profile.isWorking,
-            "company": profile.company,
-            "position": profile.position,
-            "resume_link": profile.resumeLink
+            "sealed": try KeyRing.shared.sealPersonal(profile, context: Sealing.profileContext(email: email)),
+            "name": "",
+            "is_studying": false,
+            "college": "",
+            "is_working": false,
+            "company": "",
+            "position": "",
+            "resume_link": ""
         ]
         try await write(method: "POST", path: "profiles", body: body,
                         prefer: "return=minimal,resolution=merge-duplicates")
@@ -870,23 +940,39 @@ enum SupabaseAPI {
 
     // MARK: - Templates (per Gmail user)
 
+    /// This user's templates, opened from their seals, by name. One sealed
+    /// under an account key since replaced is left out.
     static func fetchTemplates(userEmail: String) async throws -> [MailTemplate] {
         let request = makeRequest(path: "templates", query: [
-            URLQueryItem(name: "select", value: "id,name,subject,content"),
-            URLQueryItem(name: "user_email", value: "eq.\(userEmail)"),
-            URLQueryItem(name: "order", value: "name")
+            URLQueryItem(name: "select", value: "id,name,subject,content,sealed"),
+            URLQueryItem(name: "user_email", value: "eq.\(userEmail)")
         ])
         let data = try await send(request)
-        return try decoder.decode([MailTemplate].self, from: data)
+        struct Row: Decodable {
+            let id: UUID
+            let name: String?, subject: String?, content: String?, sealed: String?
+        }
+        return try decoder.decode([Row].self, from: data).compactMap { row -> MailTemplate? in
+            if let sealed = row.sealed {
+                guard let open = KeyRing.shared.openPersonal(SealedTemplate.self, from: sealed,
+                                                             context: Sealing.templateContext(id: row.id.uuidString))
+                else { return nil }
+                return MailTemplate(id: row.id, name: open.name, subject: open.subject, content: open.content)
+            }
+            return MailTemplate(id: row.id, name: row.name ?? "", subject: row.subject ?? "", content: row.content ?? "")
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     static func upsertTemplate(userEmail: String, template: MailTemplate) async throws {
+        let sealed = SealedTemplate(name: template.name, subject: template.subject, content: template.content)
         let body: [String: Any] = [
             "id": template.id.uuidString,
             "user_email": userEmail,
-            "name": template.name,
-            "subject": template.subject,
-            "content": template.content
+            "sealed": try KeyRing.shared.sealPersonal(sealed, context: Sealing.templateContext(id: template.id.uuidString)),
+            "name": NSNull(),
+            "subject": NSNull(),
+            "content": NSNull()
         ]
         try await write(method: "POST", path: "templates", body: body,
                         prefer: "return=minimal,resolution=merge-duplicates")
@@ -899,25 +985,40 @@ enum SupabaseAPI {
                         query: [URLQueryItem(name: "id", value: "in.(\(ids.map(\.uuidString).joined(separator: ",")))")])
     }
 
-    /// A contact row body. Empty text fields become null so edits can clear a
-    /// value. Sent state lives in `mail_sends`, not here.
-    /// Once `greeting_name` is known to be missing it's left out up front, so
-    /// every later save costs one request rather than a failure and a retry.
-    private static func contactBody(_ contact: Contact) -> [String: Any] {
-        func value(_ s: String?) -> Any { (s?.isEmpty ?? true) ? NSNull() : s! }
-        let body: [String: Any] = [
-            "name": value(contact.name),
-            "email": value(contact.email),
-            "position": value(contact.position),
-            "phone": value(contact.phone),
-            "greeting_name": value(contact.greetingName)
+    /// A contact row body: its fields sealed into the user's own vault, and
+    /// the plain columns emptied. Sent state lives in `mail_sends`, not here.
+    static func contactBody(_ contact: Contact, id: String) throws -> [String: Any] {
+        let (sealed, vaultID, keyID) = try KeyRing.shared.sealOwnContact(contact.sealedFields, id: id)
+        return [
+            "vault_id": vaultID,
+            "key_id": keyID,
+            "sealed": sealed,
+            "name": NSNull(),
+            "email": NSNull(),
+            "position": NSNull(),
+            "phone": NSNull(),
+            "greeting_name": NSNull()
         ]
-        return greetingColumnMissing ? withoutGreetingName(body) : body
+    }
+
+    /// Only the contacts of vaults this account can read. `under` is where
+    /// the contacts sit in the request: embedded under a company
+    /// ("recruiters"), deeper ("companies.recruiters"), or the table itself
+    /// (nil). With nothing unlocked it matches no vault at all.
+    static func readableContacts(under path: String? = "recruiters") -> URLQueryItem {
+        let vaults = KeyRing.shared.readableVaults.sorted()
+        let list = vaults.isEmpty ? "00000000-0000-0000-0000-000000000000" : vaults.joined(separator: ",")
+        return URLQueryItem(name: path.map { "\($0).vault_id" } ?? "vault_id", value: "in.(\(list))")
+    }
+
+    /// Only the contacts of this account's own vault. Nil before it's unlocked.
+    static func ownContacts() -> URLQueryItem? {
+        KeyRing.shared.ownVaultID.map { URLQueryItem(name: "vault_id", value: "eq.\($0)") }
     }
 
     // MARK: - Plumbing
 
-    private static func makeRequest(path: String, query: [URLQueryItem] = []) -> URLRequest {
+    static func makeRequest(path: String, query: [URLQueryItem] = []) -> URLRequest {
         var components = URLComponents(string: "\(AppConfig.supabaseURL)/rest/v1/\(path)")!
         if !query.isEmpty { components.queryItems = query }
         var request = URLRequest(url: components.url!)
@@ -927,7 +1028,7 @@ enum SupabaseAPI {
     }
 
     @discardableResult
-    private static func send(_ request: URLRequest) async throws -> Data {
+    static func send(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw SupabaseError.badResponse
@@ -959,7 +1060,7 @@ enum SupabaseAPI {
 
     /// POST `body` and return the new row's `id`. When `onConflict` is given the
     /// insert upserts on those columns instead of failing on a duplicate.
-    private static func insertReturningID(path: String, body: [String: Any],
+    static func insertReturningID(path: String, body: [String: Any],
                                           onConflict: String? = nil) async throws -> String {
         var query: [URLQueryItem] = []
         var prefer = "return=representation"
@@ -981,7 +1082,7 @@ enum SupabaseAPI {
     }
 
     /// Insert several rows in one request.
-    private static func write(method: String, path: String, rows: [[String: Any]]) async throws {
+    static func write(method: String, path: String, rows: [[String: Any]]) async throws {
         var request = makeRequest(path: path)
         request.httpMethod = method
         request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
@@ -990,7 +1091,7 @@ enum SupabaseAPI {
         try await send(request)
     }
 
-    private static func write(method: String, path: String,
+    static func write(method: String, path: String,
                               query: [URLQueryItem] = [], body: [String: Any]? = nil,
                               prefer: String = "return=minimal", onConflict: String? = nil) async throws {
         var query = query
@@ -1007,7 +1108,7 @@ enum SupabaseAPI {
 
     // MARK: - Date handling
 
-    private static func iso(_ date: Date) -> String {
+    static func iso(_ date: Date) -> String {
         fractionalFormatter.string(from: date)
     }
 
@@ -1027,7 +1128,7 @@ enum SupabaseAPI {
         return formatter
     }()
 
-    private static let decoder: JSONDecoder = {
+    static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { dec in
             let raw = try dec.singleValueContainer().decode(String.self)
