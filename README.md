@@ -75,7 +75,7 @@ sent and read through the Gmail API under Google OAuth.
 
 | | |
 |---|---|
-| **Companies and contacts** | A company can have several mail domains (`stripe.com`, `stripe.dev`). Adding a contact looks up the domain of their address and suggests the company already on file, so the same company isn't entered twice. |
+| **Companies and contacts** | A company can have several mail domains (`stripe.com`, `stripe.dev`). Adding a contact looks up the domain of their address and suggests the company already on file, so the same company isn't entered twice. A contact can also carry a LinkedIn profile and a location, and someone known only by their LinkedIn can be on file without an address: they show "No address" and aren't offered for mail until one is added. |
 | **Templates** | Subject and body with placeholders (`{Receiver-Name}`, `{Receiver-Company}`, `{Sender-College}`, `{Resume-Link}`, …) filled from the contact and your profile. The editor flags misspelled placeholders and ones that would come out blank. A template that names one company in plain text is labelled with it, and compose warns before it goes to anyone else. |
 | **Personalised lines** | A sentence of your own for each company ("I've been following Juniper's move to edge regions…"), written on the company's page. `{Company-Personalised}` puts it into mails to anyone there; a company without one gets the mail without it. |
 | **Writing help** | The sparkles button in the template, mail and company-line editors: Proofread, Rewrite, Friendlier, Professional, Shorter, Expand, your own instruction, or a first draft of a company line. It runs through **Aurora Writer**, a shortcut you make once, and every answer is shown as a word-by-word change to keep or throw away, with Undo after. Placeholders are checked on the way back. See [Writing help](#writing-help). |
@@ -89,7 +89,8 @@ sent and read through the Gmail API under Google OAuth.
 | **Look** | Retro motion graphics: a warm black ground under film grain, cream type and one burnt-orange accent, with a seventies striped sun drifting faintly in the corner of every screen. The launch screen is an ident: the sun rises over a horizon while four stripes (mustard, orange, vermilion, rust) run out under it as the launch loads, then it lifts away. |
 | **Curtains** | The big moments play as short full-screen motion graphics over film grain: the screen washes over, a figure acts in the middle, a serif title rises in, and the curtain lifts away. Sending drops envelopes onto a stack while its count ticks up under "Queued" (or "Scheduled", with the time). While writing help works, the sheet sits on the same grainy ground, and the splash and sign-in screen open on it. A tap lifts a curtain early; Reduce Motion fades it in and out. |
 | **Fresher hiring** | Every company in the Fresher Hiring Ledger is flagged, with a cap on its logo. Filter chips over Companies list freshers, ones hiring now, and each hiring route (off-campus, campus & intern, unclear), with counts. A company's screen shows its website and careers page, the package its sources state, the routes it hires freshers by, when it usually opens, batches and roles. |
-| **Sources** | Each fact rests on a source: a job post, an offer write-up, a placement page, each with its link, date and the package it states. Any source can be opened, edited, added or marked invalid (shared, with Undo); invalid ones stop counting toward the stated package. |
+| **Company links** | A company's LinkedIn, X and Facebook pages, shown as chips on its page and edited in Edit Company. They belong to your vault and are sealed under its key like its contacts, so only accounts holding the key can read them. |
+| **Sources** | Each fact rests on a source: a job post, an offer write-up, a placement page, each with its link, date and the package it states, listed newest first. Any source can be opened, edited, added or marked invalid (shared, with Undo); invalid ones stop counting toward the stated package. |
 | **Also known as** | A company's brands, former names and the name it trades under (Eternal: Zomato, Blinkit, District, Hyperpure). They're listed under its name, searching any of them finds it ("blink" turns up Eternal, with "Also known as Blinkit" on the card), and Edit Company adds or removes them. |
 | **Logos** | A company's own logo, found on its website, in place of the monogram everywhere it appears. Edit Company can find one on the website, or take a link. |
 | **Export** | Settings → Export Data saves the shared catalog and your own sends, templates and profile to a place you pick in Files, as one JSON file or a .zip of spreadsheets. |
@@ -115,14 +116,22 @@ Cloud OAuth client for iOS.
 Changes the app expects, newest first. Run them in the Supabase SQL editor; each
 is safe to re-run.
 
-The newest is [`scripts/rls_migration.sql`](scripts/rls_migration.sql), which
-lets each account change only its own rows ([per-account access](#per-account-access)).
+The newest is [`scripts/company_links_migration.sql`](scripts/company_links_migration.sql),
+which adds `company_links`: each vault's sealed LinkedIn, X and Facebook links
+for a company, one row per vault. It's safe to run before or after
+`rls_migration.sql` and takes the matching rules either way. Until it's run,
+Edit Company hides the links.
+
+Before it, [`scripts/rls_migration.sql`](scripts/rls_migration.sql) lets each
+account change only its own rows ([per-account access](#per-account-access)).
 Run it in this order. Each step needs the one before it:
 
 1. In Supabase, open **Authentication → Sign In / Providers → Google** and turn
    it on. Put the app's iOS client ID (`AppConfig.googleClientID`) under
    **Client IDs**. The app signs in with Google's ID token, so it needs no
-   client secret.
+   client secret. Then run [`scripts/rls_bridge.sql`](scripts/rls_bridge.sql):
+   signed-in phones come in as `authenticated`, and without it they'd see no
+   profile or sent mail until the next step.
 2. Install this build on every phone and open it once. **Authentication →
    Users** should list each account. Until step 1 is done, the app keeps using
    the publishable key, so it works either way.
@@ -132,7 +141,7 @@ Run it in this order. Each step needs the one before it:
 4. For the Python scripts, set `SUPABASE_SERVICE_KEY` to the project's secret
    key (**Project Settings → API Keys**). The publishable key alone is refused.
 
-Before that, [`scripts/vault_migration.sql`](scripts/vault_migration.sql) [`scripts/vault_migration.sql`](scripts/vault_migration.sql)
+Before that, [`scripts/vault_migration.sql`](scripts/vault_migration.sql)
 adds the vault tables and sealed columns for [private contacts](#private-contacts-and-sharing),
 and files every existing contact under realaryankadian@gmail.com's code,
 AURORA. Back up the database first. Until it's run, the app stops after
@@ -258,6 +267,9 @@ alter table recruiters
 ```
 
 The app still runs if some of these haven't been applied yet:
+
+- Without `company_links`, Edit Company hides the LinkedIn, X and Facebook
+  fields and company pages show no link chips.
 
 - Without `also_known_as`, companies have no other names: Edit Company hides
   the section and search goes by the company's own name.
@@ -767,8 +779,9 @@ Contacts, mail history, templates and the profile are encrypted on the phone
 (AES-256-GCM) before they reach Supabase. The server stores sealed text and
 can't read it.
 
-- **Vaults.** Each user's contacts live in a vault with a public **code**
-  (like `AURORA`) and a **private key**. The vault's data key is sealed under
+- **Vaults.** Each user's contacts (with their LinkedIn and location) and
+  company links live in a vault with a public **code** (like `AURORA`) and a
+  **private key**. The vault's data key is sealed under
   a key derived from the private key (PBKDF2-SHA256, 600,000 rounds).
   Neither the private key nor the data key leaves the phone in the clear.
 - **Account key.** Each account has its own key, kept in iCloud Keychain and
@@ -788,12 +801,12 @@ can't read it.
   can be mailed and marked invalid, but only the owner can edit or delete
   them. Writes and deletes are pinned to the user's own vault. A user can
   only share their own code, so contacts they imported can't be passed on.
-  A company that holds other people's contacts can't be deleted.
+  A company that holds other people's contacts or links can't be deleted.
 - **Changing keys.** Settings › Sharing & Keys changes the code (importers
   keep access) or the private key. A key change re-seals every contact under
-  a new data key, so anyone who imported the old one loses access and is
-  shown the import as needing the new key. The change survives being
-  interrupted.
+  a new data key, along with the vault's company links, so anyone who
+  imported the old one loses access and is shown the import as needing the
+  new key. The change survives being interrupted.
 - **Search.** The server can't search sealed fields, so the app keeps an
   in-memory directory of the contacts it can read for search and
   domain lookup.
@@ -821,9 +834,13 @@ address in that session:
   flip a contact's validity, and a trigger refuses any other change.
 - **Vaults.** Anyone signed in can look one up by its code; only its owner can
   change it.
+- **Company links.** Readable by the accounts holding the vault's key (its
+  owner and its importers), changed only by the owner.
 - **Catalog.** Companies and their sources stay shared and correctable by
   anyone signed in. A company can be deleted only when no one else has
-  contacts under it.
+  contacts or company links under it.
+- **`admins`.** Unused by the app and the scripts; only the secret key reaches
+  it.
 - **No session, no access.** The publishable key alone is refused
   everything. The scripts use the secret key, which bypasses these rules.
 
@@ -852,7 +869,7 @@ reading threads. That keeps them independent of Gmail and Supabase, and let the
 queue be exercised with a fake transport.
 
 Tables: `companies`, `recruiters`, `company_sources` (shared by all users),
-`mail_sends` (per user), plus profiles and templates. Sent and reply state is overlaid onto the
+`company_links` (per vault, sealed), `mail_sends` (per user), plus profiles and templates. Sent and reply state is overlaid onto the
 shared contact rows after they're loaded.
 
 `recruiters.is_valid` is shared on purpose and only written by
@@ -944,7 +961,7 @@ and removes its own throwaway server.
 | Path | What it does |
 |---|---|
 | [`scripts/fresher_ledger/`](scripts/fresher_ledger/README.md) | Imports the Fresher Hiring Ledger: matches each of its companies to the catalog (or adds it), flags it, and loads its links, routes and sources; crawls company websites for logos and careers pages; fills missing links in checked batches; and stores companies' other names. Dry run first; backs up before writing. |
-| [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. Backs up before every change. |
+| [`scripts/company_verification/`](scripts/company_verification/README.md) | Checks and repairs the shared catalog: one company per mail domain, typo and dead domains, and names and greetings, and imports recruiter spreadsheets after verifying them. `import_people.py` brings in people known only by their LinkedIn and fills companies' links, sealed under the vault's key, with plan, apply, verify and rollback steps. Backs up before every change. |
 | `scripts/app_icons/make_icons.swift` | Draws the app icon (light, dark and tinted) and the README logo from the app's mark, a dawn with a rising line. |
 
 ## Project layout
