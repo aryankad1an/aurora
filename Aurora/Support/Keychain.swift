@@ -3,7 +3,9 @@ import Security
 
 /// A tiny string-in-Keychain store for the few secrets (OAuth refresh token)
 /// that shouldn't live in plaintext JSON alongside the rest of the app data.
-enum Keychain {
+/// Not tied to the main actor: the Keychain is safe to use from any thread,
+/// and the database session reads it from its own.
+nonisolated enum Keychain {
     /// Store `value` under `key`, or delete the entry when `value` is nil.
     static func set(_ value: String?, for key: String) {
         let query: [String: Any] = [

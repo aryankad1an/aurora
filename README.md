@@ -63,6 +63,7 @@ sent and read through the Gmail API under Google OAuth.
   - [Greetings](#greetings)
   - [Writing help](#writing-help)
   - [Private contacts and sharing](#private-contacts-and-sharing)
+  - [Per-account access](#per-account-access)
 - [Architecture](#architecture)
 - [Design system](#design-system)
 - [Testing](#testing)
@@ -114,7 +115,24 @@ Cloud OAuth client for iOS.
 Changes the app expects, newest first. Run them in the Supabase SQL editor; each
 is safe to re-run.
 
-The newest is in its own file: [`scripts/vault_migration.sql`](scripts/vault_migration.sql)
+The newest is [`scripts/rls_migration.sql`](scripts/rls_migration.sql), which
+lets each account change only its own rows ([per-account access](#per-account-access)).
+Run it in this order. Each step needs the one before it:
+
+1. In Supabase, open **Authentication → Sign In / Providers → Google** and turn
+   it on. Put the app's iOS client ID (`AppConfig.googleClientID`) under
+   **Client IDs**. The app signs in with Google's ID token, so it needs no
+   client secret.
+2. Install this build on every phone and open it once. **Authentication →
+   Users** should list each account. Until step 1 is done, the app keeps using
+   the publishable key, so it works either way.
+3. Back up the database, then run the file. An older build has no session and
+   is refused everything after this. [`scripts/rls_rollback.sql`](scripts/rls_rollback.sql)
+   undoes it.
+4. For the Python scripts, set `SUPABASE_SERVICE_KEY` to the project's secret
+   key (**Project Settings → API Keys**). The publishable key alone is refused.
+
+Before that, [`scripts/vault_migration.sql`](scripts/vault_migration.sql) [`scripts/vault_migration.sql`](scripts/vault_migration.sql)
 adds the vault tables and sealed columns for [private contacts](#private-contacts-and-sharing),
 and files every existing contact under realaryankadian@gmail.com's code,
 AURORA. Back up the database first. Until it's run, the app stops after
@@ -262,6 +280,8 @@ The app asks for `gmail.send` and `gmail.readonly`. The read scope is what
 reply tracking, bounce detection, the queue's Sent-mail lookups and the
 greeting lookups use.
 
+- `openid email` gives the app the account's address, and an ID token that
+  signs it in to the database ([per-account access](#per-account-access)).
 - If you connected Gmail before reply tracking existed, disconnect and reconnect
   it in Settings. Older tokens don't have the read scope, and reads fail with a
   403 until you do.
@@ -782,6 +802,37 @@ Company names, which company a contact is filed under, its valid/invalid
 flag, and when mail was sent or answered stay readable. So "already mailed"
 still works even if an account key is lost.
 
+### Per-account access
+
+Sealing keeps the contents private, but it doesn't stop a write. The
+publishable key ships in the app, so before this anyone holding it could
+delete or overwrite any row. Now every request carries a Supabase session for
+the signed-in account (`DatabaseSession`). At connect, the app trades Google's
+ID token for a session. Afterwards it renews the session with the session's
+own refresh token, or with a fresh ID token from a Google refresh. The row
+rules in [`scripts/rls_migration.sql`](scripts/rls_migration.sql) check the
+address in that session:
+
+- **Your own rows only.** Sends, templates, the profile, tracked companies and
+  vault grants can be read and changed only by their account.
+- **Contacts.** Anyone signed in can read the sealed rows, because counting
+  other people's contacts under a company needs that. Only a vault's owner can
+  add, edit, delete or move its contacts. Someone who imported the vault can
+  flip a contact's validity, and a trigger refuses any other change.
+- **Vaults.** Anyone signed in can look one up by its code; only its owner can
+  change it.
+- **Catalog.** Companies and their sources stay shared and correctable by
+  anyone signed in. A company can be deleted only when no one else has
+  contacts under it.
+- **No session, no access.** The publishable key alone is refused
+  everything. The scripts use the secret key, which bypasses these rules.
+
+If Supabase won't create a session (for example, Google sign-in isn't turned
+on yet), requests fall back to the publishable key. Supabase is asked again
+after a minute, not on every request. `python3 scripts/rls_test/test_rls.py`
+checks the rules against a throwaway local Postgres, signed in as the owner,
+an importer, an outsider, the bare key and the secret key.
+
 ## Architecture
 
 | Layer | Where |
@@ -792,7 +843,8 @@ still works even if an account key is lost.
 | Mail | Gmail API via `GmailAuthStore`: OAuth with PKCE, send, and read-only mailbox queries |
 | Greetings | `RecipientName`, with `MailboxNames` for names found in your mail |
 | Live Activity | The `AuroraLive` widget extension, drawn from `SendActivityAttributes` in `Shared/`; `SendLiveActivity` in the app starts, updates and ends it |
-| On the phone | Keychain for the Google refresh token; JSON files in Documents for the mail queue, bounces, found names and a few cached lists (`JSONFile`) |
+| Database sign-in | `DatabaseSession`: a Supabase session made from the Google sign-in, attached to every request |
+| On the phone | Keychain for the Google and Supabase refresh tokens; JSON files in Documents for the mail queue, bounces, found names and a few cached lists (`JSONFile`) |
 
 `MailQueue` and `ReplySync` don't reference the auth or data stores. `RootView`
 passes them closures for sending, looking up Sent mail, recording sends and
@@ -872,6 +924,8 @@ swiftc -parse-as-library Aurora/Models/RoleTitle.swift Tests/RoleTitleTests.swif
 swiftc -parse-as-library Aurora/Models/TextDiff.swift Tests/TextDiffTests.swift -o /tmp/td && /tmp/td
 swiftc -parse-as-library Aurora/Models/WritingAction.swift Aurora/Models/TextDiff.swift \
   Tests/WritingActionTests.swift -o /tmp/wa && /tmp/wa
+swiftc -parse-as-library -default-isolation MainActor \
+  Aurora/Models/DatabaseSession.swift Tests/DatabaseSessionTests.swift -o /tmp/ds && /tmp/ds
 swift Tests/ReplySyncTests.swift
 swift Tests/EndToEndSyncTests.swift
 swift Tests/PaginationAndLazyLoadTests.swift
@@ -881,6 +935,9 @@ swift Tests/MutationVerifier.swift
 
 `MutationVerifier` breaks the reply filters on purpose to make sure the tests
 notice. The Python scripts below have their own `unittest` suites.
+`scripts/rls_test/test_rls.py` checks the database's row rules. It needs
+Postgres's `initdb` and `pg_ctl` (`brew install postgresql@14`), and it starts
+and removes its own throwaway server.
 
 ## Scripts
 
@@ -917,11 +974,11 @@ docs/screenshots/              Screenshots used in this README and SCREENSHOTS.m
 - Contacts, mail history, templates and the profile are end-to-end encrypted
   (see [Private contacts and sharing](#private-contacts-and-sharing)). The
   database holds only sealed text for them.
-- The Supabase anon key and the Google iOS client ID ship inside the app and
-  aren't secrets. The vault and grant rows are protected only by Row Level
-  Security policies, which aren't per-user yet. Someone holding the anon key
-  can't read sealed data, but could delete or overwrite rows. Never commit service-role keys, client secrets or provisioning
-  profiles.
+- The Supabase publishable key and the Google iOS client ID ship inside the
+  app and aren't secrets. Once [`scripts/rls_migration.sql`](scripts/rls_migration.sql)
+  has run, the key alone opens nothing. Each account can change only its own
+  rows ([per-account access](#per-account-access)). Never commit the secret
+  (service-role) key, client secrets or provisioning profiles.
 - `data_verification/`, `db_backups/` and the CSV exports at the root are
   git-ignored because they contain people's addresses and sent mail.
 

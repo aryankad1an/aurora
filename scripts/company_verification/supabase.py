@@ -1,13 +1,18 @@
 """Minimal PostgREST client for the Aurora Supabase project.
 
-Uses the app's anon key from Aurora/AppConfig.swift (it ships in the app, so
-it is not a secret). Every write goes through `write`, which logs and raises on
-anything but 2xx so a half-applied plan stops instead of carrying on.
+Uses the project's secret key from SUPABASE_SERVICE_KEY when it's set, and
+otherwise the app's publishable key from Aurora/AppConfig.swift (it ships in the
+app, so it is not a secret). Once scripts/rls_migration.sql has run, the
+publishable key alone is refused everything, and the scripts need the secret
+key — which bypasses the row rules, so keep it in the environment, never in the
+repository. Every write goes through `write`, which logs and raises on anything
+but 2xx so a half-applied plan stops instead of carrying on.
 
 Contacts are sealed once vault_migration.sql has run: read and write their
 fields through contacts.py, not straight through here.
 """
 import json
+import os
 import re
 import time
 import urllib.error
@@ -17,7 +22,7 @@ from pathlib import Path
 
 _CONFIG = (Path(__file__).resolve().parents[2] / "Aurora" / "AppConfig.swift").read_text()
 BASE = re.search(r'supabaseURL = "([^"]+)"', _CONFIG).group(1).rstrip("/") + "/rest/v1/"
-KEY = re.search(r'supabaseAnonKey = "([^"]+)"', _CONFIG).group(1)
+KEY = os.environ.get("SUPABASE_SERVICE_KEY") or re.search(r'supabaseAnonKey = "([^"]+)"', _CONFIG).group(1)
 PAGE = 1000
 
 
@@ -38,7 +43,11 @@ def _request(method, path, query=None, body=None, headers=None, timeout=30):
                 raw = r.read()
                 return (json.loads(raw) if raw else None), r.headers
         except urllib.error.HTTPError as e:
-            raise APIError(f"{method} {path} {query} -> HTTP {e.code}: {e.read().decode()[:400]}")
+            detail = e.read().decode()[:400]
+            if e.code == 401 and "SUPABASE_SERVICE_KEY" not in os.environ:
+                detail += ("\nThe database refuses the publishable key on its own since rls_migration.sql:"
+                           " set SUPABASE_SERVICE_KEY to the project's secret key.")
+            raise APIError(f"{method} {path} {query} -> HTTP {e.code}: {detail}")
         except Exception as e:  # network blip: retry with backoff
             last = e
             time.sleep(1 + attempt * 2)

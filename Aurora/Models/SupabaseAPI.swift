@@ -74,8 +74,7 @@ enum SupabaseAPI {
         request.setValue("count=exact", forHTTPHeaderField: "Prefer")
         request.setValue("0-0", forHTTPHeaderField: "Range")
         request.setValue("items", forHTTPHeaderField: "Range-Unit")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw SupabaseError.badResponse }
+        let (data, http) = try await perform(request)
         guard (200..<300).contains(http.statusCode) else { throw error(status: http.statusCode, body: data, request: request) }
         // "0-0/1162", or "*/0" when there are none.
         guard let range = http.value(forHTTPHeaderField: "Content-Range"),
@@ -998,26 +997,49 @@ enum SupabaseAPI {
         var components = URLComponents(string: "\(AppConfig.supabaseURL)/rest/v1/\(path)")!
         if !query.isEmpty { components.queryItems = query }
         var request = URLRequest(url: components.url!)
+        // The bearer is set when the request goes out (`perform`): the
+        // account's database session, made fresh if it has expired.
         request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(AppConfig.supabaseAnonKey)", forHTTPHeaderField: "Authorization")
         return request
     }
 
     @discardableResult
     static func send(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SupabaseError.badResponse
-        }
+        let (data, http) = try await perform(request)
         guard (200..<300).contains(http.statusCode) else {
             throw error(status: http.statusCode, body: data, request: request)
         }
         return data
     }
 
+    /// Send `request` as this account. A session the server turns away as
+    /// expired (PostgREST's PGRST30x) is renewed and the request sent once
+    /// more; it was refused before anything ran, so sending it again is safe.
+    private static func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var request = request
+        var renewed = false
+        while true {
+            let bearer = await DatabaseSession.shared.bearer()
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw SupabaseError.badResponse }
+            if http.statusCode == 401, !renewed, bearer != AppConfig.supabaseAnonKey,
+               String(decoding: data, as: UTF8.self).contains("PGRST30") {
+                await DatabaseSession.shared.invalidate(bearer)
+                renewed = true
+                continue
+            }
+            return (data, http)
+        }
+    }
+
     /// What a failed request means, from its status and PostgREST's error body.
     private static func error(status: Int, body data: Data, request: URLRequest) -> SupabaseError {
         let body = String(data: data, encoding: .utf8) ?? "status \(status)"
+        // Refused for who's asking (scripts/rls_migration.sql): no session the
+        // server accepts, or a row this account may not change.
+        if status == 401 { return .notSignedIn }
+        if status == 403 || body.contains("\"42501\"") { return .notAllowed }
         // A foreign-key violation (23503) is a 409 too, and no duplicate: a
         // write pointing at a row since deleted (a contact added to a company
         // another phone just removed), or a delete of a row others still use.
@@ -1148,6 +1170,11 @@ enum SupabaseError: LocalizedError {
     case missingParent
     /// A delete refused because other rows still point at the row.
     case stillInUse
+    /// The request went out without a database session the server accepts.
+    case notSignedIn
+    /// A row this account may not change: another account's, or a contact
+    /// someone else added.
+    case notAllowed
     /// The database is missing a column this build uses — one of the migrations
     /// in the README hasn't been run yet.
     case schemaOutOfDate
@@ -1160,6 +1187,8 @@ enum SupabaseError: LocalizedError {
         case .duplicateContact: return "A contact with that email already exists at this company."
         case .missingParent: return "That company has been deleted. Refresh and try again."
         case .stillInUse: return "Other records still use this, so it can't be deleted. Refresh and try again."
+        case .notSignedIn: return "The database didn't accept this account's sign-in. Reconnect Gmail in Settings."
+        case .notAllowed: return "This account can't change that. Only the person who added it can."
         case .schemaOutOfDate:
             return "The database is missing columns this version of the app uses. Run the migrations in the README."
         case .server(let message): return message

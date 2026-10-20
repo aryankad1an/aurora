@@ -95,7 +95,7 @@ class Pipeline(unittest.TestCase):
         t = self.tables(
             [company("apple", "Apple"), company("ocwen", "Ocwen")],
             [contact(f"a{i}", "apple", f"p{i}@apple.com") for i in range(5)]
-            + [contact("x", "apple", "k.karkare@ocwen.com")]
+            + [contact("x", "apple", "test.person@ocwen.com")]
             + [contact(f"o{i}", "ocwen", f"q{i}@ocwen.com") for i in range(3)])
         st, plan, after = self.plan(t)
         self.assertEqual(plan["moves"], {"ocwen": ["x"]})
@@ -145,7 +145,7 @@ class Pipeline(unittest.TestCase):
 
     def test_deleted_typo_contact_is_restored_corrected(self):
         t = self.tables([company("mi", "Micron")], [contact("m", "mi", "a@micron.com")])
-        backup_rows = [contact("gone", "old-co", "spradhan@micron.con", name="S Pradhan"),
+        backup_rows = [contact("gone", "old-co", "sam.sample@micron.con", name="Sam Sample"),
                        contact("m", "mi", "a@micron.com")]                  # still live: ignored
         st = vc.State(t)
         with mock.patch.dict(vc.DECISIONS, {**copy.deepcopy(BASE_DECISIONS), "typo_domains": {"micron.con": "micron.com"}}):
@@ -154,12 +154,12 @@ class Pipeline(unittest.TestCase):
             after = vc.State(vc.simulate(st, plan))
             self.assertEqual(vc.verify(after)[0], [])
         self.assertEqual([(x["id"], x["email"], x["company_id"], x["is_valid"]) for x in plan["restore_contacts"]],
-                         [("gone", "spradhan@micron.com", "mi", True)])
+                         [("gone", "sam.sample@micron.com", "mi", True)])
 
     def test_restore_skipped_when_corrected_address_already_exists(self):
-        t = self.tables([company("mi", "Micron")], [contact("m", "mi", "spradhan@micron.com")])
+        t = self.tables([company("mi", "Micron")], [contact("m", "mi", "sam.sample@micron.com")])
         with mock.patch.dict(vc.DECISIONS, {**copy.deepcopy(BASE_DECISIONS), "typo_domains": {"micron.con": "micron.com"}}):
-            plan = vc.build_plan(vc.State(t), [contact("gone", "x", "spradhan@micron.con")])
+            plan = vc.build_plan(vc.State(t), [contact("gone", "x", "sam.sample@micron.con")])
         self.assertEqual(plan["restore_contacts"], [])
         self.assertTrue(any("already in the catalog" in n for n in plan["notes"]))
 

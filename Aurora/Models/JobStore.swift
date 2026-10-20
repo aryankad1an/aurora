@@ -52,6 +52,10 @@ final class JobStore {
 
     private(set) var hasMoreCompanies = true
     private(set) var isLoadingMoreCompanies = false
+    /// The scope switch whose first page the spinner is waiting on. Only that
+    /// switch turns it off: a quicker tap on another chip, or a page that was
+    /// already loading, would otherwise end it while the new list is still empty.
+    private var scopeLoad: UUID?
     /// How many catalog rows have been paged in from the server.
     private var companyOffset = 0
 
@@ -86,6 +90,8 @@ final class JobStore {
     /// pages that haven't been loaded yet.
     private(set) var searchResults: [Job] = []
     private(set) var isSearchingServer = false
+    /// Bumped by each search, so only the latest one turns the spinner off.
+    private var searchGeneration = 0
     private var searchQuery = ""
 
     /// The connected Gmail address whose data we show. Set on sign-in.
@@ -196,6 +202,8 @@ final class JobStore {
     /// in typing reaches the server.
     func searchCompanies(query: String) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchGeneration &+= 1
+        let generation = searchGeneration
         guard !trimmed.isEmpty else {
             searchQuery = ""
             searchResults = []
@@ -204,6 +212,9 @@ final class JobStore {
         }
 
         isSearchingServer = true
+        // A newer search keeps the spinner; one cancelled because the search
+        // went away (the screen closed) must not leave it spinning.
+        defer { if searchGeneration == generation { isSearchingServer = false } }
         guard await Task.debounce(.milliseconds(250)) else { return }
 
         do {
@@ -217,9 +228,7 @@ final class JobStore {
         } catch {
             // A failed search leaves the in-memory matches on screen; it isn't
             // worth an alert over a keystroke.
-            guard !Task.isCancelled else { return }
         }
-        isSearchingServer = false
     }
 
     /// Companies matching `query` by their own fields or a contact's, for a
@@ -957,13 +966,25 @@ final class JobStore {
             allCompanies = held.companies
             companyOffset = held.offset
             hasMoreCompanies = held.hasMore
+            // The list is on screen already: nothing for a spinner to wait on.
+            if scopeLoad != nil {
+                scopeLoad = nil
+                isLoadingMoreCompanies = false
+            }
         } else {
             allCompanies = []
             companyOffset = 0
             hasMoreCompanies = true
             isLoadingMoreCompanies = true
         }
-        defer { if held == nil { isLoadingMoreCompanies = false } }
+        let load = held == nil ? UUID() : nil
+        if let load { scopeLoad = load }
+        defer {
+            if let load, scopeLoad == load {
+                scopeLoad = nil
+                isLoadingMoreCompanies = false
+            }
+        }
         do {
             let limit = max(held?.offset ?? 0, SupabaseAPI.defaultPageSize)
             var page = try await SupabaseAPI.fetchAllCompanies(limit: limit, offset: 0, scope: scope)
@@ -1067,7 +1088,8 @@ final class JobStore {
     func loadMoreCompanies() async {
         guard !isLoadingMoreCompanies, hasMoreCompanies, !isLoading else { return }
         isLoadingMoreCompanies = true
-        defer { isLoadingMoreCompanies = false }
+        // A scope switch that started meanwhile owns the spinner now.
+        defer { if scopeLoad == nil { isLoadingMoreCompanies = false } }
 
         do {
             let scope = catalogScope

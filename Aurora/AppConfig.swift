@@ -1,7 +1,7 @@
 import Foundation
 
 /// App-wide configuration values.
-enum AppConfig {
+nonisolated enum AppConfig {
     /// Your Supabase project URL, e.g. https://abcdxyz.supabase.co
     static let supabaseURL = "https://imiampamznvfdebbcoxk.supabase.co"
 

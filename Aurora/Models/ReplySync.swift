@@ -140,6 +140,8 @@ final class ReplySync {
     private(set) var bounces: [Contact.ID: Bounce] = [:]
     /// Failure notices already read from the inbox, so each is fetched once.
     private var seenBounceMessages: Set<String> = []
+    /// The same ids, oldest first: what's kept when the log is trimmed.
+    private var seenBounceOrder: [String] = []
     /// When each dismissed bounce was dismissed: only a notice that arrives
     /// after that brings the contact back.
     private var dismissedBounces: [Contact.ID: Date] = [:]
@@ -179,7 +181,8 @@ final class ReplySync {
         bounceFile = file
         let log = file.load() ?? BounceLog()
         bounces = Dictionary(log.bounces.map { ($0.contactID, $0) }, uniquingKeysWith: { $0.at > $1.at ? $0 : $1 })
-        seenBounceMessages = Set(log.seenMessageIDs)
+        seenBounceMessages = []
+        seenBounceOrder = log.seenMessageIDs.filter { seenBounceMessages.insert($0).inserted }
         dismissedBounces = log.dismissed
         let checkpointFile = JSONFile<ReplyCheckpoint>(name: "reply-checkpoint-\(account).json")
         self.checkpointFile = checkpointFile
@@ -226,11 +229,23 @@ final class ReplySync {
         return isNew
     }
 
-    private func saveBounces() {
-        // The newest few thousand notices are plenty to never re-read one.
-        let seen = Array(seenBounceMessages.suffix(3000))
-        bounceFile?.save(BounceLog(bounces: Array(bounces.values), seenMessageIDs: seen, dismissed: dismissedBounces))
+    private func markSeen(_ messageID: String) {
+        if seenBounceMessages.insert(messageID).inserted { seenBounceOrder.append(messageID) }
     }
+
+    private func saveBounces() {
+        // The newest few thousand notices are plenty to never re-read one. A
+        // set's suffix is an arbitrary few thousand, which could drop this
+        // week's notices and keep last year's — so the order is kept beside it.
+        if seenBounceOrder.count > Self.seenBounceLimit {
+            seenBounceOrder.removeFirst(seenBounceOrder.count - Self.seenBounceLimit)
+            seenBounceMessages = Set(seenBounceOrder)
+        }
+        bounceFile?.save(BounceLog(bounces: Array(bounces.values), seenMessageIDs: seenBounceOrder,
+                                   dismissed: dismissedBounces))
+    }
+
+    private static let seenBounceLimit = 3000
 
     // MARK: - Running
 
@@ -602,7 +617,7 @@ final class ReplySync {
                     let read = Self.isSafePathComponent(messageID)
                         ? try? await Self.readNotice(id: messageID, lookingUpOriginal: false, reader: reader)
                         : nil
-                    if read != nil { seenBounceMessages.insert(messageID) }
+                    if read != nil { markSeen(messageID) }
                     let failures = read.map { $0.notice.failures(snippet: $0.snippet ?? snippet) } ?? []
                     // A notice that reads as a delay, or a success, isn't one.
                     if read == nil || !failures.isEmpty || read?.notice.isNotice == false {
@@ -621,7 +636,7 @@ final class ReplySync {
             let ids = try await Self.listBounceNotices(matching: "\"\(address)\"", limit: 20, reader: reader).ids
             for id in ids where Self.isSafePathComponent(id) {
                 guard let notice = try? await Self.readNotice(id: id, lookingUpOriginal: true, reader: reader) else { continue }
-                seenBounceMessages.insert(id)
+                markSeen(id)
                 let failures = notice.notice.failures(snippet: notice.snippet)
                 let isThisMail = notice.originalGmailID != nil && notice.originalGmailID == send.gmailMessageID
                 guard let failure = failures.first(where: { $0.address == address }) ?? (isThisMail ? failures.first : nil) else {
@@ -641,7 +656,7 @@ final class ReplySync {
                                                            limit: 20, reader: reader).ids
             let mailed = Self.mailed(sends, emailByContact: emailByContact)
             for answer in try await readHeaders(ids: answers.filter(Self.isSafePathComponent)) {
-                seenBounceMessages.insert(answer.id)
+                markSeen(answer.id)
                 guard !BounceParsing.isBounceSender(answer.from),
                       BounceParsing.isDeadAddressNotice(subject: answer.subject, text: answer.snippet),
                       BounceParsing.matchDeadAddressNotice(sender: answer.from, text: answer.snippet,
@@ -1049,7 +1064,7 @@ final class ReplySync {
                 continue
             }
             result.read += 1
-            seenBounceMessages.insert(bounce.messageID)
+            markSeen(bounce.messageID)
             let failures = read.notice.failures(snippet: read.snippet ?? bounce.snippet)
             // A report that fails nobody — a delay, or a success — isn't a
             // bounce, even if it was taken for one before it could be read.
@@ -1113,7 +1128,7 @@ final class ReplySync {
             let failures = notice.notice.failures(snippet: notice.snippet)
             // Not a failure: nothing to find in it, ever.
             guard !failures.isEmpty else {
-                seenBounceMessages.insert(id)
+                markSeen(id)
                 continue
             }
 
@@ -1122,7 +1137,7 @@ final class ReplySync {
             if let original = notice.originalGmailID,
                let contactID = contactByGmailID[original],
                let address = emailByContact[contactID]?.lowercased() {
-                seenBounceMessages.insert(id)
+                markSeen(id)
                 let failure = failures.first { $0.address == address } ?? failures[0]
                 if record(Bounce(contactID: contactID, address: address, at: notice.at, snippet: notice.snippet,
                                  status: failure.status, diagnostic: failure.diagnostic)) {
@@ -1136,7 +1151,7 @@ final class ReplySync {
                     // Mailed before the notice came (a few minutes' slack for clocks).
                     let mailedBefore = sentAtByContact[contactID]?.contains { $0 <= notice.at.addingTimeInterval(5 * 60) } ?? false
                     guard mailedBefore else { continue }
-                    seenBounceMessages.insert(id)
+                    markSeen(id)
                     if record(Bounce(contactID: contactID, address: failure.address, at: notice.at, snippet: notice.snippet,
                                      status: failure.status, diagnostic: failure.diagnostic)) {
                         found += 1
@@ -1197,7 +1212,7 @@ final class ReplySync {
                 sender: answer.from, text: answer.snippet, threadID: answer.threadID, at: answer.at, mailed: mailed) != nil
             // Seen once it's settled: not a notice, or pinned on someone. One
             // that names no one known yet stays unseen, as above.
-            if !isNotice || matched { seenBounceMessages.insert(answer.id) }
+            if !isNotice || matched { markSeen(answer.id) }
             if keepDeadAddressNotice(answer, mailed: mailed, emailByContact: emailByContact) != nil { found += 1 }
         }
         return NoticeScan(found: found, failed: unread.count - answers.count, read: read, more: list.more)

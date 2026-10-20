@@ -18,7 +18,7 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
 
     var isConnected: Bool { connectedEmail != nil }
 
-    private static let refreshTokenKey = "gmail.refreshToken"
+    nonisolated private static let refreshTokenKey = "gmail.refreshToken"
     private let file = JSONFile<Stored>(name: "gmail.json")
     private struct Stored: Codable { var email: String }
 
@@ -47,6 +47,9 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
                 Keychain.set(refresh, for: Self.refreshTokenKey)
                 await tokenVault.clear()
             }
+            // Signed in to the database as this account before anything is
+            // read, so the first requests already go out as it.
+            if let idToken = tokens.id_token { await DatabaseSession.shared.signIn(idToken: idToken) }
             let email = tokens.id_token.flatMap(Self.email(fromIDToken:)) ?? "Connected"
             connectedEmail = email
             file.save(Stored(email: email))
@@ -62,6 +65,15 @@ final class GmailAuthStore: NSObject, ASWebAuthenticationPresentationContextProv
         file.delete()
         connectedEmail = nil
         Task { await tokenVault.clear() }
+        Task { await DatabaseSession.shared.signOut() }
+    }
+
+    /// A new Google ID token for the connected account, for signing in to the
+    /// database again. Google signs a fresh one with every refresh of the
+    /// sign-in (the `openid` scope asks for it), and each lasts an hour.
+    nonisolated static func freshIDToken() async throws -> String? {
+        guard let refresh = Keychain.get(refreshTokenKey) else { throw GmailAuthError.notConnected }
+        return try await TokenVault.performRefresh(refreshToken: refresh, clientID: AppConfig.googleClientID).id_token
     }
 
     // MARK: - Sending
@@ -524,12 +536,13 @@ private actor TokenVault {
         refreshTask = nil
     }
 
-    private struct Refreshed: Decodable {
+    fileprivate struct Refreshed: Decodable {
         let access_token: String
         let expires_in: Int?
+        let id_token: String?
     }
 
-    private static func performRefresh(refreshToken: String, clientID: String) async throws -> Refreshed {
+    fileprivate static func performRefresh(refreshToken: String, clientID: String) async throws -> Refreshed {
         var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
