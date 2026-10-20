@@ -658,7 +658,6 @@ enum SupabaseAPI {
             "url": value(s.url),
             "proof_url": value(s.proofURL),
             "posted_on": value(s.postedOn),
-            "open_now": s.isOpenNow,
             "package_lpa": s.packageLPA ?? NSNull(),
             "package_text": value(s.packageText)
         ]

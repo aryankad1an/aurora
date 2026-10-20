@@ -410,12 +410,10 @@ struct SourceRowContent: View {
                     .font(.caption)
                     .foregroundStyle(.inkMuted)
                     .lineLimit(compact ? 1 : 2)
-                if !compact || source.package != nil || source.isOpenNow || !source.isValid {
+                if !compact || source.package != nil || !source.isValid {
                     HStack(spacing: 6) {
                         if !source.isValid {
                             InvalidPill()
-                        } else if source.isOpenNow {
-                            StatusChip(text: "Open now", systemImage: "dot.radiowaves.left.and.right", color: .statusDone)
                         }
                         if let package = source.package {
                             StatusChip(text: package, systemImage: "indianrupeesign", color: source.isValid ? Color.clay : Color.inkFaint)
@@ -570,7 +568,7 @@ struct CompanySourcesView: View {
         } label: {
             SourceRowContent(source: source)
                 .padding(12)
-                .panelAccented(source.isValid ? (source.isOpenNow ? Color.statusDone : nil) : Color.inkFaint)
+                .panelAccented(source.isValid ? nil : Color.inkFaint)
         }
         .buttonStyle(CardPress())
         .cardRow()
@@ -724,7 +722,6 @@ struct SourceEditorView: View {
                         .textInputAutocapitalization(.words)
                     TextField("Batch (e.g. 2025, 2026)", text: text(\.batch))
                         .keyboardType(.numbersAndPunctuation)
-                    Toggle("Open now", isOn: $draft.isOpenNow)
                 }
                 Section {
                     HStack {

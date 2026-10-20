@@ -167,7 +167,6 @@ struct CompanySource: Identifiable, Decodable, Equatable, Hashable {
     /// YYYY-MM-DD, or YYYY-MM when only the month is known.
     var postedOn: String?
     var confidence: String?
-    var isOpenNow = false
     /// Lakh rupees a year, when the source gives one number.
     var packageLPA: Double?
     /// The package as written, when it's a range or has notes ("₹4–4.5L").
@@ -182,7 +181,6 @@ struct CompanySource: Identifiable, Decodable, Equatable, Hashable {
         case sourceLabel = "source_label"
         case proofURL = "proof_url"
         case postedOn = "posted_on"
-        case isOpenNow = "open_now"
         case packageLPA = "package_lpa"
         case packageText = "package_text"
         case isValid = "is_valid"
@@ -207,7 +205,6 @@ struct CompanySource: Identifiable, Decodable, Equatable, Hashable {
         proofURL = try c.decodeIfPresent(String.self, forKey: .proofURL)
         postedOn = try c.decodeIfPresent(String.self, forKey: .postedOn)
         confidence = try c.decodeIfPresent(String.self, forKey: .confidence)
-        isOpenNow = try c.decodeIfPresent(Bool.self, forKey: .isOpenNow) ?? false
         // `numeric` comes back as a JSON number, or as a string from some
         // PostgREST settings — take either.
         if let number = try? c.decodeIfPresent(Double.self, forKey: .packageLPA) {
@@ -269,10 +266,9 @@ struct CompanySource: Identifiable, Decodable, Equatable, Hashable {
 }
 
 extension Array where Element == CompanySource {
-    /// Open postings first, then newest first; undated ones last.
+    /// Newest first; undated ones last.
     func sortedForDisplay() -> [CompanySource] {
         sorted { a, b in
-            if a.isOpenNow != b.isOpenNow { return a.isOpenNow }
             switch (a.postedOn, b.postedOn) {
             case let (l?, r?) where l != r: return l > r
             case (_?, nil): return true
