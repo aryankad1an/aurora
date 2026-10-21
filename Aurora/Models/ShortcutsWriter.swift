@@ -176,7 +176,10 @@ final class ShortcutsWriter {
         }
         let attributes = WritingActivityAttributes(accent: SendLiveActivity.rgb(Palette.clay))
         let state = WritingActivityAttributes.ContentState(request: title, startedAt: .now)
-        return try? Activity.request(attributes: attributes, content: .init(state: state, staleDate: nil),
+        // Stale once Aurora has stopped waiting: with the app suspended behind
+        // Shortcuts, nothing else would end it.
+        let staleAt = Date.now.addingTimeInterval(Double(Self.timeout.components.seconds))
+        return try? Activity.request(attributes: attributes, content: .init(state: state, staleDate: staleAt),
                                      pushType: nil)
     }
 

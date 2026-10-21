@@ -73,7 +73,7 @@ enum ScheduledMailNotifier {
     nonisolated fileprivate static let batchKey = "batchID"
 }
 
-/// Receives taps on scheduled-mail notifications. Installed as the notification
+/// Receives taps on scheduled-mail and reply-check notifications. Installed as the notification
 /// centre's delegate when the app launches — before any tap that launched it is
 /// delivered — and holds the tapped batch until the queue is ready for it.
 @Observable
@@ -82,6 +82,9 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
 
     /// The batch whose notification was tapped, waiting to be shown.
     @MainActor var openedBatchID: UUID?
+    /// The Activity lane a reply check's notification or Live Activity
+    /// opens, waiting to be shown.
+    @MainActor var openedLane: ActivityView.Lane?
 
     /// The completion-handler form, answered on the main thread — not the
     /// `async` form. Swift finishes an `async` delegate call on a background
@@ -92,11 +95,15 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
-        let id = (response.notification.request.content.userInfo[ScheduledMailNotifier.batchKey] as? String)
-            .flatMap(UUID.init(uuidString:))
+        let info = response.notification.request.content.userInfo
+        let id = (info[ScheduledMailNotifier.batchKey] as? String).flatMap(UUID.init(uuidString:))
+        let lane = info[CheckNotifier.laneKey] as? String
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 if let id { NotificationRouter.shared.openedBatchID = id }
+                if let lane = lane.flatMap(ActivityView.Lane.init(rawValue:)) {
+                    NotificationRouter.shared.openedLane = lane
+                }
             }
             completionHandler()
         }

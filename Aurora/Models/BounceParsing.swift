@@ -31,7 +31,9 @@ nonisolated enum BounceParsing {
     /// each one is really a notice before it counts.
     static let noticeQuery = "{from:mailer-daemon from:postmaster from:\(exchangeSender) "
         + "subject:undeliverable subject:\"delivery status notification\" subject:\"returned mail\" "
-        + "subject:\"delivery failure\" subject:\"undelivered mail\" subject:\"failure notice\"} "
+        + "subject:\"delivery failure\" subject:\"undelivered mail\" subject:\"failure notice\" "
+        + "subject:\"couldn't be delivered\" subject:\"could not be delivered\" subject:\"not delivered\" "
+        + "subject:\"delivery failed\"} "
         + "-from:me newer_than:120d"
 
     /// A "still trying" notice rather than a failure. Gmail sends one when a
@@ -46,6 +48,41 @@ nonisolated enum BounceParsing {
             || text.contains("has been delayed") || text.contains("not yet been delivered")
             || text.contains("hasn't been delivered yet")
     }
+
+    /// The version of what counts as a notice. Raised when notices that used
+    /// to be passed over would now be read (`ReplySync.loadBounces` then reads
+    /// them again).
+    static let version = 2
+
+    /// A notice from a mail filter or a company's own relay, not a mailer
+    /// daemon: Mimecast's "[Postmaster] Email Delivery Failure", or an Exchange
+    /// tenant's "Your message couldn't be delivered" from a no-reply address.
+    /// They come with no report and no `X-Failed-Recipients`, from a sender
+    /// that's nobody's daemon, so only the words say what they are — the
+    /// subject and the text both, since either alone turns up in people's mail.
+    static func isProseNotice(subject: String?, text: String?) -> Bool {
+        func normalized(_ value: String?) -> String {
+            (value ?? "").replacingOccurrences(of: "\u{2019}", with: "'").lowercased()
+        }
+        let subject = normalized(subject).trimmingCharacters(in: .whitespaces)
+        // A person answering or passing one on is writing about it, not sending it.
+        guard !subject.hasPrefix("re:"), !subject.hasPrefix("fw:"), !subject.hasPrefix("fwd:"),
+              noticeSubjects.contains(where: subject.contains) else { return false }
+        let body = String(normalized(text).prefix(1500))
+        return noticePhrases.contains(where: body.contains)
+    }
+
+    private static let noticeSubjects = [
+        "undeliverable", "delivery status notification", "delivery failure", "delivery failed",
+        "delivery has failed", "returned mail", "undelivered", "failure notice", "couldn't be delivered",
+        "could not be delivered", "not delivered"
+    ]
+    private static let noticePhrases = [
+        "could not be delivered", "couldn't be delivered", "wasn't delivered", "was not delivered",
+        "delivery has failed", "delivery failure notification", "delivery to the following recipient",
+        "recipient address rejected", "address is possibly incorrect", "permanent error",
+        "failed permanently", "undeliverable to"
+    ]
 
     /// The addresses a notice says it couldn't deliver to, lowercased. Gmail
     /// names them in an `X-Failed-Recipients` header; notices without one name
@@ -250,13 +287,17 @@ nonisolated struct ParsedNotice {
     var report: [Recipient]?
     /// The original mail's `Message-ID`, without angle brackets.
     var originalMessageID: String?
-    /// The notice's first plain-text part: the prose a person would read.
+    /// The notice's first plain-text part: the prose a person would read. A
+    /// notice sent as HTML alone has its first HTML part here, tags removed.
     var text: String?
+    /// The first HTML part, until it's known whether there's plain text.
+    fileprivate var html: String?
 
     /// Whether this is a delivery notice at all, rather than a person's mail
     /// that happens to say "undeliverable" in the subject.
     var isNotice: Bool {
         report != nil || failedRecipientsHeader != nil || BounceParsing.isBounceSender(from)
+            || BounceParsing.isProseNotice(subject: subject, text: text)
     }
 
     /// The addresses this notice says failed for good. Empty for a delay, a
@@ -299,6 +340,8 @@ nonisolated extension BounceParsing {
         var notice = ParsedNotice(from: headers["from"], subject: headers["subject"],
                                   failedRecipientsHeader: headers["x-failed-recipients"])
         walk(message, depth: 0, into: &notice)
+        if notice.text == nil, let html = notice.html { notice.text = plainText(fromHTML: html) }
+        notice.html = nil
         return notice
     }
 
@@ -333,9 +376,24 @@ nonisolated extension BounceParsing {
         case "text/plain", "":
             guard notice.text == nil else { return }
             notice.text = decode(body, encoding: encoding, charset: parameters["charset"])
+        case "text/html":
+            guard notice.html == nil else { return }
+            notice.html = decode(body, encoding: encoding, charset: parameters["charset"])
         default:
             break
         }
+    }
+
+    /// The words of an HTML part: no styles, scripts or tags, the common
+    /// entities decoded, whitespace collapsed.
+    static func plainText(fromHTML html: String) -> String {
+        var text = html.replacing(#/(?is)<(style|script|head)\b.*?</\1\s*>/#, with: " ")
+        text = text.replacing(#/(?s)<[^>]*>/#, with: " ")
+        for (entity, character) in [("&nbsp;", " "), ("&#160;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
+                                    ("&#39;", "'"), ("&#x27;", "'"), ("&rsquo;", "\u{2019}"), ("&amp;", "&")] {
+            text = text.replacingOccurrences(of: entity, with: character)
+        }
+        return text.replacing(#/\s+/#, with: " ").trimmingCharacters(in: .whitespaces)
     }
 
     /// Headers (names lowercased, folded lines joined, first occurrence kept)

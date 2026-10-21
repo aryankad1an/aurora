@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 2.0" src="https://img.shields.io/badge/version-2.0-E8643A">
+  <img alt="Version 2.1" src="https://img.shields.io/badge/version-2.1-E8643A">
   <img alt="iOS 27" src="https://img.shields.io/badge/iOS-27-black?logo=apple">
   <img alt="SwiftUI" src="https://img.shields.io/badge/SwiftUI-Observation-orange?logo=swift">
   <img alt="Supabase" src="https://img.shields.io/badge/backend-Supabase-3ECF8E?logo=supabase&logoColor=white">
@@ -30,25 +30,20 @@ account, and reads the threads back to find replies and bounces. It is a
 SwiftUI app for iOS 27, backed by [Supabase](https://supabase.com), with mail
 sent and read through the Gmail API under Google OAuth.
 
-### What's new in 2.0
+### What's new in 2.1
 
-- **A new look.** One retro motion-graphics style in place of the themes: a
-  warm black ground under film grain, cream type, a burnt-orange accent, and a
-  striped sun. The launch screen is an ident, and sending plays a short
-  full-screen "Queued" curtain.
-- **Writing help through Aurora Writer.** A shortcut of your own runs Apple
-  Intelligence's Use Model action to proofread, rewrite or draft, and every
-  change is shown word by word before it's applied.
-- **A personalised line per company.** `{Company-Personalised}` puts a
-  sentence you wrote about a company into every mail to people there.
-- **Fresher hiring.** Companies from the Fresher Hiring Ledger are flagged and
-  filterable, with their logos, websites, careers pages, hiring routes, stated
-  packages and the sources behind them.
-- **Sending you can leave.** The queue carries on in the background, never
-  mails anyone twice, and shows one Live Activity from the first mail to the
-  bounce check.
-- **Replies read from new mail only**, with a Status timeline of each check,
-  and **Export Data** to JSON or spreadsheets.
+- **One queue, paused and played as a whole.** Pause holds every batch, not
+  just the one sending, and Resume plays the line from the front in the order
+  it was queued.
+- **Replies and bounces checked in the background**, with a notification for
+  each one found, a Live Activity for long checks, and checks that carry on
+  when you leave the app.
+- **Bounces that used to be missed**: notices from mail filters and company
+  relays, and notices sent as HTML alone.
+- **Live Activity fixes**: no duplicate or returning cards, and a card left
+  behind by a suspended app says so rather than "Sending" for hours.
+
+See [CHANGELOG.md](CHANGELOG.md) for everything in this release and in 2.0.
 
 ## Contents
 
@@ -81,9 +76,9 @@ sent and read through the Gmail API under Google OAuth.
 | **Writing help** | The sparkles button in the template, mail and company-line editors: Proofread, Rewrite, Friendlier, Professional, Shorter, Expand, your own instruction, or a first draft of a company line. It runs through **Aurora Writer**, a shortcut you make once, and every answer is shown as a word-by-word change to keep or throw away, with Undo after. Placeholders are checked on the way back. See [Writing help](#writing-help). |
 | **Greetings** | "Hi {Receiver-Name}," greets people by a name that's plainly there: the contact's name field, the name they signed a reply with, what your own mail calls their address, or an address that spells the given name out (`anjali.kumari@`). Nothing is guessed: otherwise the mail opens with a plain "Hi," and the app shows "Name not detected". See [Greetings](#greetings). |
 | **Compose** | One screen per batch: who it's going to, a row of templates, and a swipeable deck of the actual mails. Any mail can be edited by hand or moved to another template. Batches have no size limit. |
-| **Mail queue** | Sends go into a queue saved on the phone. It survives the app closing, can be paused and resumed, and can hold batches scheduled for later. When Gmail rate-limits a send or the connection drops, the queue waits and carries on by itself. Nobody is ever mailed twice: a mail Gmail may already have is looked for in Sent before it can go again, and tests interrupt the queue at every stage to prove it. |
-| **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending mail 4 of 6", "Connection lost · retrying in 0:05"), a progress bar, and who the mail is going to, at which company. One activity follows the queue through pauses and retries, and a scheduled batch shows a countdown, then a Send Now button when its time comes. |
-| **Reply tracking** | Each send records its Gmail thread. The app reads those threads to find replies, skipping auto-replies and bounces. |
+| **Mail queue** | Sends go into one queue saved on the phone. It survives the app closing, pauses and plays as a whole (a paused queue starts nothing until Resume, and then sends in the order it was queued), and can hold batches scheduled for later. When Gmail rate-limits a send or the connection drops, the queue waits and carries on by itself. Nobody is ever mailed twice: a mail Gmail may already have is looked for in Sent before it can go again, and tests interrupt the queue at every stage to prove it. |
+| **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending mail 4 of 6", "Connection lost · retrying in 0:05"), a progress bar, and who the mail is going to, at which company. One activity follows the queue through pauses and retries, and a scheduled batch shows a countdown, then a Send Now button when its time comes. A long reply check gets one too, ending with what it found. |
+| **Reply tracking** | Each send records its Gmail thread. The app reads those threads to find replies, skipping auto-replies and bounces. It also checks by itself with the app closed, and every reply or bounce found that way arrives as a notification. |
 | **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. Answers saying the address is no longer in service, or the person has left, count too. Any sent mail can be checked on its own from Activity. |
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
 | **Look** | Retro motion graphics: a warm black ground under film grain, cream type and one burnt-orange accent, with a seventies striped sun drifting faintly in the corner of every screen. The launch screen is an ident: the sun rises over a horizon while four stripes (mustard, orange, vermilion, rust) run out under it as the launch loads, then it lifts away. |
@@ -353,8 +348,8 @@ where every batch is listed by what it's doing, under the companies it mails
 a batch that went to several companies is listed once per company, each opening
 to just that company's mails, and removing one entry removes only that company's
 record. Each batch can be
-paused, resumed, rescheduled, retried or removed (Activity → ⋯ → Clear Queue
-empties it). Each batch lists the saved copies of its templates (flagged if the
+rescheduled, retried or removed (Activity → ⋯ → Clear Queue empties it), and
+the queue as a whole paused and resumed. Each batch lists the saved copies of its templates (flagged if the
 template has been edited or deleted in Templates since), each person's row says
 which one their mail is written from, and any mail can be opened to read
 exactly what was or will be sent.
@@ -386,9 +381,25 @@ looked for in Sent mail before it can be sent again.**
   mailing, has mailed but not yet written to the history, or who appears twice
   in it.
 
-Pause (on the shelf or in the queue) lets the mail already in flight finish.
-It doesn't cancel the request, because a request cancelled on the phone may
-still have been delivered by Gmail. A paused batch never carries on by itself.
+#### One line
+
+The batches waiting to go (everything but those scheduled for later and not
+yet begun) form one line, sent in the order they were queued. Pause, on the
+shelf or in the Queued lane, holds the whole line, not only the batch sending:
+the mail already in flight finishes, and nothing else starts until Resume.
+Pause doesn't cancel the request in flight, because a request cancelled on the
+phone may still have been delivered by Gmail.
+
+- A held queue is saved (`mail-queue-paused-<account>.json`), so it opens
+  paused after a relaunch, and mail queued meanwhile waits behind the rest.
+- When the queue stops a batch itself (12 dropped connections in a row, a long
+  rate limit), the batches behind it wait too, rather than going around it.
+  One Resume carries on from the stopped batch.
+- Removing, rescheduling or clearing mail from a stopped line leaves it
+  stopped. A line emptied altogether lets the pause go, so the next send isn't
+  held up by it.
+- Resume plays the line from the front; Send Now on a scheduled batch puts it
+  in line and plays the queue too. A paused queue never carries on by itself.
 
 `Tests/MailQueueTests.swift` runs the real queue against a fake Gmail and
 interrupts it at every one of these points (dropped before and after Gmail took
@@ -494,6 +505,31 @@ targets), and `SendLiveActivity` in the app starts, updates and ends it as the
 queue changes. The extension can't read the app's palette, so its colours travel
 with the activity. iOS asks once whether to allow Live
 Activities from Aurora; they can be turned off in Settings › Aurora.
+
+A card only shows what the app last told it, and a suspended app can't tell it
+anything. So a running card goes stale three minutes after its last update,
+and the app renews it every minute while it can. A stale sending card reads
+"Paused · open Aurora to carry on" rather than "Sending mail" for hours. A
+stale scheduled card still counts as up, so it's updated rather than joined
+by a second one. A card swiped away isn't put back up for the same batch, and
+iOS only lets one be started with the app in front, so none is asked for from
+the background. Send Now on a card only starts a batch still waiting for its
+time.
+
+#### Reply checks
+
+A reply check that runs more than a few seconds gets a Live Activity of its own
+(`CheckLiveActivity`, `CheckActivityAttributes`): the step and its progress
+while it reads, then the replies and bounces found, kept up for ten minutes
+when it found something and one minute when not. Tapping it opens the Replied
+or Bounced lane. It steps aside for the send queue's card, which already says
+when it's checking for bounces, and for the system's card while background time
+holds the check, so there's still only ever one. Suspended mid-check, it goes
+stale and says "Check paused · Open Aurora to finish it".
+
+Writing help has a card too, while the Aurora Writer shortcut works. It goes
+stale when Aurora stops waiting for the answer, so it doesn't count up forever
+if you don't come back from Shortcuts.
 
 ### Rate limits
 
@@ -621,6 +657,30 @@ deleted, not as a failure. `Tests/GmailReadPolicyTests.swift` checks this
 against a model of the limit: unpaced, a 731-thread check is refused 356
 times; paced, never.
 
+#### In the background
+
+A check that runs more than three seconds on screen asks iOS for time to
+finish when the app is left (`CheckBackgroundTask`, a
+`BGContinuedProcessingTask`). When that time ends, the check stops at its next
+read and keeps what it read; the next check reads from where it began.
+
+With the app closed, iOS runs a check of its own (`BackgroundCheck`, a
+`BGAppRefreshTask`): at most every 30 minutes, roughly as often as the app is
+used, and not at all with Background App Refresh off or in Low Power Mode. It
+gets about half a minute, so it reads to a budget (`ReplySync.Budget.background`):
+threads with new mail and failure notices, at most 40 threads and 25 notices,
+paced like every read. Linking older sends to threads and looking up names wait
+for the app. Whatever is over the budget is read by the next check, never
+skipped. A check stopped by Gmail's rate limit puts the next one off an hour,
+and one within ten minutes of the last does nothing.
+
+Every reply and bounce a check finds while the app is off screen arrives as a
+notification (`CheckNotifier`): one per reply, naming who answered and where,
+and one for each check's bounces. Tapping one opens that lane in Activity. The
+Status timeline says "Updated in the background" for these checks. Background
+checks need the `fetch` background mode and the identifiers in Info.plist's
+`BGTaskSchedulerPermittedIdentifiers`, and the simulator runs neither.
+
 ### Bounces
 
 A bounce is found two ways during the same sync:
@@ -631,7 +691,8 @@ A bounce is found two ways during the same sync:
   thread already says which send it was.
 - **In the inbox.** Many servers send notices that never join the thread. The
   sync searches for the usual senders and the usual subjects ("Undeliverable",
-  "Delivery Status Notification", "Returned mail", "Delivery failure", …) from
+  "Delivery Status Notification", "Returned mail", "Delivery failure",
+  "couldn't be delivered", …) from
   the last 120 days, Spam and Trash included. It reads only the notices it
   hasn't seen before. The search pages past the ones already read, so however
   many have piled up, new ones are still reached. A check reads up to 1,000
@@ -666,7 +727,15 @@ send. What the app does with that:
 
 Servers that send prose alone fall back to reading the text: the address from
 `X-Failed-Recipients` or the prose, the reason from its wording and any status
-code in it. All of this lives in `BounceParsing`, which has its own tests.
+code in it. A notice sent as HTML alone is read from its HTML, with the tags
+taken out. Mail filters and company relays (Mimecast's "[Postmaster] Email
+Delivery Failure", an Exchange tenant's "Your message couldn't be delivered"
+from a no-reply address) send notices with no report, from nobody's mailer
+daemon. Those count when both the subject and the text say the mail wasn't
+delivered; a reply or a forward about a bounce doesn't. When what counts as a
+notice widens (`BounceParsing.version`), the next check reads the whole window
+again, so notices passed over before are found. All of this lives in
+`BounceParsing`, which has its own tests.
 
 Some dead addresses never produce a failure notice. Instead the recipient's
 side answers: their auto-responder, a colleague or the company's `noreply@`

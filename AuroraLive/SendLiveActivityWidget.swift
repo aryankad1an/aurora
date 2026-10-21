@@ -129,6 +129,16 @@ private enum Phrase {
         return isStale || (state.startsAt.map { $0 <= .now } ?? true)
     }
 
+    /// Saying the queue is at work, but the app stopped saying so: it was
+    /// suspended or closed mid-run, and nothing goes until it's opened.
+    static func isFrozen(_ state: SendActivityAttributes.ContentState, isStale: Bool) -> Bool {
+        guard isStale else { return false }
+        switch state.phase {
+        case .sending, .waiting, .pausing, .checking: return true
+        case .paused, .done, .scheduled: return false
+        }
+    }
+
     static func sendNowURL(_ state: SendActivityAttributes.ContentState) -> URL? {
         state.batchID.flatMap { URL(string: "aurora://queue/send/\($0)") }
     }
@@ -142,6 +152,21 @@ private struct Headline: View {
     let isStale: Bool
 
     var body: some View {
+        Group {
+            if Phrase.isFrozen(state, isStale: isStale) {
+                Text("Paused · open Aurora to carry on")
+            } else {
+                phrase
+            }
+        }
+        .monospacedDigit()
+        .foregroundStyle(Phrase.isFrozen(state, isStale: isStale) ? style.attention : style.tint(state.phase))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+
+    @ViewBuilder
+    private var phrase: some View {
         Group {
             switch state.phase {
             case .sending:
@@ -179,10 +204,6 @@ private struct Headline: View {
                 }
             }
         }
-        .monospacedDigit()
-        .foregroundStyle(style.tint(state.phase))
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
     }
 }
 

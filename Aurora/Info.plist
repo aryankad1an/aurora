@@ -5,6 +5,8 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.realaryan.JTracker.send.*</string>
+		<string>com.realaryan.JTracker.check</string>
+		<string>com.realaryan.JTracker.check.run.*</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
@@ -16,6 +18,10 @@
 				<string>aurora</string>
 			</array>
 		</dict>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>

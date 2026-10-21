@@ -28,14 +28,30 @@ final class SendLiveActivity {
     private var batchID: String?
     /// Whether this launch has looked for an activity a previous one left up.
     private var adopted = false
+    /// The batch whose card was swiped away: not put back up for it.
+    private var dismissedBatchID: String?
+    private weak var queue: MailQueue?
+    /// Tells the card it's still current while a run goes (`heartbeat`).
+    private var keepingAlive: Task<Void, Never>?
+
+    /// Whether the queue's activity is up: a reply check's keeps out of its way.
+    var isShowing: Bool { activity != nil }
 
     /// How long a finished run stays on the Lock Screen.
     private static let lingerDone: TimeInterval = 15 * 60
     /// A scheduled batch's activity starts this long before its time at most:
     /// iOS ends a Live Activity after eight hours.
     private static let scheduledLead: TimeInterval = 7 * 60 * 60
+    /// A run's card goes stale this long after the app last said it's still
+    /// going. An app suspended or closed mid-run can't update it, and a stale
+    /// card says to open Aurora rather than "Sending" for hours.
+    private static let staleAfter: TimeInterval = 3 * 60
+    /// How often a run's card is told it's still current, with nothing new
+    /// to say: a bounce check or Gmail's search can take minutes.
+    private static let heartbeat: TimeInterval = 60
 
     func sync(with queue: MailQueue) {
+        self.queue = queue
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         adoptLeftover()
         if SendBackgroundTask.shared.isHolding {
@@ -47,21 +63,28 @@ final class SendLiveActivity {
             }
             return
         }
-        if let content = Self.content(for: queue) {
-            show(content)
-        } else if let activity {
-            // Nothing left to show: say how the run ended, then let it go.
-            let final = Self.finalState(queue: queue) ?? shown?.state
-            self.activity = nil
-            shown = nil
-            guard let final, final.phase == .done else {
-                Task { await activity.end(nil, dismissalPolicy: .immediate) }
-                return
-            }
-            Task {
-                await activity.end(ActivityContent(state: final, staleDate: nil),
-                                   dismissalPolicy: .after(.now.addingTimeInterval(Self.lingerDone)))
-            }
+        guard let content = Self.content(for: queue) else {
+            // The run is over: a card swiped away may go up for the next.
+            dismissedBatchID = nil
+            finish(queue)
+            return
+        }
+        show(content)
+    }
+
+    /// Nothing left to show: say how the run ended, then let it go.
+    private func finish(_ queue: MailQueue) {
+        guard let activity else { return }
+        let final = Self.finalState(queue: queue) ?? shown?.state
+        self.activity = nil
+        shown = nil
+        guard let final, final.phase == .done else {
+            Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            return
+        }
+        Task {
+            await activity.end(ActivityContent(state: final, staleDate: nil),
+                               dismissalPolicy: .after(.now.addingTimeInterval(Self.lingerDone)))
         }
     }
 
@@ -71,7 +94,7 @@ final class SendLiveActivity {
     private func adoptLeftover() {
         guard !adopted else { return }
         adopted = true
-        let live = Activity<SendActivityAttributes>.activities.filter { $0.activityState == .active }
+        let live = Activity<SendActivityAttributes>.activities.filter { $0.activityState.isUp }
         activity = live.first
         for extra in live.dropFirst() {
             Task { await extra.end(nil, dismissalPolicy: .immediate) }
@@ -79,13 +102,27 @@ final class SendLiveActivity {
     }
 
     private func show(_ content: ActivityContent<SendActivityAttributes.ContentState>) {
-        if let activity, activity.activityState == .active {
-            guard content.state != shown?.state || content.staleDate != shown?.staleDate else { return }
+        // Stale is still up: a scheduled batch's card goes stale at its time,
+        // and a second card would go up beside it.
+        if let activity, activity.activityState.isUp {
+            guard content.state != shown?.state || Self.renews(content.staleDate, shown?.staleDate) else { return }
             shown = content
             batchID = content.state.batchID
             Task { await activity.update(content) }
+            keepAlive()
             return
         }
+        if let activity, activity.activityState == .dismissed {
+            // Swiped away: it stays away while it's about the same batch.
+            dismissedBatchID = shown?.state.batchID ?? batchID
+            self.activity = nil
+            shown = nil
+        }
+        if let id = content.state.batchID, id == dismissedBatchID { return }
+        dismissedBatchID = nil
+        // One can only be started with the app open; asking from the
+        // background fails every time.
+        guard UIApplication.shared.applicationState == .active else { return }
         let attributes = SendActivityAttributes(accent: Self.rgb(Palette.clay),
                                                 reply: Self.rgb(Palette.olive),
                                                 attention: Self.rgb(Palette.kraft))
@@ -93,6 +130,7 @@ final class SendLiveActivity {
             activity = try Activity.request(attributes: attributes, content: content, pushType: nil)
             shown = content
             batchID = content.state.batchID
+            keepAlive()
         } catch {
             // Turned off for the app, or too many running: the shelf in the app
             // still says everything this would.
@@ -100,15 +138,46 @@ final class SendLiveActivity {
         }
     }
 
+    /// A moving stale date — a run's, renewed as it goes — is sent again once
+    /// a heartbeat has passed; a fixed one (a scheduled batch's time) when it
+    /// changes.
+    private static func renews(_ new: Date?, _ old: Date?) -> Bool {
+        guard let new, let old else { return new != old }
+        return new < old || new.timeIntervalSince(old) >= heartbeat
+    }
+
+    /// Renew a run's stale date while the app is working on it. Stops by
+    /// itself once there's no activity; while the app is suspended it doesn't
+    /// run, which is the point.
+    private func keepAlive() {
+        guard keepingAlive == nil else { return }
+        keepingAlive = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.heartbeat))
+                guard let self, self.activity != nil, let queue = self.queue else { break }
+                self.sync(with: queue)
+            }
+            self?.keepingAlive = nil
+        }
+    }
+
+    /// When a card saying the queue is at work goes stale: `staleAfter` past
+    /// now, or past the wait it's sitting out.
+    private static func staleDate(after wait: Date? = nil) -> Date {
+        max(.now, wait ?? .now).addingTimeInterval(staleAfter)
+    }
+
     /// What the activity should say now, or nil when there's nothing to show.
     /// In order: the batch sending; the batch stopped mid-run (paused, or
     /// waiting to retry); a scheduled batch that's due; one coming up.
     private static func content(for queue: MailQueue) -> ActivityContent<SendActivityAttributes.ContentState>? {
         if let running = queue.running {
-            return ActivityContent(state: state(running: running, queue: queue), staleDate: nil)
+            let cooldown = queue.cooldown?.batchID == running.id ? queue.cooldown?.until : nil
+            return ActivityContent(state: state(running: running, queue: queue), staleDate: staleDate(after: cooldown))
         }
         if let held = heldBatch(in: queue) {
-            return ActivityContent(state: state(held: held), staleDate: nil)
+            // One carrying on by itself only does with the app running.
+            return ActivityContent(state: state(held: held), staleDate: held.resumeAt.map { staleDate(after: $0) })
         }
         if let ready = queue.readyBatch {
             return ActivityContent(state: state(scheduled: ready), staleDate: nil)
@@ -125,7 +194,8 @@ final class SendLiveActivity {
     /// A batch stopped partway with mail left that the activity keeps showing:
     /// one carrying on by itself, or the one the activity was already about.
     private static func heldBatch(in queue: MailQueue) -> MailBatch? {
-        let stopped = queue.batches.filter { $0.isPaused && $0.hasWork && $0.startedAt != nil }
+        // Paused with the whole queue, or stopped by the queue itself.
+        let stopped = queue.line.filter { ($0.isPaused || queue.isHeld) && $0.startedAt != nil }
         if let id = shared.batchID, let same = stopped.first(where: { $0.id.uuidString == id }) {
             return same
         }
@@ -184,4 +254,9 @@ final class SendLiveActivity {
         let resolved = color.resolve(in: EnvironmentValues())
         return .init(red: Double(resolved.red), green: Double(resolved.green), blue: Double(resolved.blue))
     }
+}
+
+extension ActivityState {
+    /// On screen and updatable: stale is still up.
+    var isUp: Bool { self == .active || self == .stale }
 }

@@ -104,6 +104,29 @@ struct BounceParsingTests {
         let person = BounceParsing.parseNotice(raw: personalMail)
         check(!person.isNotice && person.failures(snippet: nil).isEmpty, "a person's mail titled 'Returned mail' isn't a bounce")
 
+        // A mail filter's notice: no report, no daemon, only words
+        let filter = BounceParsing.parseNotice(raw: filterFailure)
+        check(filter.isNotice, "a mail filter's prose notice is a notice")
+        check(filter.failures(snippet: nil) == [BounceFailure(address: "dev.one@bigsoft.example", status: "5.4.1", diagnostic: nil)],
+              "mail filter: address and status from the text")
+        let htmlOnly = BounceParsing.parseNotice(raw: relayHTMLFailure)
+        check(htmlOnly.text?.contains("couldn't be delivered") == true, "an HTML-only notice's words are read")
+        check(htmlOnly.isNotice, "a company relay's HTML notice is a notice")
+        check(htmlOnly.failures(snippet: nil).map(\.address).first == "ana.r@taxco.example",
+              "HTML notice: the address it names first")
+        check(BounceParsing.reason(status: "5.4.1", text: "Recipient address rejected: Access denied") == .addressNotFound,
+              "Exchange 5.4.1 access denied reads as address not found")
+        check(BounceParsing.isProseNotice(subject: "Your message couldn't be delivered",
+                                          text: "Your message couldn\u{2019}t be delivered The message you sent to a@b.example couldn't be delivered due to: Recipient email address is possibly incorrect."),
+              "a notice known by its snippet, curly apostrophe and all")
+        check(!BounceParsing.isProseNotice(subject: "Re: [Postmaster] Email Delivery Failure",
+                                           text: "Hi, this could not be delivered because our filter is strict, sorry!"),
+              "someone answering a notice isn't sending one")
+        check(!BounceParsing.isProseNotice(subject: "Thanks for applying", text: "Your message could not be delivered to the team yet."),
+              "the words alone, without a notice's subject, aren't enough")
+        check(!BounceParsing.isProseNotice(subject: "Delivery failure", text: "Hi Maya, happy to chat on Thursday."),
+              "the subject alone isn't enough")
+
         check(BounceParsing.isBounceSender("Microsoft Outlook <MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e@corp.example>"),
               "Exchange's service account is a bounce sender")
 
@@ -325,4 +348,39 @@ Subject: Returned mail from the trip
 Content-Type: text/plain
 
 Returned the mail you left at mine, it's with the front desk.
+"""
+
+private let filterFailure = """
+From: mimecast <mimecast@bigsoft.example>
+To: me@gmail.com
+Subject: [Postmaster] Email Delivery Failure
+Content-Type: text/plain; charset="us-ascii"
+
+This is a delivery failure notification message indicating that
+an email you addressed to email address :
+-- dev.one@bigsoft.example
+
+could not be delivered. The problem appears to be :
+-- Recipient email address is possibly incorrect
+
+Additional information follows :
+-- 5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors
+
+This condition occurred after 1 attempt(s) to deliver over
+a period of 0 hour(s).
+"""
+
+private let relayHTMLFailure = """
+From: TaxCoIT-NoReply <taxcoit-noreply@taxco.example>
+To: me@gmail.com
+Subject: Your message couldn't be delivered
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<html><head><style>p { color: #333; }</style></head><body>
+<img alt=3D"Logo"><h1>Your message couldn&#39;t be delivered</h1>
+<p>The message you sent to <a href=3D"mailto:ana.r@taxco.example">ana.r@taxco.example</a> couldn&#39;t be=
+ delivered due to: Recipient email address is possibly incorrect.</p>
+<p><b>Further information</b><br>5.4.1 Recipient address rejected: Access denied.</p>
+</body></html>
 """

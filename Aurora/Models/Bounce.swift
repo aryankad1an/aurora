@@ -31,6 +31,9 @@ struct BounceLog: Codable {
     var bounces: [Bounce] = []
     var seenMessageIDs: [String] = []
     var dismissed: [Contact.ID: Date] = [:]
+    /// The `BounceParsing.version` that read the notices in `seenMessageIDs`.
+    /// Nil for logs saved before it was kept.
+    var parserVersion: Int?
 }
 
 /// A bounce worth showing: the contact still exists, is still marked valid,

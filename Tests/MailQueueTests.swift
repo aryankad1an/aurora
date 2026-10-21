@@ -332,6 +332,98 @@ struct MailQueueTests {
             expect(world.gmail.received("a@acme.com") == 0, "…having sent nothing")
         }
 
+        print("One line, paused and played as a whole")
+        do {
+            let world = World()
+            let queue = world.openQueue()
+            let first = batch(["a1@acme.com", "a2@acme.com", "a3@acme.com"])
+            let second = batch(["b1@globex.com", "b2@globex.com"], title: "Globex")
+            world.gmail.onSend = { count in
+                if count == 1 { queue.pauseQueue() }
+            }
+            queue.enqueue(first)
+            queue.enqueue(second)
+            await until { !queue.isRunning && world.gmail.sentBox.count == 2 }
+            try? await Task.sleep(for: .milliseconds(300))
+            expect(world.gmail.sentBox.count == 2, "Pause stops the queue after the mail in flight")
+            expect(world.gmail.received("b1@globex.com") == 0, "…and the next batch doesn't start in its place")
+            expect(queue.isLineStopped && queue.isHeld, "…and the queue says it's paused")
+            let third = batch(["c1@initech.com"], title: "Initech")
+            queue.enqueue(third)
+            try? await Task.sleep(for: .milliseconds(300))
+            expect(world.gmail.received("c1@initech.com") == 0, "mail queued while paused waits in line")
+
+            // Opened again: still paused.
+            world.gmail.onSend = nil
+            let reopened = world.openQueue()
+            Task { await reopened.reconcile() }
+            try? await Task.sleep(for: .milliseconds(300))
+            expect(reopened.isHeld && world.gmail.sentBox.count == 2, "a paused queue opens paused")
+            reopened.playQueue()
+            await until { !reopened.isRunning && reopened.batches.allSatisfy(\.isFinished) }
+            expectEachOnce(world, "Paused and played",
+                           first.mails.map(\.recipient) + second.mails.map(\.recipient) + third.mails.map(\.recipient))
+            expect(world.gmail.sentBox.map(\.to) == ["a1@acme.com", "a2@acme.com", "a3@acme.com",
+                                                     "b1@globex.com", "b2@globex.com", "c1@initech.com"],
+                   "…in the order they were queued")
+            expect(!reopened.isHeld, "…and the pause is let go once the line is empty")
+            _ = queue
+        }
+        do {
+            // The queue stops a batch by itself, for good: the ones behind it wait.
+            var timing = fast
+            timing.maxRetries = 0
+            let world = World()
+            world.gmail.script = [.dropBeforeAccept]
+            let queue = world.openQueue(timing: timing)
+            let first = batch(["a1@acme.com", "a2@acme.com"])
+            let second = batch(["b1@globex.com"], title: "Globex")
+            queue.enqueue(first)
+            queue.enqueue(second)
+            await until { !queue.isRunning && queue.batch(first.id)?.isPaused == true }
+            try? await Task.sleep(for: .milliseconds(300))
+            expect(world.gmail.received("b1@globex.com") == 0, "a batch the queue stopped holds up the ones behind it")
+            expect(queue.isLineStopped && !queue.isHeld, "…and the line says it's stopped")
+            queue.playQueue()
+            await until { !queue.isRunning && queue.batches.allSatisfy(\.isFinished) }
+            expectEachOnce(world, "Stopped by the queue, then played", ["a1@acme.com", "a2@acme.com", "b1@globex.com"])
+        }
+        do {
+            var timing = fast
+            timing.maxRetries = 0
+            let world = World()
+            world.gmail.script = [.dropBeforeAccept]
+            let queue = world.openQueue(timing: timing)
+            let first = batch(["a1@acme.com"])
+            let second = batch(["b1@globex.com"], title: "Globex")
+            queue.enqueue(first)
+            queue.enqueue(second)
+            await until { !queue.isRunning && queue.batch(first.id)?.isPaused == true }
+            queue.remove(first.id)
+            try? await Task.sleep(for: .milliseconds(300))
+            expect(world.gmail.received("b1@globex.com") == 0 && queue.isHeld,
+                   "removing the batch the line stopped at leaves the queue paused")
+            queue.playQueue()
+            await until { !queue.isRunning && queue.batches.allSatisfy(\.isFinished) }
+            expectEachOnce(world, "Removed the stopped batch, then played", ["b1@globex.com"])
+        }
+        do {
+            let world = World()
+            let queue = world.openQueue()
+            let first = batch(["a1@acme.com", "a2@acme.com"])
+            world.gmail.onSend = { count in
+                if count == 0 { queue.pauseQueue() }
+            }
+            queue.enqueue(first)
+            await until { !queue.isRunning }
+            queue.remove(first.id)
+            expect(!queue.isHeld, "emptying a paused queue lets the pause go")
+            world.gmail.onSend = nil
+            queue.enqueue(batch(["c1@initech.com"], title: "Initech"))
+            await until { !queue.isRunning && queue.batches.allSatisfy(\.isFinished) }
+            expect(world.gmail.received("c1@initech.com") == 1, "…so the next mail queued sends")
+        }
+
         print("No one in two batches")
         do {
             let world = World()

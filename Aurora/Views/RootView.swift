@@ -14,9 +14,10 @@ struct RootView: View {
     @State private var profileStore = ProfileStore()
     @State private var templateStore = TemplateStore()
     @State private var personalisedLines = PersonalisedLineStore()
-    @State private var gmailAuth = GmailAuthStore()
+    /// Shared with checks the phone runs by itself (`AppServices`).
+    @State private var gmailAuth = AppServices.gmailAuth
     @State private var mailQueue = MailQueue()
-    @State private var replySync = ReplySync()
+    @State private var replySync = AppServices.replySync
     @State private var selectionChrome = SelectionChrome()
     @State private var vaultStore = VaultStore()
     @State private var selectedTab: Tab = .home
@@ -92,6 +93,10 @@ struct RootView: View {
         // Signed out: the keys leave memory with the account.
         .onChange(of: gmailAuth.connectedEmail) { _, email in
             if email == nil { vaultStore.signOut() }
+        }
+        // Leaving the app: the phone checks for replies by itself until it's back.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { BackgroundCheck.schedule() }
         }
         // A failed write is the one thing on this screen the user has to act on,
         // so it announces itself before the alert has finished animating in.
@@ -172,6 +177,11 @@ struct RootView: View {
                     guard phase == .active else { return }
                     // Back in the app: a scheduled batch may have come due.
                     mailQueue.tick()
+                    // A check run while the app was closed recorded replies.
+                    if replySync.hasUnloadedChanges {
+                        replySync.hasUnloadedChanges = false
+                        Task { await jobStore.reloadSends() }
+                    }
                     guard !replySync.isSyncing else { return }
                     let last = replySync.lastSyncedAt ?? .distantPast
                     guard Date().timeIntervalSince(last) > Self.resyncAfter else { return }
@@ -233,8 +243,14 @@ struct RootView: View {
             UIApplication.shared.setAlternateIconName(nil) { _ in }
         }
 
-        // A notification tapped to open the app: its batch is asked about now.
+        // A notification tapped to open the app: its batch is asked about now,
+        // or the lane its check's news is in opened.
         openTappedBatch()
+        if notifications.openedLane != nil { selectedTab = .activity }
+        // Replies and bounces found while the app is closed are told in
+        // notifications; asked once.
+        Task { await ScheduledMailNotifier.requestPermission() }
+        BackgroundCheck.schedule()
         // Settle anything the last session left mid-send: whether each mail cut
         // off went out, and any send not yet in the history. Not awaited — a
         // mail cut off moments ago is given a few seconds to show up in Sent.
@@ -293,9 +309,6 @@ struct RootView: View {
         mailQueue.onBounceCheck = { since in
             await jobStore.checkBouncesWhileSending(using: replySync, since: since)
         }
-        replySync.reader = { path, query in
-            try await gmailAuth.gmailGET(path: path, query: query)
-        }
         MailboxNames.shared.reader = { path, query in
             try await gmailAuth.gmailGET(path: path, query: query)
         }
@@ -332,12 +345,18 @@ struct RootView: View {
                 guard url.scheme == "aurora" else { return }
                 // The Live Activity's Send Now on a scheduled batch whose time
                 // has come: aurora://queue/send/<batch id>. Only ever a batch
-                // already scheduled, so a link can't start anything else.
+                // still waiting on its time, so a link — from a card left stale
+                // after the batch started — can't play a queue that was paused.
                 let parts = url.pathComponents.filter { $0 != "/" }
                 if url.host() == "queue", parts.count == 2, parts[0] == "send",
-                   let id = UUID(uuidString: parts[1]), mailQueue.batch(id)?.scheduledFor != nil {
+                   let id = UUID(uuidString: parts[1]), let batch = mailQueue.batch(id),
+                   batch.scheduledFor != nil, batch.startedAt == nil {
                     mailQueue.sendNow(id)
                     mailQueue.isOpenRequested = true
+                } else if url.host() == "activity", let lane = parts.first.flatMap(ActivityView.Lane.init(rawValue:)),
+                          lane == .replied || lane == .bounced {
+                    // A reply check's Live Activity: aurora://activity/replied.
+                    notifications.openedLane = lane
                 } else if url.host() == "activity" {
                     mailQueue.isOpenRequested = true
                 } else if url.host() == "writing" {
@@ -346,6 +365,9 @@ struct RootView: View {
                 }
             }
             .onChange(of: notifications.openedBatchID) { openTappedBatch() }
+            .onChange(of: notifications.openedLane) { _, lane in
+                if lane != nil { selectedTab = .activity }
+            }
             // The shelf appearing pushes the tab bar up — a real object arriving on
             // screen, and the one event here the user didn't just tap for.
             .sensoryFeedback(trigger: mailQueue.isActive) { _, active in

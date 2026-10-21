@@ -97,6 +97,8 @@ extension MailQueue {
         if runningBatchID == batch.id { return isStopping ? .stopping : .sending }
         if batch.isFinished { return .finished }
         if batch.isPaused { return .paused }
+        // A paused queue pauses everything in line.
+        if isHeld, batch.isInLine { return .paused }
         if batch.isDue(at: clock) { return .due }
         if batch.isScheduled(at: clock), let date = batch.scheduledFor { return .scheduled(date) }
         return .waiting
@@ -394,9 +396,11 @@ extension MailQueue {
 // MARK: - Overview
 
 /// The queue in three figures — set the way the scheduled-mail sheet sets
-/// its own — and how far it's got.
+/// its own — how far it's got, and its one Pause and Resume.
 private struct QueueOverview: View {
     let batches: [MailBatch]
+
+    @Environment(MailQueue.self) private var queue
 
     var body: some View {
         let toGo = batches.reduce(0) { $0 + $1.pending }
@@ -411,10 +415,36 @@ private struct QueueOverview: View {
                 Metric(value: failed, caption: "failed", tint: failed > 0 ? .statusInvalid : .inkFaint, size: 24)
             }
             QueueMeter(sent: sent, failed: failed, total: toGo + sent + failed)
+            if let control {
+                if queue.isHeld {
+                    Text("Paused. Nothing sends until you resume, and mail you queue meanwhile waits in line.")
+                        .font(.caption)
+                        .foregroundStyle(.inkMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                BatchButtons(controls: [control])
+            }
         }
         .padding(14)
         .panel()
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Pause while the line moves, Resume while it's stopped; nothing while
+    /// the mail in flight finishes, or nothing is in line.
+    private var control: BatchControl? {
+        if queue.isLineStopped {
+            return BatchControl(title: "Resume Queue", systemImage: "play.fill", isProminent: true) {
+                Haptics.press()
+                queue.playQueue()
+            }
+        }
+        guard queue.isRunning, !queue.isStopping else { return nil }
+        return BatchControl(title: "Pause Queue", systemImage: "pause.fill") {
+            Haptics.thud()
+            queue.pauseQueue()
+        }
     }
 }
 
@@ -523,6 +553,9 @@ private struct BatchControl: Identifiable {
     let title: String
     let systemImage: String
     var isProminent = false
+    /// Pauses or plays the whole queue: on the queue's own panel and shelf,
+    /// so not repeated on every card.
+    var isQueueWide = false
     let action: () -> Void
     var id: String { title }
 }
@@ -538,9 +571,11 @@ extension MailQueue {
             self.retryFailed(id)
         }
         let retry = BatchControl(title: "Retry Failed", systemImage: "arrow.clockwise", action: retryFailed)
-        let pause = BatchControl(title: "Pause", systemImage: "pause.fill") {
+        // Pause and Resume are the whole queue's: one batch paused doesn't
+        // hand its turn to the next.
+        let pause = BatchControl(title: "Pause Queue", systemImage: "pause.fill", isQueueWide: true) {
             Haptics.thud()
-            self.pause(id)
+            self.pauseQueue()
         }
         switch phase {
         case .sending, .waiting:
@@ -548,12 +583,15 @@ extension MailQueue {
         case .stopping:
             return []
         case .paused:
-            return [BatchControl(title: "Resume", systemImage: "play.fill", isProminent: true) {
+            return [BatchControl(title: "Resume Queue", systemImage: "play.fill", isProminent: true, isQueueWide: true) {
                 Haptics.press()
-                self.resume(id)
+                self.playQueue()
             }]
             // "Retry": beside Resume and Later, and under the failures it means.
-            + (batch.failed > 0 ? [BatchControl(title: "Retry", systemImage: "arrow.clockwise", action: retryFailed)] : [])
+            + (batch.failed > 0 ? [BatchControl(title: "Retry", systemImage: "arrow.clockwise") {
+                retryFailed()
+                self.playQueue()
+            }] : [])
             + [BatchControl(title: "Later", systemImage: "clock", action: askLater)]
         case .due:
             return [BatchControl(title: "Send Now", systemImage: "paperplane.fill", isProminent: true, action: askSend),
@@ -707,9 +745,12 @@ private struct BatchCard: View {
             }
 
             // What's up next goes by itself; its controls are a hold or a
-            // tap away, rather than two buttons on every waiting card.
-            if phase != .waiting && phase.group != .scheduled && !controls.isEmpty {
-                BatchButtons(controls: Array(controls.prefix(2)))
+            // tap away, rather than two buttons on every waiting card. Pause
+            // and Resume are the queue's panel's, except on the batch the
+            // queue stopped by itself, beside why.
+            let buttons = controls.filter { !$0.isQueueWide || (phase == .paused && !queue.isHeld) }
+            if phase != .waiting && phase.group != .scheduled && !buttons.isEmpty {
+                BatchButtons(controls: Array(buttons.prefix(2)))
             }
         }
         .padding(12)

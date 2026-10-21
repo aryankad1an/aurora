@@ -18,7 +18,7 @@ struct SendQueueBar: View {
     private static let successLinger = Duration.seconds(5)
 
     private enum Mode {
-        case sending, result(MailQueue.Outcome), due(MailBatch), paused([MailBatch]), scheduled(MailBatch), idle
+        case sending, result(MailQueue.Outcome), due(MailBatch), paused, scheduled(MailBatch), idle
     }
 
     /// What matters most right now, in that order.
@@ -26,8 +26,7 @@ struct SendQueueBar: View {
         if queue.isRunning { return .sending }
         if let outcome = queue.outcome { return .result(outcome) }
         if let due = queue.readyBatch { return .due(due) }
-        let paused = queue.pausedBatches
-        if !paused.isEmpty { return .paused(paused) }
+        if queue.isLineStopped { return .paused }
         if let next = queue.nextScheduled { return .scheduled(next) }
         return .idle
     }
@@ -148,8 +147,8 @@ struct SendQueueBar: View {
         case .due(let batch):
             return "Scheduled mail is ready"
                 + (batch.pending > 1 ? " · \(batch.pending)" : "")
-        case .paused(let batches):
-            let waiting = batches.reduce(0) { $0 + $1.pending }
+        case .paused:
+            let waiting = queue.line.reduce(0) { $0 + $1.pending }
             return "Queue paused · \(waiting) to go"
         case .scheduled(let batch):
             return "Scheduled · " + (batch.scheduledFor?.formatted(date: .omitted, time: .shortened) ?? "")
@@ -182,7 +181,7 @@ struct SendQueueBar: View {
             return "\(queue.completed) of \(queue.total) · \(queue.running?.liveCompany ?? "")"
         case .result(let outcome):
             if let reason = outcome.stoppedBecause { return reason }
-            if outcome.isPaused { return "Tap to open it in Activity and resume" }
+            if outcome.isPaused { return queue.isHeld ? "Nothing sends until you resume" : "Tap to open it in Activity and resume" }
             guard !outcome.failed.isEmpty else {
                 return (queue.batch(outcome.batchID)?.companiesLabel).map { "\($0) · tap to open it in Activity" } ?? "Tap to open it in Activity"
             }
@@ -194,9 +193,12 @@ struct SendQueueBar: View {
                 + (outcome.failed.count > 2 ? " and \(outcome.failed.count - 2) more" : "")
         case .due(let batch):
             return "\(batch.companiesLabel) · tap Review to see it and send"
-        case .paused(let batches):
-            if batches.count == 1, let reason = batches[0].pauseReason { return reason }
-            return batches.count == 1 ? "\(batches[0].liveCompany) · tap to open it in Activity" : "\(batches.count) batches · tap to open it in Activity"
+        case .paused:
+            let line = queue.line
+            // Stopped by the queue: why, from the batch it stopped at.
+            if !queue.isHeld, let reason = line.first?.pauseReason { return reason }
+            guard let first = line.first else { return "" }
+            return line.count == 1 ? "\(first.liveCompany) is next" : "\(first.liveCompany) next, then \(line.count - 1) more"
         case .scheduled(let batch):
             let day = batch.scheduledFor.map { Calendar.current.isDateInToday($0) ? "today" : $0.formatted(.dateTime.weekday(.wide)) } ?? ""
             return "\(batch.pending) mail\(batch.pending == 1 ? "" : "s") · \(batch.companiesLabel) · \(day)"
@@ -212,7 +214,7 @@ struct SendQueueBar: View {
             Button {
                 // Stopping a run mid-flight is the destructive control here.
                 Haptics.thud()
-                if let id = queue.runningBatchID { queue.pause(id) }
+                queue.pauseQueue()
             } label: {
                 Text("Pause")
                     .font(.caption.weight(.semibold))
@@ -223,6 +225,8 @@ struct SendQueueBar: View {
             .buttonBorderShape(.capsule)
             .controlSize(.small)
             .disabled(queue.isStopping)
+        case .result(let outcome) where outcome.isPaused && queue.isLineStopped:
+            resumeButton
         case .result, .scheduled:
             // Says what a tap does: opens the queue.
             Image(systemName: "chevron.right")
@@ -239,19 +243,24 @@ struct SendQueueBar: View {
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
             .controlSize(.small)
-        case .paused(let batches):
-            Button {
-                Haptics.press()
-                if let first = batches.first { queue.resume(first.id) }
-            } label: {
-                Text("Resume")
-                    .font(.caption.weight(.semibold))
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .controlSize(.small)
+        case .paused:
+            resumeButton
         case .idle:
             EmptyView()
         }
+    }
+
+    /// Plays the whole queue, from the first batch in line.
+    private var resumeButton: some View {
+        Button {
+            Haptics.press()
+            queue.playQueue()
+        } label: {
+            Text("Resume")
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
     }
 }

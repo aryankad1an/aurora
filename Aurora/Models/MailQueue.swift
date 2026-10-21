@@ -29,6 +29,13 @@ import UIKit
 /// (`Timing.retry`); `Tests/MailQueueTests.swift` interrupts runs at every stage
 /// against a fake Gmail and checks no one is ever mailed twice.
 ///
+/// **One line.** Batches go one after another, in the order they were queued
+/// (`line`), and the queue is paused and played as a whole (`pauseQueue`,
+/// `playQueue`): with it paused, nothing sends — no next company starts in
+/// the stopped one's place. A batch the queue stops by itself (the connection
+/// dropped, Gmail's limit, the app closed) holds up the batches behind it the
+/// same way, until it carries on or the queue is played.
+///
 /// **Scheduling.** A scheduled batch waits for its time. iOS won't run the app
 /// at a given moment, so a notification is left with the system instead
 /// (`ScheduledMailNotifier`); once the time has come the batch is `due`, and the
@@ -143,6 +150,11 @@ final class MailQueue {
     /// lane, then clears it.
     var isOpenRequested = false
 
+    /// When Pause stopped the whole queue; nil while it plays. Kept on disk:
+    /// a paused queue opens paused. Let go once nothing in line is left.
+    private(set) var pausedAt: Date?
+    var isHeld: Bool { pausedAt != nil }
+
     /// The run is sitting out a Gmail rate limit: which batch, until when, and
     /// what Gmail said. Nil while sending normally.
     private(set) var cooldown: Cooldown?
@@ -203,6 +215,7 @@ final class MailQueue {
     var onBounceCheck: ((_ since: Date) async -> Int)?
 
     private var file: JSONFile<[MailBatch]>?
+    private var heldFile: JSONFile<Date>?
     #if canImport(UIKit)
     private var assertion = UIBackgroundTaskIdentifier.invalid
     #endif
@@ -239,8 +252,23 @@ final class MailQueue {
         batches.first { $0.isDue(at: clock) && !snoozed.contains($0.id) }
     }
 
-    /// Batches with mail left that won't go until the user says so.
-    var pausedBatches: [MailBatch] { batches.filter { $0.isPaused && $0.hasWork } }
+    /// The batches going out, in the order they go: one at a time, each
+    /// waiting for the one before it.
+    var line: [MailBatch] { batches.filter(\.isInLine) }
+
+    /// Mail is waiting in line and nothing is sending: the queue was paused,
+    /// or its first batch was stopped — by the queue, carrying on by itself
+    /// at `resumeAt`, or for good until the queue is played.
+    var isLineStopped: Bool {
+        guard !isRunning, let first = line.first else { return false }
+        return isHeld || first.isPaused
+    }
+
+    /// The batch that goes next, when the line is free to go on.
+    private var nextUp: MailBatch? {
+        guard !isHeld, let first = line.first, !first.isPaused else { return nil }
+        return first
+    }
 
     /// True whenever the shelf has something to show.
     var isActive: Bool { isRunning || outcome != nil || batches.contains(where: \.hasWork) }
@@ -259,11 +287,15 @@ final class MailQueue {
         guard !isRunning else { return }
         let file = JSONFile<[MailBatch]>(name: "mail-queue-\(account).json", directory: directory)
         self.file = file
+        let heldFile = JSONFile<Date>(name: "mail-queue-paused-\(account).json", directory: directory)
+        self.heldFile = heldFile
+        pausedAt = heldFile.load()
         var loaded = file.load() ?? []
         loaded.removeAll { $0.isFinished && $0.createdAt < Date.now.addingTimeInterval(-Self.keepFinished) }
         for index in loaded.indices where loaded[index].hasWork && !loaded[index].isPaused {
             let waitingForItsTime = loaded[index].scheduledFor != nil && loaded[index].startedAt == nil
-            if !waitingForItsTime {
+            // A paused queue stays paused: Play carries it on.
+            if !waitingForItsTime, pausedAt == nil {
                 // Carries on by itself in a moment: whatever was cut off is
                 // looked for in Sent mail before anything is sent again.
                 loaded[index].isPaused = true
@@ -331,11 +363,58 @@ final class MailQueue {
         }
     }
 
-    /// Stop after the mail in flight. Nothing is lost: the rest wait, paused.
+    /// Pause the whole queue: the batch sending stops after the mail in
+    /// flight, and nothing else starts — not the next batch in line, and not
+    /// one the queue had stopped and would have carried on by itself. Mail
+    /// queued meanwhile waits in line too. Nothing is lost.
     ///
     /// Never cancels the request already in flight — cancellation reaches into a
     /// Gmail request that may already have been accepted, and a mail aborted
     /// client-side but delivered would be counted as unsent.
+    func pauseQueue() {
+        guard !isHeld, !line.isEmpty else { return }
+        setHeld(.now)
+        // The queue's own stops are this pause now: nothing carries on by itself.
+        for batch in line where batch.isPaused {
+            ScheduledMailNotifier.cancelResume(batch.id)
+            update(batch.id) { batch in
+                batch.isPaused = false
+                batch.pauseReason = nil
+                batch.resumeAt = nil
+                batch.retries = nil
+                batch.stopNote = nil
+            }
+        }
+        if isRunning { isStopping = true }
+        wakeTask?.cancel()
+        changed()
+    }
+
+    /// Play the queue: from the first batch in line, whatever stopped it —
+    /// Pause, or the queue itself (a batch waiting to carry on goes now).
+    func playQueue() {
+        setHeld(nil)
+        for batch in line where batch.isPaused {
+            ScheduledMailNotifier.cancelResume(batch.id)
+            update(batch.id) { batch in
+                batch.isPaused = false
+                batch.pauseReason = nil
+                batch.resumeAt = nil
+            }
+        }
+        startNext()
+        changed()
+    }
+
+    private func setHeld(_ date: Date?) {
+        guard (pausedAt == nil) != (date == nil) else { return }
+        pausedAt = date
+        if let date { heldFile?.save(date) } else { heldFile?.delete() }
+    }
+
+    /// Stop one batch after the mail in flight — the queue stopping it, as iOS
+    /// ending the background time does. It holds up the line until it's
+    /// resumed. (Pause, the button, is `pauseQueue`.)
     func pause(_ id: UUID, because reason: String? = nil) {
         update(id) { batch in
             batch.isPaused = true
@@ -367,7 +446,8 @@ final class MailQueue {
         startNext()
     }
 
-    /// Send a scheduled or paused batch now.
+    /// Send a scheduled or paused batch now: it joins the line, and the queue
+    /// plays.
     func sendNow(_ id: UUID) {
         ScheduledMailNotifier.cancelResume(id)
         update(id) { batch in
@@ -378,19 +458,21 @@ final class MailQueue {
         }
         ScheduledMailNotifier.cancel(id)
         snoozed.remove(id)
-        startNext()
+        playQueue()
     }
 
     /// Move a batch that isn't sending to a new time. What's left of it waits
     /// for that time, as if it had never started.
     func reschedule(_ id: UUID, to date: Date) {
         guard runningBatchID != id else { return }
-        update(id) { batch in
-            batch.scheduledFor = date
-            batch.startedAt = nil
-            batch.isPaused = false
-            batch.pauseReason = nil
-            batch.resumeAt = nil
+        keepingStopped {
+            update(id) { batch in
+                batch.scheduledFor = date
+                batch.startedAt = nil
+                batch.isPaused = false
+                batch.pauseReason = nil
+                batch.resumeAt = nil
+            }
         }
         ScheduledMailNotifier.cancelResume(id)
         snoozed.remove(id)
@@ -418,7 +500,7 @@ final class MailQueue {
         guard runningBatchID != id, let batch = batch(id) else { return }
         recordBeforeForgetting([batch])
         ScheduledMailNotifier.cancel(id)
-        batches.removeAll { $0.id == id }
+        keepingStopped { batches.removeAll { $0.id == id } }
         snoozed.remove(id)
         if outcome?.batchID == id { outcome = nil }
         save()
@@ -442,8 +524,10 @@ final class MailQueue {
     /// record it is; a batch left with nothing in it goes too.
     func removeMails(_ mailIDs: Set<Contact.ID>, from id: UUID) {
         guard runningBatchID != id else { return }
-        update(id) { batch in
-            batch.mails.removeAll { mailIDs.contains($0.id) && $0.status.isRemovable }
+        keepingStopped {
+            update(id) { batch in
+                batch.mails.removeAll { mailIDs.contains($0.id) && $0.status.isRemovable }
+            }
         }
         dropEmptyBatches()
     }
@@ -471,11 +555,19 @@ final class MailQueue {
         let leaving = batches.filter { $0.id != runningBatchID }
         recordBeforeForgetting(leaving)
         for batch in leaving { ScheduledMailNotifier.cancel(batch.id) }
-        batches.removeAll { $0.id != runningBatchID }
+        keepingStopped { batches.removeAll { $0.id != runningBatchID } }
         snoozed = []
         if let outcome, outcome.batchID != runningBatchID { self.outcome = nil }
         save()
         tick()
+    }
+
+    /// Taking mail out of the line never sets sending going: a line that was
+    /// stopped stays stopped — paused — whichever batch it was stopped at.
+    private func keepingStopped(_ change: () -> Void) {
+        let wasStopped = isLineStopped
+        change()
+        if wasStopped, !isLineStopped, !line.isEmpty { setHeld(.now) }
     }
 
     private func dropEmptyBatches() {
@@ -513,11 +605,12 @@ final class MailQueue {
         clock = .now
         changed()
         wakeTask?.cancel()
-        // A batch Gmail's limit stopped carries on by itself once it's time.
-        for batch in batches where batch.isPaused && batch.hasWork {
+        // A batch Gmail's limit stopped carries on by itself once it's time —
+        // unless the queue was paused meanwhile.
+        let resumes = isHeld ? [] : batches.compactMap { $0.isPaused && $0.hasWork ? $0.resumeAt : nil }
+        for batch in batches where batch.isPaused && batch.hasWork && !isHeld {
             if let at = batch.resumeAt, at <= clock { resume(batch.id) }
         }
-        let resumes = batches.compactMap { $0.isPaused ? $0.resumeAt : nil }
         guard let next = ([nextScheduled?.scheduledFor].compactMap { $0 } + resumes).min() else { return }
         wakeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(1, next.timeIntervalSinceNow)))
@@ -528,15 +621,11 @@ final class MailQueue {
 
     // MARK: - Draining
 
-    /// Whether a batch goes when its turn comes, without asking.
-    private func isRunnable(_ batch: MailBatch) -> Bool {
-        batch.hasWork && !batch.isPaused && (batch.scheduledFor == nil || batch.startedAt != nil)
-    }
-
-    /// Start the next batch in line, if nothing is sending.
+    /// Start the next batch in line, if nothing is sending and the line is
+    /// free to go on.
     private func startNext() {
         // Not while cut-off mails are being checked: the run would check them too.
-        guard runningBatchID == nil, !isReconciling, let next = batches.first(where: isRunnable) else { return }
+        guard runningBatchID == nil, !isReconciling, let next = nextUp else { return }
         runningBatchID = next.id
         isStopping = false
         outcome = nil
@@ -559,7 +648,7 @@ final class MailQueue {
         var limited = 0
         changed()
 
-        while let batch = batch(id), !batch.isPaused,
+        while !isHeld, let batch = batch(id), !batch.isPaused,
               let mail = batch.mails.first(where: \.status.isWaiting) {
             // Gmail may have this one — cut off mid-send, or a send whose answer
             // never came: find out before sending it again.
@@ -703,11 +792,11 @@ final class MailQueue {
             // Nothing else waiting to go: give the last mails' bounces a minute
             // to arrive. A run up next checks soon enough, and its search
             // reaches back over this one's last mails.
-            if !batches.contains(where: isRunnable) {
+            if nextUp == nil {
                 let until = Date.now.addingTimeInterval(timing.bounceSettle)
                 show(.awaitingBounces(until: until))
                 // A batch sent meanwhile cuts it short: it goes now.
-                while !isStopping, until.timeIntervalSinceNow > 0, !batches.contains(where: isRunnable) {
+                while !isStopping, until.timeIntervalSinceNow > 0, nextUp == nil {
                     try? await Task.sleep(for: .seconds(min(1, until.timeIntervalSinceNow)))
                 }
             }
@@ -718,7 +807,7 @@ final class MailQueue {
         }
         step = nil
 
-        let paused = batch(id).map { $0.isPaused && $0.hasWork } ?? false
+        let paused = batch(id).map { ($0.isPaused || isHeld) && $0.hasWork } ?? false
         runningBatchID = nil
         isStopping = false
         cooldown = nil
@@ -772,10 +861,10 @@ final class MailQueue {
     /// stops it. False when the batch was paused (or removed) meanwhile.
     private func waitOut(_ until: Date, batch id: UUID) async -> Bool {
         while until.timeIntervalSinceNow > 0 {
-            guard let batch = batch(id), !batch.isPaused else { return false }
+            guard !isHeld, let batch = batch(id), !batch.isPaused else { return false }
             try? await Task.sleep(for: .seconds(min(1, until.timeIntervalSinceNow)))
         }
-        return batch(id).map { !$0.isPaused } ?? false
+        return !isHeld && (batch(id).map { !$0.isPaused } ?? false)
     }
 
     /// A send failure as one short line: Gmail's refusals arrive as whole JSON
@@ -877,6 +966,8 @@ final class MailQueue {
     /// and shown.
     private func save() {
         file?.save(batches)
+        // Nothing left in line for a pause to hold.
+        if isHeld, line.isEmpty { setHeld(nil) }
         changed()
     }
 

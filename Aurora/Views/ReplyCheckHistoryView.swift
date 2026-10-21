@@ -94,9 +94,10 @@ struct ReplyCheckHistoryView: View {
         guard let record else { return "" }
         if record.result == .running { return "Updating" }
         let finished = ReplySync.when(record.finishedAt ?? record.startedAt)
+        let place = record.inBackground == true ? " in the background" : ""
         switch record.result {
-        case .stopped: return "Stopped at \(finished)"
-        default: return "Updated \(finished)"
+        case .stopped: return "Stopped\(place) at \(finished)"
+        default: return "Updated\(place) \(finished)"
         }
     }
 

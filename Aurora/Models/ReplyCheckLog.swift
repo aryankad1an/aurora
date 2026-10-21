@@ -15,6 +15,9 @@ nonisolated struct ReplyCheckRecord: Codable, Identifiable, Equatable {
     var plan: [String]?
     var steps: [Step] = []
     var result: Result = .running
+    /// Run by the phone with the app closed, to a smaller budget
+    /// (`ReplySync.Budget.background`). Nil for a check run in the app.
+    var inBackground: Bool?
 
     struct Step: Codable, Equatable, Identifiable {
         var id: String { title }

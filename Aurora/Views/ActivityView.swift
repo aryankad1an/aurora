@@ -20,7 +20,7 @@ struct ActivityView: View {
     /// ask Gmail for one rather than waiting on the launch/foreground sync.
     @Environment(ReplySync.self) private var replySync
 
-    enum Lane: Hashable { case queued, sent, replied, bounced }
+    enum Lane: String, Hashable { case queued, sent, replied, bounced }
 
     @State private var lane: Lane = .sent
     @State private var searchText = ""
@@ -32,6 +32,7 @@ struct ActivityView: View {
     /// The timeline of reply checks, opened from the status line.
     @State private var showsCheckHistory = false
     @Environment(MailQueue.self) private var mailQueue
+    private let notifications = NotificationRouter.shared
     /// A batch opened from a queue lane.
     @State private var openBatch: QueueRoute?
     /// A batch with mail still to go, waiting on a confirm to be removed.
@@ -105,6 +106,13 @@ struct ActivityView: View {
                 openBatch = nil
                 withAnimation(Theme.Motion.bouncy) { lane = .queued }
                 mailQueue.isOpenRequested = false
+            }
+            // A check's notification or Live Activity opens what it found.
+            .task(id: notifications.openedLane) {
+                guard let opened = notifications.openedLane else { return }
+                openBatch = nil
+                withAnimation(Theme.Motion.bouncy) { lane = opened }
+                notifications.openedLane = nil
             }
             .validityAlert($pendingValidity) { change in
                 Task { await jobStore.markBouncedInvalid(change.ids, sync: replySync) }

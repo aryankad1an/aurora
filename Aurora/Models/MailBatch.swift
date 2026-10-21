@@ -69,6 +69,10 @@ struct MailBatch: Codable, Identifiable {
     /// Everything in it has been dealt with, one way or the other.
     var isFinished: Bool { !hasWork }
 
+    /// In the queue's line (`MailQueue.line`): mail to go, and not waiting for
+    /// a time — sent now, or a scheduled batch that has been let go.
+    var isInLine: Bool { hasWork && (scheduledFor == nil || startedAt != nil) }
+
     /// The names of the templates it's written from, for a summary line.
     var templateNames: [String] {
         let used = Set(mails.compactMap { $0.override == nil ? $0.templateID : nil })

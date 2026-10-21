@@ -23,5 +23,9 @@ struct AuroraApp: App {
                 // text written, so the system's Writing Tools are off everywhere.
                 .writingToolsBehavior(.disabled)
         }
+        // Replies and bounces looked for with the app closed (`BackgroundCheck`).
+        .backgroundTask(.appRefresh(BackgroundCheck.identifier)) {
+            await BackgroundCheck.run()
+        }
     }
 }

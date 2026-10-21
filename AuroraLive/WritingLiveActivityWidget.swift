@@ -12,10 +12,12 @@ struct WritingLiveActivityWidget: Widget {
         ActivityConfiguration(for: WritingActivityAttributes.self) { context in
             HStack(spacing: 12) {
                 Tile(accent: Color(context.attributes.accent), size: 40)
-                Summary(state: context.state, accent: Color(context.attributes.accent))
+                Summary(state: context.state, accent: Color(context.attributes.accent), isStale: context.isStale)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Elapsed(since: context.state.startedAt)
-                    .font(.subheadline.weight(.semibold))
+                if !context.isStale {
+                    Elapsed(since: context.state.startedAt)
+                        .font(.subheadline.weight(.semibold))
+                }
             }
             .padding(18)
             .dynamicTypeSize(...DynamicTypeSize.xLarge)
@@ -32,14 +34,16 @@ struct WritingLiveActivityWidget: Widget {
                         .dynamicTypeSize(...DynamicTypeSize.large)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Elapsed(since: context.state.startedAt)
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.trailing, 10)
-                        .padding(.top, 8)
-                        .dynamicTypeSize(...DynamicTypeSize.large)
+                    if !context.isStale {
+                        Elapsed(since: context.state.startedAt)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.trailing, 10)
+                            .padding(.top, 8)
+                            .dynamicTypeSize(...DynamicTypeSize.large)
+                    }
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Summary(state: context.state, accent: accent)
+                    Summary(state: context.state, accent: accent, isStale: context.isStale)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 4)
                         .dynamicTypeSize(...DynamicTypeSize.large)
@@ -60,11 +64,17 @@ struct WritingLiveActivityWidget: Widget {
                     .padding(.leading, 4)
                     .dynamicTypeSize(...DynamicTypeSize.large)
             } compactTrailing: {
-                Elapsed(since: context.state.startedAt)
-                    .font(.caption.weight(.semibold))
-                    .frame(maxWidth: 44)
-                    .padding(.trailing, 4)
-                    .dynamicTypeSize(...DynamicTypeSize.large)
+                if context.isStale {
+                    Image(systemName: "exclamationmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(accent)
+                } else {
+                    Elapsed(since: context.state.startedAt)
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: 44)
+                        .padding(.trailing, 4)
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                }
             } minimal: {
                 Sparkles(accent: accent, size: 12)
                     .dynamicTypeSize(...DynamicTypeSize.large)
@@ -82,14 +92,16 @@ private extension Color {
     }
 }
 
-/// "Writing with Apple Intelligence" over what was asked.
+/// "Writing with Apple Intelligence" over what was asked — or, once the
+/// request has been out longer than Aurora waits, that it stopped waiting.
 private struct Summary: View {
     let state: WritingActivityAttributes.ContentState
     let accent: Color
+    var isStale = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Writing with Apple Intelligence")
+            Text(isStale ? "Stopped waiting for the answer" : "Writing with Apple Intelligence")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(accent)
             Text(state.request)

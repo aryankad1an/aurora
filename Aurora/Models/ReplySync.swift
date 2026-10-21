@@ -44,9 +44,36 @@ final class ReplySync {
         /// Contacts a name was found for in the account's mail.
         var namesFound = 0
 
+        /// Who answered this run, and whose mail newly bounced: what a check
+        /// that ran with the app closed says in a notification.
+        var newReplies: [Found] = []
+        var newBounces: [Found] = []
+
         var changedAnything: Bool { recovered > 0 || replies > 0 || corrected > 0 }
+        var foundAnything: Bool { !newReplies.isEmpty || !newBounces.isEmpty }
         /// Everything that was asked failed: nothing was checked at all.
         var readNothing: Bool { failed > 0 && read == 0 }
+    }
+
+    /// Someone a check found an answer from, or a bounce for.
+    struct Found: Equatable {
+        let contactID: String
+        /// Their name, or for a reply with none on file, who it came from.
+        let name: String
+        let company: String?
+    }
+
+    /// The most a check run with the app closed reads: iOS gives it about
+    /// half a minute. Threads over the limit are read by the next check, and
+    /// notices over it are searched for again from the same point, so nothing
+    /// is skipped — only put off. It also keeps a check the phone starts by
+    /// itself well inside Gmail's per-user read rate (a thread is 10 units of
+    /// 250 a second; `GmailReadPolicy`).
+    struct Budget {
+        var threads: Int
+        var notices: Int
+
+        static let background = Budget(threads: 40, notices: 25)
     }
 
     /// Progress, for the UI. `total` is 0 while idle, and while a step is
@@ -99,9 +126,27 @@ final class ReplySync {
         "Finding names in your mail"
     ]
 
-    /// Start step `step` of this run, before it knows how much it has to do.
-    private func beginStep(_ step: Int) {
+    /// Start step `step` of this run, before it knows how much it has to do —
+    /// unless the run has been stopped.
+    private func beginStep(_ step: Int) throws {
+        try checkStopped()
         progress = Progress(label: Self.stepTitles[step - 1], step: step, steps: progress.steps)
+    }
+
+    /// Why the running check was asked to stop (`stop(_:)`), until it has.
+    private var stopReason: String?
+
+    /// Stop the running check at its next step or batch of reads. What it has
+    /// read is kept, and the next check reads from where this one began.
+    func stop(_ reason: String) {
+        guard isSyncing else { return }
+        stopReason = reason
+    }
+
+    /// Throws once the run's task is cancelled, or the check was stopped.
+    private func checkStopped() throws {
+        try Task.checkCancellation()
+        if stopReason != nil { throw CancellationError() }
     }
 
     /// The current step has `total` things to read.
@@ -111,10 +156,17 @@ final class ReplySync {
         progress.unit = unit
     }
 
-    private(set) var isSyncing = false
-    private(set) var progress = Progress()
+    private(set) var isSyncing = false {
+        didSet { if isSyncing != oldValue { onStateChange?() } }
+    }
+    private(set) var progress = Progress() {
+        didSet { onStateChange?() }
+    }
     private(set) var lastSyncedAt: Date?
     private(set) var lastOutcome: Outcome?
+    /// The last check, however it ended: what it found, and whether it
+    /// finished. Set as it ends, before `isSyncing` goes false.
+    @ObservationIgnored private(set) var lastRun: (outcome: Outcome, completed: Bool)?
 
     /// Set when Gmail refuses the read for want of the `gmail.readonly` scope —
     /// i.e. the stored token predates reply tracking. The UI turns this into a
@@ -165,6 +217,20 @@ final class ReplySync {
     /// of how the account is authenticated.
     var reader: ((String, [URLQueryItem]) async throws -> Data)?
 
+    /// Told when a check starts, moves on, or stops: the check's Live
+    /// Activity and background time follow it.
+    @ObservationIgnored var onStateChange: (() -> Void)?
+    /// Told when a check finishes or stops, with what it found.
+    @ObservationIgnored var onFinish: ((Outcome) -> Void)?
+
+    /// The account whose bounces and checkpoint are open (`loadBounces`).
+    private(set) var account: String?
+    /// A check run with the app closed recorded replies the app's send
+    /// history hasn't loaded: reload it on coming back.
+    var hasUnloadedChanges = false
+    /// The last check stopped on Gmail's rate limit.
+    private(set) var wasRateLimited = false
+
     /// How far back to keep checking unanswered sends. A mail that has been
     /// silent for four months isn't about to be answered, and re-reading those
     /// threads on every sync costs a request each, forever.
@@ -175,18 +241,29 @@ final class ReplySync {
 
     // MARK: - Bounces
 
-    /// Open this account's bounce log.
+    /// Open this account's bounce log. Already open, it's left as it is: what's
+    /// in memory is newer than the file — and a check the phone began by itself
+    /// may be using it.
     func loadBounces(account: String) {
+        guard self.account != account else { return }
+        self.account = account
         let file = JSONFile<BounceLog>(name: "bounces-\(account).json")
         bounceFile = file
         let log = file.load() ?? BounceLog()
         bounces = Dictionary(log.bounces.map { ($0.contactID, $0) }, uniquingKeysWith: { $0.at > $1.at ? $0 : $1 })
         seenBounceMessages = []
-        seenBounceOrder = log.seenMessageIDs.filter { seenBounceMessages.insert($0).inserted }
         dismissedBounces = log.dismissed
         let checkpointFile = JSONFile<ReplyCheckpoint>(name: "reply-checkpoint-\(account).json")
         self.checkpointFile = checkpointFile
         checkpoint = checkpointFile.load() ?? ReplyCheckpoint()
+        // Notices read by an older parser that it passed over may count now:
+        // forget which were read, and search the whole window once more.
+        if (log.parserVersion ?? 1) < BounceParsing.version {
+            seenBounceOrder = []
+            checkpoint.noticesCheckedThrough = nil
+        } else {
+            seenBounceOrder = log.seenMessageIDs.filter { seenBounceMessages.insert($0).inserted }
+        }
         lastSyncedAt = checkpoint.checkedThrough
         let checkLogFile = JSONFile<ReplyCheckLog>(name: "reply-checks-\(account).json")
         self.checkLogFile = checkLogFile
@@ -242,7 +319,7 @@ final class ReplySync {
             seenBounceMessages = Set(seenBounceOrder)
         }
         bounceFile?.save(BounceLog(bounces: Array(bounces.values), seenMessageIDs: seenBounceOrder,
-                                   dismissed: dismissedBounces))
+                                   dismissed: dismissedBounces, parserVersion: BounceParsing.version))
     }
 
     private static let seenBounceLimit = 3000
@@ -276,30 +353,48 @@ final class ReplySync {
         var emailByContact: [String: String]
         var excludingContactIDs: Set<String> = []
         var lookingUpNames: [String] = []
+        /// Who each contact is, for saying who answered or bounced.
+        var people: [String: Person] = [:]
+    }
+
+    struct Person {
+        var name: String
+        var company: String
     }
 
     /// A check whose inputs take a while to gather — a reload, a fetch of the
     /// contacts mailed. They're gathered once the check has begun, so the wait
     /// shows as the check running ("Updating", the timeline's steps waiting)
     /// rather than as a tap that did nothing.
+    ///
+    /// - Parameter budget: the most it reads, for a check run with the app
+    ///   closed (`Budget.background`). Such a check also leaves out linking
+    ///   older mail to threads, and names, which can wait for the app.
     @discardableResult
-    func run(forceFullCheck: Bool = false, gathering gather: () async -> Inputs) async -> Outcome {
+    func run(forceFullCheck: Bool = false, budget: Budget? = nil,
+             gathering gather: () async -> Inputs) async -> Outcome {
         guard !isSyncing, reader != nil else { return Outcome() }
+        stopReason = nil
         isSyncing = true
         errorMessage = nil
         needsReconnect = false
+        wasRateLimited = false
         needsMigration = SupabaseAPI.replyColumnsMissing
         var outcome = Outcome()
         var completed = false
         defer {
-            isSyncing = false
-            progress = Progress()
+            stopReason = nil
+            lastRun = (outcome, completed)
             // Only stamp a completed run. A cancelled one has checked nothing, and
             // "Checked just now" would be a lie that also hides the real state.
             if completed {
                 lastSyncedAt = .now
                 lastOutcome = outcome
             }
+            // Over before the progress clears, so what follows the check sees
+            // it end rather than start again from nothing.
+            isSyncing = false
+            progress = Progress()
         }
 
         let startedAt = Date.now
@@ -309,7 +404,8 @@ final class ReplySync {
         // inputs say there's anyone to name.
         progress = Progress(label: "Getting ready", steps: 5)
         var record = ReplyCheckRecord(startedAt: startedAt, readFrom: since)
-        record.plan = Array(Self.stepTitles.prefix(5))
+        record.plan = budget == nil ? Array(Self.stepTitles.prefix(5)) : Array(Self.stepTitles[1..<5])
+        record.inBackground = budget == nil ? nil : true
         checkLog.begin(record)
         saveCheckLog()
         defer {
@@ -318,12 +414,16 @@ final class ReplySync {
             checkLog.update(record.id) { entry in
                 entry.finishedAt = .now
                 if entry.result == .running {
-                    if needsReconnect {
+                    if let stopReason {
+                        entry.result = .stopped(stopReason)
+                    } else if needsReconnect {
                         entry.result = .stopped("Gmail needs reconnecting in Settings.")
                     } else if needsMigration {
                         entry.result = .stopped("The database is missing the reply columns.")
                     } else if let errorMessage {
                         entry.result = .stopped(errorMessage)
+                    } else if budget != nil {
+                        entry.result = .stopped("Out of background time. The next check carries on from here.")
                     } else {
                         entry.result = .stopped("Cancelled.")
                     }
@@ -336,6 +436,18 @@ final class ReplySync {
         var sends = inputs.sends
         let emailByContact = inputs.emailByContact
         let excludingContactIDs = inputs.excludingContactIDs
+        // Whose mail newly bounced is told apart from who had bounced already
+        // once the run is over, however it ended.
+        let bouncedBefore = Set(bounces.keys)
+        defer {
+            outcome.newBounces = Set(bounces.keys).subtracting(bouncedBefore).subtracting(excludingContactIDs)
+                .sorted()
+                .map { id in
+                    Found(contactID: id, name: inputs.people[id]?.name ?? bounces[id]?.address ?? "",
+                          company: inputs.people[id]?.company)
+                }
+            if completed || outcome.foundAnything { onFinish?(outcome) }
+        }
         // Let a bounce check started by the send queue finish first: they share
         // what's been read, and its reads would count toward this run's progress.
         _ = await sendingCheck?.value
@@ -355,6 +467,7 @@ final class ReplySync {
 
         let after = since.map { " since " + Self.when($0) } ?? " in the last 120 days"
         let noticesAfter = noticesSince.map { " since " + Self.when($0) } ?? ""
+        let noticeLimit = budget?.notices ?? Self.bounceListLimit
         do {
             // Replies that were really "this address is no longer in service".
             let corrected = await correctMisreadReplies(in: sends, emailByContact: emailByContact)
@@ -368,17 +481,21 @@ final class ReplySync {
                 return cleared
             }
 
-            beginStep(1)
-            let recovered = try await recoverThreadIDs(in: sends, emailByContact: emailByContact)
-            outcome.recovered = recovered.count
-            outcome.failed += recovered.failed
-            outcome.read += recovered.read
-            note(record.id, Self.stepTitles[0],
-                 recovered.targets == 0
-                    ? "Every sent mail already linked to its thread"
-                    : "Linked \(recovered.count) of \(recovered.targets) sent mails to their threads"
-                        + (recovered.notFound > 0 ? " · \(recovered.notFound) not in Sent" : ""),
-                 issues: ReplyCheckLog.issues(recovered.reasons))
+            // Linking older mail searches Sent once per mail: left to the app.
+            var recovered = Recovered()
+            if budget == nil {
+                try beginStep(1)
+                recovered = try await recoverThreadIDs(in: sends, emailByContact: emailByContact)
+                outcome.recovered = recovered.count
+                outcome.failed += recovered.failed
+                outcome.read += recovered.read
+                note(record.id, Self.stepTitles[0],
+                     recovered.targets == 0
+                        ? "Every sent mail already linked to its thread"
+                        : "Linked \(recovered.count) of \(recovered.targets) sent mails to their threads"
+                            + (recovered.notFound > 0 ? " · \(recovered.notFound) not in Sent" : ""),
+                     issues: ReplyCheckLog.issues(recovered.reasons))
+            }
             // Fold the recovered ids back in so this run can check them straight
             // away, instead of finding a reply only on the next sync.
             sends = sends.map { send in
@@ -386,13 +503,20 @@ final class ReplySync {
                 return send.attaching(message: message)
             }
 
-            beginStep(2)
+            try beginStep(2)
             let checked = try await checkForReplies(in: sends,
                                                     excludingContactIDs: excludingContactIDs,
                                                     alwaysChecking: Set(recovered.threadIDs.keys),
                                                     retrying: forceFullCheck ? [] : checkpoint.retryThreadIDs,
-                                                    since: since, readAll: forceFullCheck)
+                                                    since: since, readAll: forceFullCheck,
+                                                    limit: budget?.threads)
             outcome.replies = checked.replies
+            outcome.newReplies = checked.repliedSends.map { reply in
+                let person = inputs.people[reply.contactID]
+                return Found(contactID: reply.contactID,
+                             name: person?.name ?? Self.senderName(reply.from),
+                             company: person?.company)
+            }
             outcome.failed += checked.failed
             outcome.read += checked.read
             var read: String
@@ -406,8 +530,9 @@ final class ReplySync {
                 if !checked.bounces.isEmpty { read += " · \(checked.bounces.count) failure \(checked.bounces.count == 1 ? "notice" : "notices")" }
                 if checked.gone > 0 { read += " · \(checked.gone) deleted in Gmail" }
             }
+            if checked.deferred > 0 { read += " · \(checked.deferred) left for the next check" }
             note(record.id, Self.stepTitles[1], read, issues: ReplyCheckLog.issues(checked.reasons))
-            beginStep(3)
+            try beginStep(3)
             let confirmed = try await confirmThreadBounces(checked.bounces, emailByContact: emailByContact)
             outcome.bounced += confirmed.found
             outcome.failed += confirmed.failed
@@ -421,29 +546,31 @@ final class ReplySync {
             for contactID in checked.repliedContacts { bounces[contactID] = nil }
 
             // Failure notices that never joined the mail's thread.
-            beginStep(4)
-            let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact, since: noticesSince)
+            try beginStep(4)
+            let scanned = try await scanInbox(sends: sends, emailByContact: emailByContact, since: noticesSince,
+                                              limit: noticeLimit)
             outcome.bounced += scanned.found
             outcome.failed += scanned.failed
             outcome.read += scanned.read
             note(record.id, Self.stepTitles[3], Self.scanSummary(scanned, after: noticesAfter, noun: "failure notice", plural: "failure notices"),
-                 issues: Self.scanIssues(scanned))
+                 issues: Self.scanIssues(scanned, limit: noticeLimit))
 
             // "No longer in service" answers from their side, wherever they are.
-            beginStep(5)
-            let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact, since: noticesSince)
+            try beginStep(5)
+            let dead = try await scanDeadAddressNotices(sends: sends, emailByContact: emailByContact,
+                                                        since: noticesSince, limit: noticeLimit)
             outcome.bounced += dead.found
             outcome.failed += dead.failed
             outcome.read += dead.read
             note(record.id, Self.stepTitles[4],
                  Self.scanSummary(dead, after: noticesAfter, noun: "“no longer here” reply", plural: "“no longer here” replies"),
-                 issues: Self.scanIssues(dead))
+                 issues: Self.scanIssues(dead, limit: noticeLimit))
 
             // Names for the people mailed that have none, from the account's own
             // mail: "Aryan Kadian <kdaryan@acme.com>" in anything from, to or
             // copying them.
             if !lookups.isEmpty {
-                beginStep(6)
+                try beginStep(6)
                 count(lookups.count, "addresses")
                 outcome.namesFound = await MailboxNames.shared.lookUp(lookups, accepting: RecipientName.isPersonEntry) {
                     [weak self] looked in self?.progress.done += looked
@@ -485,6 +612,7 @@ final class ReplySync {
         } catch let error as SupabaseError where error.isSchemaOutOfDate {
             needsMigration = true
         } catch {
+            if case GmailAuthError.rateLimited = error { wasRateLimited = true }
             if !error.isCancellation { errorMessage = error.localizedDescription }
         }
         return outcome
@@ -500,6 +628,18 @@ final class ReplySync {
 
     private func saveCheckLog() {
         checkLogFile?.save(checkLog)
+    }
+
+    /// Who a `From` header names: "Jane Doe" of `"Jane Doe" <jane@acme.com>`,
+    /// else the address.
+    nonisolated static func senderName(_ from: String) -> String {
+        if let open = from.firstIndex(of: "<") {
+            let name = from[..<open].trimmingCharacters(in: .whitespaces.union(CharacterSet(charactersIn: "\"")))
+            if !name.isEmpty { return name }
+            let address = from[from.index(after: open)...].prefix { $0 != ">" }
+            return String(address)
+        }
+        return from.trimmingCharacters(in: .whitespaces)
     }
 
     /// "3:04 PM", or "Oct 8, 3:04 PM" when it wasn't today.
@@ -527,10 +667,10 @@ final class ReplySync {
         return "\(notices) new \(notices == 1 ? noun : plural)\(range) · \(scan.found) \(scan.found == 1 ? "bounce" : "bounces")"
     }
 
-    nonisolated private static func scanIssues(_ scan: NoticeScan) -> [String] {
+    nonisolated private static func scanIssues(_ scan: NoticeScan, limit: Int) -> [String] {
         if scan.read == 0 && scan.failed > 0 { return ["The search couldn't be run; tried again next check"] }
         var issues = scan.failed > 0 ? ["\(scan.failed) couldn't be read; tried again next check"] : []
-        if scan.more { issues.append("More than \(bounceListLimit) new; the rest are read next check") }
+        if scan.more { issues.append("More than \(limit) new; the rest are read next check") }
         return issues
     }
 
@@ -719,7 +859,7 @@ final class ReplySync {
         for chunk in stride(from: 0, to: targets.count, by: Self.concurrency).map({
             Array(targets[$0..<min($0 + Self.concurrency, targets.count)])
         }) {
-            try Task.checkCancellation()
+            try checkStopped()
             let chunkResults = try await withThrowingTaskGroup(of: RecoverResult.self) { group in
                 for send in chunk {
                     group.addTask {
@@ -857,6 +997,10 @@ final class ReplySync {
         var failedThreadIDs: Set<String> = []
         /// Every open thread this check covered, read or not.
         var openThreadIDs: Set<String> = []
+        /// The replies recorded: whose, and who they came from.
+        var repliedSends: [(contactID: String, from: String)] = []
+        /// Threads over the check's limit, left for the next one.
+        var deferred = 0
     }
 
     private enum CheckResult {
@@ -912,7 +1056,7 @@ final class ReplySync {
                                  excludingContactIDs: Set<String>,
                                  alwaysChecking: Set<String>,
                                  retrying: Set<String>,
-                                 since: Date?, readAll: Bool) async throws -> Checked {
+                                 since: Date?, readAll: Bool, limit: Int? = nil) async throws -> Checked {
         guard let reader else { throw GmailAuthError.notConnected }
         let cutoff = Date().addingTimeInterval(-Self.checkWindow)
         let activeSends = openSends(sends, excluding: excludingContactIDs)
@@ -937,7 +1081,19 @@ final class ReplySync {
         plan.retryThreadIDs = retrying
         let wanted = plan.threadsToRead(open: open, incoming: incoming, searchedFromCheckpoint: since != nil,
                                         always: always)
-        let targets = activeSends.filter { $0.gmailThreadID.map(wanted.contains) == true }
+        var targets = activeSends.filter { $0.gmailThreadID.map(wanted.contains) == true }
+        // Over the limit, threads with new mail first, newest first: the
+        // likeliest to hold an answer. The rest are read next check.
+        if let limit, targets.count > limit {
+            let ordered = targets.sorted { ($0.sentAt ?? .distantPast) > ($1.sentAt ?? .distantPast) }
+            let fresh = ordered.filter { incoming?.contains($0.gmailThreadID ?? "") == true }
+            let rest = ordered.filter { incoming?.contains($0.gmailThreadID ?? "") != true }
+            let ranked = fresh + rest
+            targets = Array(ranked.prefix(limit))
+            let putOff = ranked.dropFirst(limit).compactMap(\.gmailThreadID)
+            result.failedThreadIDs.formUnion(putOff)
+            result.deferred = putOff.count
+        }
         result.checkedContacts = Set(targets.map(\.contactID))
         result.threads = targets.count
         guard !targets.isEmpty else { return result }
@@ -947,7 +1103,7 @@ final class ReplySync {
         for chunk in stride(from: 0, to: targets.count, by: Self.concurrency).map({
             Array(targets[$0..<min($0 + Self.concurrency, targets.count)])
         }) {
-            try Task.checkCancellation()
+            try checkStopped()
             let chunkResults = try await withThrowingTaskGroup(of: CheckResult.self) { group in
                 for send in chunk {
                     group.addTask {
@@ -990,6 +1146,7 @@ final class ReplySync {
                         try await SupabaseAPI.recordReply(sendID: sendID, at: date,
                                                           from: sender, snippet: snippet)
                         result.replies += 1
+                        result.repliedSends.append((contactID, sender))
                     } catch {
                         result.failed += 1
                         result.reasons["Couldn't save the reply to the database", default: 0] += 1
@@ -1093,7 +1250,7 @@ final class ReplySync {
     /// mailed before it arrived: an address that bounced for someone else,
     /// months ago, says nothing about this send.
     private func scanInbox(sends: [MailSend], emailByContact: [String: String],
-                           since: Date?) async throws -> NoticeScan {
+                           since: Date?, limit: Int = bounceListLimit) async throws -> NoticeScan {
         guard let reader else { throw GmailAuthError.notConnected }
         var contactsByAddress: [String: [String]] = [:]
         for (contactID, address) in emailByContact {
@@ -1108,7 +1265,7 @@ final class ReplySync {
 
         let list: NoticeList
         do {
-            list = try await Self.listBounceNotices(matching: ReplyCheckpoint.searchTerm(after: since),
+            list = try await Self.listBounceNotices(matching: ReplyCheckpoint.searchTerm(after: since), limit: limit,
                                                     skipping: seenBounceMessages, reader: reader)
         } catch let error as GmailAuthError where error.endsRun {
             throw error
@@ -1183,7 +1340,7 @@ final class ReplySync {
     /// is matched to the person it's about (`BounceParsing.matchDeadAddressNotice`)
     /// and kept as their bounce. Read once each, like failure notices.
     private func scanDeadAddressNotices(sends: [MailSend], emailByContact: [String: String],
-                                        since: Date?) async throws -> NoticeScan {
+                                        since: Date?, limit: Int = bounceListLimit) async throws -> NoticeScan {
         guard let reader else { throw GmailAuthError.notConnected }
         let mailed = Self.mailed(sends, emailByContact: emailByContact)
         guard !mailed.isEmpty else { return NoticeScan() }
@@ -1191,7 +1348,7 @@ final class ReplySync {
         let list: NoticeList
         do {
             list = try await Self.listBounceNotices(base: BounceParsing.deadAddressQuery,
-                                                    matching: ReplyCheckpoint.searchTerm(after: since),
+                                                    matching: ReplyCheckpoint.searchTerm(after: since), limit: limit,
                                                     skipping: seenBounceMessages, reader: reader)
         } catch let error as GmailAuthError where error.endsRun {
             throw error
@@ -1277,7 +1434,7 @@ final class ReplySync {
         for chunk in stride(from: 0, to: ids.count, by: Self.concurrency).map({
             Array(ids[$0..<min($0 + Self.concurrency, ids.count)])
         }) {
-            try Task.checkCancellation()
+            try checkStopped()
             let read = try await withThrowingTaskGroup(of: HeaderMessage?.self) { group in
                 for id in chunk {
                     group.addTask {
@@ -1335,7 +1492,7 @@ final class ReplySync {
         for chunk in stride(from: 0, to: ids.count, by: Self.concurrency).map({
             Array(ids[$0..<min($0 + Self.concurrency, ids.count)])
         }) {
-            try Task.checkCancellation()
+            try checkStopped()
             let read = try await withThrowingTaskGroup(of: ReadNotice?.self) { group in
                 for id in chunk {
                     group.addTask {
@@ -1566,7 +1723,12 @@ nonisolated private struct GmailThread: Decodable {
 
         /// A delivery notice — the opposite of a reply, and when it's a
         /// failure rather than a delay, a strong hint the address is dead.
-        var isBounce: Bool { BounceParsing.isBounceSender(from) }
+        /// A mail filter's notice (Mimecast's, a company's own relay) comes
+        /// from no daemon and is known by its words instead.
+        var isBounce: Bool {
+            BounceParsing.isBounceSender(from)
+                || BounceParsing.isProseNotice(subject: header("Subject"), text: snippet?.htmlUnescaped)
+        }
         var isDelay: Bool { BounceParsing.isDelay(subject: header("Subject"), snippet: snippet) }
         var isDeadAddressNotice: Bool {
             BounceParsing.isDeadAddressNotice(subject: header("Subject"), text: snippet?.htmlUnescaped)

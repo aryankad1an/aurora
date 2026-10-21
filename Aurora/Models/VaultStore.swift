@@ -133,9 +133,32 @@ final class VaultStore {
         try await finishOpening(vault: vault, grants: grants)
     }
 
+    /// Open this account's keys for a check the phone runs with the app
+    /// closed (`BackgroundCheck`): what `start` does when the keychain holds
+    /// the account key, without its screens or upkeep. Keys already open are
+    /// left as they are. Says whether the account's own vault is readable.
+    static func openKeysQuietly(email: String) async -> Bool {
+        if KeyRing.shared.accountKey != nil, KeyRing.shared.ownVaultID != nil { return true }
+        guard let accountKey = AccountKeychain.load(email: email),
+              let vault = try? await VaultAPI.vault(ownerEmail: email), let keyID = vault.keyID,
+              let grants = try? await VaultAPI.grants(email: email) else { return false }
+        KeyRing.shared.set(accountKey: accountKey)
+        holdKeys(from: grants, email: email, accountKey: accountKey)
+        guard KeyRing.shared.vaultKey(keyID) != nil else {
+            KeyRing.shared.clear()
+            return false
+        }
+        KeyRing.shared.setOwnVault(id: vault.id, keyID: keyID)
+        return true
+    }
+
     /// Put every vault key the grants hold on the key ring.
     private func holdKeys(from grants: [VaultGrant], accountKey: SymmetricKey) {
         guard let email else { return }
+        Self.holdKeys(from: grants, email: email, accountKey: accountKey)
+    }
+
+    private static func holdKeys(from grants: [VaultGrant], email: String, accountKey: SymmetricKey) {
         for grant in grants {
             let context = Sealing.grantContext(email: email, vaultID: grant.vaultID, keyID: grant.keyID)
             if let key = try? Sealing.unwrap(grant.sealedKey, with: accountKey, context: context) {

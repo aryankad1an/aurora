@@ -292,7 +292,8 @@ final class JobStore {
             return ReplySync.Inputs(sends: sends,
                                     emailByContact: emailByContact,
                                     excludingContactIDs: Set(knownCompanies.flatMap(\.invalidContacts).map(\.id)),
-                                    lookingUpNames: unnamed.map(\.email))
+                                    lookingUpNames: unnamed.map(\.email),
+                                    people: peopleByContact)
         }
         // Deliberately `reloadSendsOnly()`: re-fetching the entire companies catalog
         // is unnecessary when only per-user sent/reply records have changed.
@@ -313,10 +314,28 @@ final class JobStore {
         }
     }
 
+    /// The send history again, after a check run with the app closed
+    /// recorded replies in it (`ReplySync.hasUnloadedChanges`).
+    func reloadSends() async {
+        do {
+            try await reloadSendsOnly()
+        } catch {
+            report(error)
+        }
+    }
+
     /// Look for bounces to a batch's mail while it's still sending, from
     /// `since` (when the run began). Quiet: see `ReplySync.checkBouncesWhileSending`.
     func checkBouncesWhileSending(using sync: ReplySync, since: Date) async -> Int {
-        await sync.checkBouncesWhileSending(sends: sends, emailByContact: emailByContact, since: since)
+        // The run's mails were just recorded, and the feed that knows their
+        // addresses is rebuilt after each few: until it's done, a notice for
+        // someone at a company not on screen would match no one.
+        var awaited: Task<Void, Never>?
+        while isLoadingActivity, let task = activityTask, task != awaited {
+            awaited = task
+            await task.value
+        }
+        return await sync.checkBouncesWhileSending(sends: sends, emailByContact: emailByContact, since: since)
     }
 
     /// The contacts this account has mailed whose name field gives no name:
@@ -1211,6 +1230,20 @@ final class JobStore {
 
     /// Where each contact's mail was addressed, for recovering the thread id of
     /// a send made before the app captured one.
+    /// Each contact mailed, by name and company, for saying who answered.
+    var peopleByContact: [String: ReplySync.Person] {
+        var result: [String: ReplySync.Person] = [:]
+        for company in knownCompanies {
+            for contact in company.contacts {
+                result[contact.id] = .init(name: contact.displayName, company: company.company)
+            }
+        }
+        for entry in activity {
+            result[entry.contact.id] = .init(name: entry.contact.displayName, company: entry.company)
+        }
+        return result
+    }
+
     var emailByContact: [String: String] {
         var result: [String: String] = [:]
         for company in knownCompanies {
