@@ -33,8 +33,8 @@ struct HomeView: View {
     /// the company you mailed someone at, and by then the name you remember is
     /// often theirs rather than the company's.
     private var filteredJobs: [Job] {
-        guard isSearching else { return jobStore.jobs }
-        return jobStore.jobs.filter { $0.matches(query) }
+        guard isSearching, let search = SearchQuery(query) else { return jobStore.jobs }
+        return jobStore.jobs.filter { $0.matches(search) }
     }
 
     var body: some View {

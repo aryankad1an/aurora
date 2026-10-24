@@ -290,11 +290,11 @@ struct QueueLaneSections: View {
     }
 
     private func matches(_ batch: MailBatch) -> Bool {
-        guard !query.isEmpty else { return true }
-        return batch.title.localizedCaseInsensitiveContains(query)
-            || batch.mails.contains { $0.displayName.localizedCaseInsensitiveContains(query)
-                || $0.company.localizedCaseInsensitiveContains(query)
-                || $0.recipient.localizedCaseInsensitiveContains(query) }
+        guard let search = SearchQuery(query) else { return true }
+        // The batch's own title, or any one mail in it — each word in that
+        // mail, so "stripe priya" finds the batch holding Priya at Stripe.
+        return search.matches(batch.title)
+            || batch.mails.contains { search.matches($0.displayName, $0.company, $0.recipient, batch.title) }
     }
 
     /// Within each group: what's soonest first, and what's done newest first.

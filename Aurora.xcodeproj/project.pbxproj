@@ -41,6 +41,7 @@
 		A21CB3A8302E34A200FA6F9E /* Exceptions for "Aurora" folder in "Aurora" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Aurora.entitlements,
 				Info.plist,
 			);
 			target = A2963440302E2F6F000BDD39 /* Aurora */;
@@ -48,6 +49,7 @@
 		B1000000000000000000AA05 /* Exceptions for "AuroraLive" folder in "AuroraLive" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				AuroraLive.entitlements,
 				Info.plist,
 			);
 			target = B1000000000000000000AA10 /* AuroraLive */;
@@ -364,6 +366,7 @@
 		A296344A302E2F70000BDD39 /* Debug configuration for PBXNativeTarget "Aurora" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Aurora/Aurora.entitlements;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
@@ -400,6 +403,7 @@
 		A296344B302E2F70000BDD39 /* Release configuration for PBXNativeTarget "Aurora" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Aurora/Aurora.entitlements;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
@@ -437,6 +441,7 @@
 		B1000000000000000000AA14 /* Debug configuration for PBXNativeTarget "AuroraLive" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AuroraLive/AuroraLive.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2P3YJ695GG;
@@ -467,6 +472,7 @@
 		B1000000000000000000AA15 /* Release configuration for PBXNativeTarget "AuroraLive" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AuroraLive/AuroraLive.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 2P3YJ695GG;

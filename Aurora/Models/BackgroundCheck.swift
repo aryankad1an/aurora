@@ -84,6 +84,8 @@ enum BackgroundCheck {
               let inputs = try? await inputs(email: email) else { return }
         let outcome = await sync.run(budget: .background) { inputs }
         if outcome.changedAnything { sync.hasUnloadedChanges = true }
+        // The widgets show who wrote back before the app is opened.
+        if !outcome.newReplies.isEmpty { WidgetShelf.publish(found: outcome.newReplies) }
     }
 
     /// Everyone this account has mailed, fetched afresh: the screens' copy

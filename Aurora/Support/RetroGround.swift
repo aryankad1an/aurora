@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The ground every screen stands on: the warm black paper under still film
+/// The ground every screen stands on: the black paper under still film
 /// grain, with one slow retro figure in the top corner, a seventies sun whose
 /// slits drift down through it.
 ///

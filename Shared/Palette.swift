@@ -1,43 +1,43 @@
 import SwiftUI
-import UIKit
 
 /// The app's colours, in one place.
 ///
-/// Retro motion graphics: a warm near-black ground like a dark film frame,
-/// cream ink, and the burnt orange of a seventies ident carrying every action.
+/// Retro motion graphics on pure black: neutral greys for surfaces, white ink,
+/// and the burnt orange of a seventies ident carrying every action.
 /// Colour is scarce on purpose: when almost nothing is coloured, the one thing
 /// that is (a reply, a warning, the accent on a button) is read first. The
 /// stripes are the one place the warm colours appear together, in motion.
 ///
 /// There is one appearance. The app forces dark (`RootView`), so system
-/// chrome agrees with these values everywhere.
+/// chrome agrees with these values everywhere. Shared with the widget
+/// extension, so the widgets are drawn in the same colours.
 enum Palette {
     // MARK: - Ground and surfaces
 
     /// The page. Everything else sits on this.
-    static let paper = Color(hex: 0x0D0B09)
+    static let paper = Color(hex: 0x000000)
 
     /// A raised surface: cards, panels, rows.
-    static let paperRaised = Color(hex: 0x17140F)
+    static let paperRaised = Color(hex: 0x111111)
 
     /// A recessed surface: the trough of a control, a segmented track. Lighter
     /// than the ground, not darker — on black, a well has to be lit to be seen.
-    static let paperSunken = Color(hex: 0x221E18)
+    static let paperSunken = Color(hex: 0x1C1C1C)
 
     // MARK: - Ink
 
-    /// Primary text: cream, like print on film.
-    static let ink = Color(hex: 0xF4EADB)
+    /// Primary text: near-white, so pure white is left for the brightest marks.
+    static let ink = Color(hex: 0xF5F5F5)
     /// Secondary text: captions, subtitles, the second line of a row.
-    static let inkMuted = Color(hex: 0xB3A794)
+    static let inkMuted = Color(hex: 0xA6A6A6)
     /// Tertiary text: chevrons, timestamps, anything you should be able to ignore.
-    static let inkFaint = Color(hex: 0x7C7262)
+    static let inkFaint = Color(hex: 0x6E6E6E)
 
     /// Hairline rules and card borders. Carries structure so shadows don't have to.
-    static let hairline = Color(hex: 0x2A241C)
+    static let hairline = Color(hex: 0x262626)
 
     /// The faintest rule, inside charts.
-    static let grid = Color(hex: 0x15120E)
+    static let grid = Color(hex: 0x0D0D0D)
 
     // MARK: - Accent and status
 
@@ -113,37 +113,5 @@ extension Font {
     /// among sans labels reads as a headline without needing to be large.
     static func display(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
         .system(size: size, weight: weight, design: .serif)
-    }
-}
-
-// MARK: - App-wide chrome
-
-enum AppAppearance {
-    /// Set navigation titles in the serif, so a screen's title matches the
-    /// headings and figures on the screen below it.
-    ///
-    /// Called once at launch. Doing it through the appearance proxy rather than
-    /// per-screen modifiers keeps every bar in the app in step, including the ones
-    /// pushed inside sheets.
-    static func apply() {
-        // Only the type is overridden, through the bar's own properties. Handing
-        // iOS 26 a fully configured `UINavigationBarAppearance` here made the
-        // large title stop drawing altogether — the space was reserved and left
-        // empty — so the background and materials are left to the system, which
-        // already paints them to match the page.
-        UINavigationBar.appearance().largeTitleTextAttributes = [
-            .font: serif(size: 34, weight: .bold)
-        ]
-        UINavigationBar.appearance().titleTextAttributes = [
-            .font: serif(size: 17, weight: .semibold)
-        ]
-    }
-
-    /// The system serif at a given size, falling back to the default face if the
-    /// serif descriptor isn't available.
-    private static func serif(size: CGFloat, weight: UIFont.Weight) -> UIFont {
-        let base = UIFont.systemFont(ofSize: size, weight: weight)
-        guard let descriptor = base.fontDescriptor.withDesign(.serif) else { return base }
-        return UIFont(descriptor: descriptor, size: size)
     }
 }

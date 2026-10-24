@@ -697,7 +697,7 @@ struct SharingSettingsView: View {
         } header: {
             Text("Keys")
         } footer: {
-            Text("Changing your private key cuts off everyone who imported your code until you give them the new one.")
+            Text("Changing your private key cuts off everyone who imported your code until you give them the new one. Forgot it? Change it with your recovery phrase instead.")
         }
     }
 
@@ -798,11 +798,14 @@ private struct ChangeCodeSheet: View {
     }
 }
 
-/// A new private key: every contact is encrypted again under it.
+/// A new private key: every contact is encrypted again under it. Proven by the
+/// current key, or by the recovery phrase when the key is forgotten.
 private struct ChangePrivateKeySheet: View {
     @Environment(VaultStore.self) private var vaults
     @Environment(\.dismiss) private var dismiss
     @State private var current = ""
+    @State private var phrase = ""
+    @State private var usesPhrase = false
     @State private var new = ""
     @State private var confirmation = ""
     @State private var isSaving = false
@@ -811,9 +814,33 @@ private struct ChangePrivateKeySheet: View {
     var body: some View {
         NavigationStack {
             PaperForm {
-                Section("Current Private Key") {
-                    SecureField("Current key", text: $current)
-                        .textContentType(.password)
+                if usesPhrase {
+                    Section {
+                        TextField("Recovery phrase", text: $phrase, axis: .vertical)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .font(.body.monospaced())
+                    } header: {
+                        Text("Recovery Phrase")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("The 24 characters shown when you set up, or the last new phrase you made. Dashes and spaces don't matter.")
+                            Button("Use My Current Key Instead") { switchProof() }
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Color.clay)
+                        }
+                    }
+                } else {
+                    Section {
+                        SecureField("Current key", text: $current)
+                            .textContentType(.password)
+                    } header: {
+                        Text("Current Private Key")
+                    } footer: {
+                        Button("Forgot your private key? Use your recovery phrase.") { switchProof() }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Color.clay)
+                    }
                 }
                 Section {
                     SecureField("New key", text: $new)
@@ -840,7 +867,7 @@ private struct ChangePrivateKeySheet: View {
                     }
                 }
             }
-            .navigationTitle("Change Private Key")
+            .navigationTitle(usesPhrase ? "Reset Private Key" : "Change Private Key")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(isSaving)
             .toolbar {
@@ -853,12 +880,21 @@ private struct ChangePrivateKeySheet: View {
                     } else {
                         Button("Change") { save() }
                             .fontWeight(.semibold)
-                            .disabled(current.isEmpty || PrivateKeyRule.problem(with: new, confirmation: confirmation) != nil)
+                            .disabled(!hasProof || PrivateKeyRule.problem(with: new, confirmation: confirmation) != nil)
                     }
                 }
             }
             .messageAlert("Couldn't change key", message: errorMessage) { errorMessage = nil }
         }
+    }
+
+    private var hasProof: Bool {
+        usesPhrase ? RecoveryPhrase.normalized(phrase) != nil : !current.isEmpty
+    }
+
+    private func switchProof() {
+        Haptics.tap()
+        withAnimation(Theme.Motion.snappy) { usesPhrase.toggle() }
     }
 
     private var problem: String? {
@@ -871,7 +907,8 @@ private struct ChangePrivateKeySheet: View {
         isSaving = true
         Task {
             do {
-                try await vaults.changePrivateKey(current: current, new: new)
+                try await vaults.changePrivateKey(proof: usesPhrase ? .recoveryPhrase(phrase) : .currentKey(current),
+                                                  new: new)
                 Haptics.success()
                 dismiss()
             } catch {

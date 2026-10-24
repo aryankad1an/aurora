@@ -60,8 +60,8 @@ struct JobDetailView: View {
 
     /// All the company's contacts, sorted by display name, in one list.
     private func sortedContacts(_ job: Job) -> [Contact] {
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        return (query.isEmpty ? job.contacts : job.contacts.filter { $0.matches(query) }).sortedByName()
+        guard let search = SearchQuery(searchText) else { return job.contacts.sortedByName() }
+        return job.contacts.filter { search.matches(folded: SearchQuery.haystack($0.searchFields)) }.sortedByName()
     }
 
     /// The contacts the list shows: the Valid ones or the Invalid ones, after
@@ -141,6 +141,19 @@ struct JobDetailView: View {
                             BounceSummaryCard(count: bounces.count,
                                               message: "\(bounces.count == 1 ? "It's" : "They're") first in the list below. Open one to see why, or fix the address.") {
                                 pendingValidity = ValidityChange(bounces.map(\.contact), isValid: false)
+                            }
+                            .cardRow(top: 0, bottom: 8)
+                        }
+                    }
+
+                    // Who wrote back, before the contacts: an answer is what
+                    // this screen is most often opened to find.
+                    let replied = job.contacts.filter { $0.repliedAt != nil }
+                    if !replied.isEmpty && !selection.isSelecting {
+                        Section {
+                            CompanyRepliesCard(replied: replied,
+                                               contacted: job.contactedContacts.count) { contact in
+                                detailContact = contact
                             }
                             .cardRow(top: 0, bottom: 8)
                         }

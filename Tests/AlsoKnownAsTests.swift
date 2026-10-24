@@ -4,7 +4,8 @@ import Foundation
 //
 //   swiftc -parse-as-library -default-isolation MainActor \
 //     Aurora/Models/Job.swift Aurora/Models/FresherHiring.swift \
-//     Aurora/Models/RecipientName.swift \
+//     Aurora/Models/RecipientName.swift Aurora/Models/Search.swift \
+//     Aurora/Models/KeyRing.swift Aurora/Models/Sealing.swift Aurora/Support/Keychain.swift \
 //     Tests/AlsoKnownAsTests.swift -o /tmp/aka && /tmp/aka
 
 // MARK: - Stand-ins for app types these files reference

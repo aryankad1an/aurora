@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **Widgets.** *Aurora* draws the week as a striped sunset, one band a day,
+  with the reply rate, the streak, two weeks of sends and replies and the next
+  send, in every Home Screen size and on the Lock Screen. *Replies* lists who
+  wrote back. Replies found by a background check show up on them before the
+  app is opened. They hold counts, company names and repliers' names only,
+  and empty out at sign-out.
+- **Replies on a company's page**: who there wrote back, newest first, with
+  what they said; tap one to open the mail and the reply.
+- **Forgot your private key?** Settings › Sharing & Keys can reset it with the
+  recovery phrase in place of the current key.
+- **Faster search, and by every word.** "juniper chloe" finds Chloe at
+  Juniper Cloud, on the phone and in the shared catalog. Text is folded once
+  and reused instead of on every keystroke.
+- **Black, not brown.** The ground is true black, with brighter accents.
+- **Filters in a menu.** Companies' fresher and hiring-route filters moved from
+  chips to a filter button in the top bar.
+
 ## 2.1
 
 ### One queue, paused and played as a whole

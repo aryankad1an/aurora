@@ -167,7 +167,7 @@ struct ActivityView: View {
                                   onOpen: { openBatch = $0 },
                                   onRemove: { batch in mailQueue.remove(batch) { removingBatch = $0 } })
             case .bounced:
-                BouncedLane(bounced: bounced.filter { query.isEmpty || $0.contact.matches(query) || $0.company.localizedCaseInsensitiveContains(query) },
+                BouncedLane(bounced: Self.bounced(bounced, matching: query),
                             total: bounced.count,
                             onOpen: { openBounce = $0 },
                             onMark: { pendingValidity = ValidityChange($0.map(\.contact), isValid: false) },
@@ -197,12 +197,13 @@ struct ActivityView: View {
     /// first — right for every lane but Replied, which is a list of answers and
     /// runs on when they arrived.
     private static func feed(_ entries: [ActivityEntry], lane: Lane, query: String) -> [ActivityEntry] {
+        // Folded once for the whole feed, not once per entry.
+        let search = SearchQuery(query)
         let matching = entries.filter { entry in
             if lane == .replied, !entry.contact.hasReplied { return false }
-            guard !query.isEmpty else { return true }
-            return entry.company.localizedCaseInsensitiveContains(query)
-                || entry.contact.matches(query)
-                || (entry.contact.sentSubject?.localizedCaseInsensitiveContains(query) ?? false)
+            guard let search else { return true }
+            return search.matches(entry.company, entry.contact.name, entry.contact.email,
+                                  entry.contact.position, entry.contact.sentSubject)
         }
         guard lane == .replied else { return matching }
         return matching.sorted {
@@ -211,6 +212,12 @@ struct ActivityView: View {
     }
 
     private var bounced: [BouncedContact] { jobStore.bouncedContacts(from: replySync) }
+
+    /// The bounces matching `query`, by the person or their company.
+    private static func bounced(_ bounced: [BouncedContact], matching query: String) -> [BouncedContact] {
+        guard let search = SearchQuery(query) else { return bounced }
+        return bounced.filter { search.matches(folded: SearchQuery.haystack($0.contact.searchFields + [$0.company])) }
+    }
     private var bouncedCount: Int { bounced.count }
 
     /// Batches in the queue with mail still to go, for the lane's count.

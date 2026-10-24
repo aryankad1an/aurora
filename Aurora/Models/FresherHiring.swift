@@ -259,9 +259,7 @@ struct CompanySource: Identifiable, Decodable, Equatable, Hashable {
 
     /// Whether this answers a (trimmed, non-empty) search.
     func matches(_ query: String) -> Bool {
-        [role, location, batch, sourceLabel, url, packageText, hiringRoute?.title]
-            .compactMap { $0 }
-            .contains { $0.localizedCaseInsensitiveContains(query) }
+        SearchQuery(query)?.matches(role, location, batch, sourceLabel, url, packageText, hiringRoute?.title) ?? false
     }
 }
 

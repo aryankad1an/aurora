@@ -42,6 +42,9 @@ final class JobStore {
     /// True when the last full load failed, so an empty list can say it couldn't
     /// be fetched rather than that there's nothing in it.
     private(set) var lastLoadFailed = false
+    /// True once a full load has finished for this account, so a summary of
+    /// it (the widgets') isn't taken from the empty lists before the first.
+    private(set) var hasLoaded = false
     var errorMessage: String?
 
     // MARK: - Catalog paging
@@ -111,6 +114,11 @@ final class JobStore {
     /// address or domain happens here. Fetched on first need (a search, an
     /// address typed) and dropped whenever the contacts change.
     @ObservationIgnored private var directory: Task<[(companyID: String, contact: Contact)], Error>?
+
+    /// The directory folded for search (`SearchQuery`), built off the main
+    /// thread once per directory fetch rather than re-folded per keystroke.
+    @ObservationIgnored private var directoryIndex: (source: Task<[(companyID: String, contact: Contact)], Error>,
+                                                     index: Task<[(companyID: String, text: String)], Never>)?
 
     /// Told the old and new name when a company is renamed (an edit, or the undo
     /// of one), so what's filed under the name — the personalised line — follows.
@@ -225,9 +233,7 @@ final class JobStore {
         guard await Task.debounce(.milliseconds(250)) else { return }
 
         do {
-            let matched = await companyIDs(withContactsMatching: trimmed)
-            guard !Task.isCancelled else { return }
-            var results = try await SupabaseAPI.searchCompanies(query: trimmed, contactCompanyIDs: matched)
+            var results = try await serverSearch(trimmed)
             guard !Task.isCancelled else { return }
             overlaySends(latestSendByContact, into: &results)
             searchQuery = trimmed
@@ -241,8 +247,27 @@ final class JobStore {
     /// Companies matching `query` by their own fields or a contact's, for a
     /// picker: the Companies tab's search is left as it is.
     func companiesMatching(_ query: String) async throws -> [Job] {
-        try await SupabaseAPI.searchCompanies(query: query,
-                                              contactCompanyIDs: await companyIDs(withContactsMatching: query))
+        try await serverSearch(query)
+    }
+
+    /// The server's matches by the company's own fields, and the companies of
+    /// the contacts matched here. The two run at once: the server answers by
+    /// name while the phone checks the contacts, instead of the name search
+    /// waiting on the whole directory first.
+    private func serverSearch(_ query: String) async throws -> [Job] {
+        async let byFields = SupabaseAPI.searchCompanies(query: query)
+        let matched = await companyIDs(withContactsMatching: query)
+        var results = try await byFields
+        let missing = matched.subtracting(results.map(\.id))
+        guard !missing.isEmpty else { return results }
+        results += try await SupabaseAPI.companies(ids: Set(missing.sorted().prefix(SupabaseAPI.defaultPageSize)))
+        return results.sortedByName()
+    }
+
+    /// Fetch and fold the contact directory ahead of a search — called when a
+    /// search field opens, so the first letter typed doesn't wait on it.
+    func prepareSearch() {
+        Task { _ = try? await directorySearchIndex() }
     }
 
     /// Whether the company is on this user's Home.
@@ -927,6 +952,7 @@ final class JobStore {
             jobs = []; allCompanies = []; detachedCompanies = [:]; searchResults = []
             activity = []; sends = []; sources = [:]; companyLinks = [:]; scopeCounts = [:]; catalogScope = .all
             companyOffset = 0; hasMoreCompanies = true; scopePages = [:]
+            hasLoaded = false
             return
         }
 
@@ -989,6 +1015,7 @@ final class JobStore {
         apply(sends: sends)
         rebuildActivity(from: sends)
         lastLoadFailed = false
+        hasLoaded = true
         warmScopes()
     }
 
@@ -1385,13 +1412,27 @@ final class JobStore {
     /// `query`. Empty when the directory can't be fetched: the search still
     /// finds companies by their own fields.
     private func companyIDs(withContactsMatching query: String) async -> Set<String> {
-        guard let entries = try? await contactDirectory() else { return [] }
-        return Set(entries.lazy.filter { entry in
-            let contact = entry.contact
-            return contact.name.localizedCaseInsensitiveContains(query)
-                || contact.email.localizedCaseInsensitiveContains(query)
-                || contact.position.localizedCaseInsensitiveContains(query)
-        }.map(\.companyID))
+        guard let search = SearchQuery(query), let index = try? await directorySearchIndex() else { return [] }
+        // Thousands of contacts: matched off the main thread, so typing stays smooth.
+        return await Task.detached(priority: .userInitiated) {
+            Set(index.lazy.filter { search.matches(folded: $0.text) }.map(\.companyID))
+        }.value
+    }
+
+    /// The contact directory as folded search text, one entry per contact.
+    /// Built once per directory fetch; a newer fetch builds it again.
+    private func directorySearchIndex() async throws -> [(companyID: String, text: String)] {
+        let entries = try await contactDirectory()
+        guard let source = directory else { return Self.fold(entries.map { ($0.companyID, $0.contact.searchFields) }) }
+        if let cached = directoryIndex, cached.source == source { return await cached.index.value }
+        let fields = entries.map { ($0.companyID, $0.contact.searchFields) }
+        let index = Task.detached(priority: .userInitiated) { Self.fold(fields) }
+        directoryIndex = (source, index)
+        return await index.value
+    }
+
+    nonisolated private static func fold(_ fields: [(String, [String?])]) -> [(companyID: String, text: String)] {
+        fields.map { (companyID: $0.0, text: SearchQuery.haystack($0.1)) }
     }
 
     /// The companies with a contact at `domain`.

@@ -101,7 +101,11 @@ enum SupabaseAPI {
 
         // 1. Companies by name or sector — and by domain, when the query is one.
         // 2. Companies by another name they go by. Both in flight at once.
-        async let byCompany = searchCompanyRows(pattern: pattern, domain: MailDomain.clean(cleaned), limit: limit)
+        // Several words also match one by one, in any order, as the phone's
+        // own search does: "cloud juniper" finds Juniper Cloud.
+        let words = cleaned.split(whereSeparator: \.isWhitespace).map(String.init)
+        async let byCompany = searchCompanyRows(pattern: pattern, words: words.count > 1 ? words : [],
+                                                domain: MailDomain.clean(cleaned), limit: limit)
         async let byOtherName = companiesKnownAs(cleaned, limit: limit)
         var foundCompanies = try await byCompany
         let knownAs = await byOtherName
@@ -131,9 +135,13 @@ enum SupabaseAPI {
     /// The domains column only exists once its migration has run; without it
     /// the filter is rejected, so this retries without it rather than failing
     /// the whole search.
-    private static func searchCompanyRows(pattern: String, domain: String?, limit: Int) async throws -> [Job] {
+    private static func searchCompanyRows(pattern: String, words: [String] = [], domain: String?,
+                                          limit: Int) async throws -> [Job] {
         func request(includingDomains: Bool) -> URLRequest {
             var filters = ["name.ilike.\(pattern)", "sector.ilike.\(pattern)"]
+            for column in ["name", "sector"] where !words.isEmpty {
+                filters.append("and(" + words.map { "\(column).ilike.*\($0)*" }.joined(separator: ",") + ")")
+            }
             if includingDomains, let domain { filters.append("domains.cs.{\(domain)}") }
             return makeRequest(path: "companies", query: [
                 URLQueryItem(name: "select", value: "*,recruiters(*)"),
@@ -196,6 +204,10 @@ enum SupabaseAPI {
     }
 
     /// Companies by id, with their contacts. One request; none when `ids` is empty.
+    static func companies(ids: Set<String>) async throws -> [Job] {
+        try await fetchCompanies(ids: ids)
+    }
+
     private static func fetchCompanies(ids: Set<String>) async throws -> [Job] {
         guard !ids.isEmpty else { return [] }
         let request = makeRequest(path: "companies", query: [

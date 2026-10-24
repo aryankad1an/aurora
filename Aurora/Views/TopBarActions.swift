@@ -36,20 +36,39 @@ extension View {
         onCancel: (() -> Void)? = nil,
         @ViewBuilder more: () -> More
     ) -> some View {
-        modifier(TopBarActions(primary: primary, isHidden: isHidden,
-                               onCancel: onCancel, more: more()))
+        modifier(TopBarActions<More, EmptyView>(primary: primary, isHidden: isHidden,
+                                                onCancel: onCancel, more: more()))
+    }
+
+    /// The same bar with a filter menu at the front of the capsule, for a list
+    /// that can be cut down: its choices live there rather than as chips over
+    /// the list. The glyph fills in clay while `isFiltering`, so a cut-down list
+    /// never passes for the whole one.
+    func topBarActions<More: View, Filter: View>(
+        _ primary: TopBarPrimary?,
+        isHidden: Bool = false,
+        onCancel: (() -> Void)? = nil,
+        isFiltering: Bool,
+        @ViewBuilder filter: () -> Filter,
+        @ViewBuilder more: () -> More
+    ) -> some View {
+        modifier(TopBarActions(primary: primary, isHidden: isHidden, onCancel: onCancel,
+                               more: more(), filter: filter(), isFiltering: isFiltering))
     }
 }
 
-private struct TopBarActions<More: View>: ViewModifier {
+private struct TopBarActions<More: View, Filter: View>: ViewModifier {
     let primary: TopBarPrimary?
     let isHidden: Bool
     let onCancel: (() -> Void)?
     let more: More
+    var filter: Filter?
+    var isFiltering = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Bumped on every arrival; each glyph bounces when its own count changes,
     /// the menu's a beat after the verb's, so the ripple travels.
+    @State private var filterArrival = 0
     @State private var primaryArrival = 0
     @State private var moreArrival = 0
 
@@ -73,6 +92,9 @@ private struct TopBarActions<More: View>: ViewModifier {
                             }
                             .accessibilityLabel("Cancel")
                         }
+                    }
+                    if let filter, !isEditing {
+                        ToolbarItem(placement: .topBarTrailing) { filterMenu(filter) }
                     }
                     if let primary {
                         ToolbarItem(placement: .topBarTrailing) { primaryButton(primary) }
@@ -102,6 +124,20 @@ private struct TopBarActions<More: View>: ViewModifier {
         .accessibilityLabel(primary.title)
     }
 
+    private func filterMenu(_ filter: Filter) -> some View {
+        Menu {
+            filter
+        } label: {
+            Image(systemName: isFiltering ? "line.3.horizontal.decrease.circle.fill"
+                                          : "line.3.horizontal.decrease")
+                .foregroundStyle(isFiltering ? AnyShapeStyle(.clay) : AnyShapeStyle(.primary))
+                .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.byLayer)))
+                .symbolEffect(.bounce.up.byLayer, options: .nonRepeating, value: filterArrival)
+        }
+        .accessibilityLabel("Filter")
+        .accessibilityValue(isFiltering ? "On" : "Off")
+    }
+
     private var moreMenu: some View {
         Menu {
             more
@@ -114,8 +150,12 @@ private struct TopBarActions<More: View>: ViewModifier {
 
     private func arrive() {
         guard !reduceMotion else { return }
-        primaryArrival += 1
         Task {
+            if filter != nil {
+                filterArrival += 1
+                try? await Task.sleep(for: Self.ripple)
+            }
+            primaryArrival += 1
             try? await Task.sleep(for: primary == nil ? .zero : Self.ripple)
             moreArrival += 1
         }

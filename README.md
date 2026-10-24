@@ -80,10 +80,12 @@ See [CHANGELOG.md](CHANGELOG.md) for everything in this release and in 2.0.
 | **Live Activity** | While mail is sending, the Lock Screen, Notification Center and Dynamic Island show what the queue is doing ("Sending mail 4 of 6", "Connection lost · retrying in 0:05"), a progress bar, and who the mail is going to, at which company. One activity follows the queue through pauses and retries, and a scheduled batch shows a countdown, then a Send Now button when its time comes. A long reply check gets one too, ending with what it found. |
 | **Reply tracking** | Each send records its Gmail thread. The app reads those threads to find replies, skipping auto-replies and bounces. It also checks by itself with the app closed, and every reply or bounce found that way arrives as a notification. |
 | **Bounce detection** | Undelivered mail is found in its thread or in the inbox, matched to the exact send by the `Message-ID` the failure notice quotes, and listed with the reason its status code gives. Answers saying the address is no longer in service, or the person has left, count too. Any sent mail can be checked on its own from Activity. |
+| **Widgets** | **Aurora** shows the week as a striped sunset, one band a day and brighter the more mail went, with the reply rate, the streak, the last two weeks' sends and replies, and the next send. It comes in every Home Screen size and on the Lock Screen (a ring, a line and a strip of text). **Replies** lists who wrote back, newest first. They show counts, company names and the names of people who replied, never an address or a mail, and empty out at sign-out. |
 | **Activity** | Every mail from queued to answered, in four lanes: Queued (the mail queue, with every queue control), Sent (by day), Replied and Bounced. The Bounced lane lists bounced addresses, with a button to mark each (or all) invalid; the tab shows a badge while any are waiting. |
-| **Look** | Retro motion graphics: a warm black ground under film grain, cream type and one burnt-orange accent, with a seventies striped sun drifting faintly in the corner of every screen. The launch screen is an ident: the sun rises over a horizon while four stripes (mustard, orange, vermilion, rust) run out under it as the launch loads, then it lifts away. |
+| **Look** | Retro motion graphics: a true black ground under film grain, cream type and one orange accent, with a seventies striped sun drifting faintly in the corner of every screen. The launch screen is an ident: the sun rises over a horizon while four stripes (mustard, orange, vermilion, rust) run out under it as the launch loads, then it lifts away. |
 | **Curtains** | The big moments play as short full-screen motion graphics over film grain: the screen washes over, a figure acts in the middle, a serif title rises in, and the curtain lifts away. Sending drops envelopes onto a stack while its count ticks up under "Queued" (or "Scheduled", with the time). While writing help works, the sheet sits on the same grainy ground, and the splash and sign-in screen open on it. A tap lifts a curtain early; Reduce Motion fades it in and out. |
-| **Fresher hiring** | Every company in the Fresher Hiring Ledger is flagged, with a cap on its logo. Filter chips over Companies list freshers, ones hiring now, and each hiring route (off-campus, campus & intern, unclear), with counts. A company's screen shows its website and careers page, the package its sources state, the routes it hires freshers by, when it usually opens, batches and roles. |
+| **Fresher hiring** | Every company in the Fresher Hiring Ledger is flagged, with a cap on its logo. The filter menu in Companies' top bar lists freshers, ones hiring now, and each hiring route (off-campus, campus & intern, unclear), with counts. A company's screen shows its website and careers page, the package its sources state, the routes it hires freshers by, when it usually opens, batches and roles. |
+| **Replies on a company** | A company's page lists who there wrote back, newest first, with how many of the people contacted replied. Tap one to read the reply. |
 | **Company links** | A company's LinkedIn, X and Facebook pages, shown as chips on its page and edited in Edit Company. They belong to your vault and are sealed under its key like its contacts, so only accounts holding the key can read them. |
 | **Sources** | Each fact rests on a source: a job post, an offer write-up, a placement page, each with its link, date and the package it states, listed newest first. Any source can be opened, edited, added or marked invalid (shared, with Undo); invalid ones stop counting toward the stated package. |
 | **Also known as** | A company's brands, former names and the name it trades under (Eternal: Zomato, Blinkit, District, Hyperpure). They're listed under its name, searching any of them finds it ("blink" turns up Eternal, with "Also known as Blinkit" on the card), and Edit Company adds or removes them. |
@@ -104,7 +106,8 @@ Cloud OAuth client for iOS.
 4. Run on a simulator or device. Scheduled sends ask for notification
    permission the first time you schedule something. The `AuroraLive` widget
    extension (`com.realaryan.JTracker.LiveActivity`) is signed with the same
-   team; on a first device build, let automatic signing register its app ID.
+   team; on a first device build, let automatic signing register its app ID
+   and the App Group `group.com.realaryan.JTracker` the widgets read from.
 
 ### Database schema
 
@@ -875,7 +878,8 @@ can't read it.
   keep access) or the private key. A key change re-seals every contact under
   a new data key, along with the vault's company links, so anyone who
   imported the old one loses access and is shown the import as needing the
-  new key. The change survives being interrupted.
+  new key. The change survives being interrupted. A forgotten private key
+  can be reset the same way with the account's recovery phrase in its place.
 - **Search.** The server can't search sealed fields, so the app keeps an
   in-memory directory of the contacts it can read for search and
   domain lookup.
@@ -929,6 +933,7 @@ an importer, an outsider, the bare key and the secret key.
 | Mail | Gmail API via `GmailAuthStore`: OAuth with PKCE, send, and read-only mailbox queries |
 | Greetings | `RecipientName`, with `MailboxNames` for names found in your mail |
 | Live Activity | The `AuroraLive` widget extension, drawn from `SendActivityAttributes` in `Shared/`; `SendLiveActivity` in the app starts, updates and ends it |
+| Widgets | `WidgetPublisher` works out a `WidgetSnapshot` (in `Shared/`) from what the app has loaded and leaves it in the App Group; the `AuroraLive` extension's `AuroraPulseWidget` and `AuroraRepliesWidget` draw it |
 | Database sign-in | `DatabaseSession`: a Supabase session made from the Google sign-in, attached to every request |
 | On the phone | Keychain for the Google and Supabase refresh tokens; JSON files in Documents for the mail queue, bounces, found names and a few cached lists (`JSONFile`) |
 
@@ -996,8 +1001,15 @@ swiftc -parse-as-library Aurora/Models/ReplyCheckpoint.swift \
   Tests/ReplyCheckCoverageTests.swift -o /tmp/cc && /tmp/cc
 swiftc -parse-as-library -default-isolation MainActor \
   Aurora/Models/Job.swift Aurora/Models/FresherHiring.swift \
-  Aurora/Models/RecipientName.swift Aurora/Models/Sealing.swift Aurora/Models/KeyRing.swift \
+  Aurora/Models/RecipientName.swift Aurora/Models/Search.swift \
+  Aurora/Models/KeyRing.swift Aurora/Models/Sealing.swift Aurora/Support/Keychain.swift \
   Tests/AlsoKnownAsTests.swift -o /tmp/aka && /tmp/aka
+swiftc -parse-as-library -default-isolation MainActor \
+  Aurora/Models/Job.swift Aurora/Models/FresherHiring.swift \
+  Aurora/Models/RecipientName.swift Aurora/Models/Search.swift \
+  Aurora/Models/KeyRing.swift Aurora/Models/Sealing.swift Aurora/Support/Keychain.swift \
+  Tests/SearchTests.swift -o /tmp/search && /tmp/search
+swiftc -parse-as-library Shared/WidgetSnapshot.swift Tests/WidgetSnapshotTests.swift -o /tmp/ws && /tmp/ws
 swiftc -parse-as-library Aurora/Models/Sealing.swift Aurora/Models/KeyRing.swift \
   Tests/SealingTests.swift -o /tmp/seal && /tmp/seal
 swiftc -parse-as-library -default-isolation MainActor \
@@ -1043,7 +1055,7 @@ Aurora/
 ├─ Views/                      SwiftUI screens
 ├─ Support/                    Design system, palette, keychain, JSON files, haptics
 └─ Assets.xcassets/            App icons and colours
-AuroraLive/                    Widget extension: the mail queue's Live Activity
+AuroraLive/                    Widget extension: the Home and Lock Screen widgets and the mail queue's Live Activity
 Shared/                        Code compiled into both the app and the extension
 Tests/                         Standalone Swift test programs
 scripts/fresher_ledger/        Fresher Hiring Ledger import and website crawl (Python)

@@ -22,13 +22,8 @@ struct TemplatesView: View {
     /// because "the one that mentions the referral" is how you actually remember
     /// a template you wrote weeks ago.
     private var filtered: [MailTemplate] {
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return store.templates }
-        return store.templates.filter {
-            $0.name.localizedCaseInsensitiveContains(query)
-                || $0.subject.localizedCaseInsensitiveContains(query)
-                || $0.content.localizedCaseInsensitiveContains(query)
-        }
+        guard let search = SearchQuery(searchText) else { return store.templates }
+        return store.templates.filter { search.matches($0.name, $0.subject, $0.content) }
     }
 
     var body: some View {

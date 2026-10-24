@@ -2,13 +2,14 @@ import SwiftUI
 
 /// The Companies tab: the full shared catalog. This is where companies are added,
 /// edited, deleted (all upstream, for every user), and tracked onto your Home.
-/// By default only companies with at least one contact are shown; a "Show empty"
-/// toggle reveals the rest.
+/// By default only companies with at least one contact are shown; the filter
+/// menu in the top bar reveals the rest, or narrows the list to fresher hiring.
 struct CompaniesView: View {
     @Environment(JobStore.self) private var jobStore
     @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var searchText = ""
+    @State private var isSearchPresented = false
     @State private var showEmpty = false
     @State private var selection = ListSelection<String>()
     @State private var confirmingDelete = false
@@ -48,14 +49,17 @@ struct CompaniesView: View {
         return showEmpty || scope != .all ? jobStore.allCompanies : jobStore.allCompanies.filter { !$0.contacts.isEmpty }
     }
 
-    /// The filter chips show once the database can filter by fresher hiring.
+    /// The fresher scopes are offered once the database can filter by them.
     private var showsScopes: Bool { !SupabaseAPI.fresherColumnsMissing }
+
+    /// Anything other than the plain catalog: the filter glyph fills in, and
+    /// the line over the list offers to clear it.
+    private var isFiltering: Bool { jobStore.catalogScope != .all || showEmpty }
 
     var body: some View {
         // Filtered once per render: the rows, the empty check and the paging
         // trigger all read the same array instead of each re-filtering the catalog.
         let rows = filtered
-        let showsList = !jobStore.allCompanies.isEmpty && !rows.isEmpty
         return NavigationStack(path: $path) {
             Group {
                 if jobStore.allCompanies.isEmpty {
@@ -85,13 +89,11 @@ struct CompaniesView: View {
                         // chips update after a reply sync — lost the section's
                         // and spread to the screen edges.
                         Section {
-                            // The filters are the list's first row, like
-                            // Activity's lane selector: they scroll with the
-                            // content, so the title, search field and bars
-                            // behave as on every other tab. The ⋯ menu has the
-                            // same choices once they're scrolled away.
+                            // What's listed, as the list's first row: it
+                            // scrolls with the content, so the title, search
+                            // field and bars behave as on every other tab.
                             if !selection.isSelecting {
-                                filterHeader(resultCount: rows.count)
+                                statusLine(resultCount: rows.count)
                                     .listRowSeparator(.hidden)
                                     .listRowBackground(Color.clear)
                                     .listRowInsets(EdgeInsets())
@@ -117,13 +119,6 @@ struct CompaniesView: View {
                     .scrollDismissesKeyboard(.immediately)
                 }
             }
-            // An empty or loading screen doesn't scroll, so its header can sit
-            // over it — a scope is still a tap away from an empty result.
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if !showsList && !selection.isSelecting {
-                    filterHeader(resultCount: 0)
-                }
-            }
             .paperScreen()
             .navigationTitle("Companies")
             .navigationBarTitleDisplayMode(.large)
@@ -133,13 +128,20 @@ struct CompaniesView: View {
                 // ignoring touches for a few seconds.
                 JobDetailView(jobID: companyID)
             }
-            .searchable(text: $searchText, prompt: "Search companies, sectors, people")
+            .searchable(text: $searchText, isPresented: $isSearchPresented,
+                        prompt: "Search companies, sectors, people")
+            // Contacts are matched on the phone: have them ready by the time
+            // the first letter is typed.
+            .onChange(of: isSearchPresented) { _, presented in
+                if presented { jobStore.prepareSearch() }
+            }
             // Cancelled and restarted per keystroke, which is what debounces it.
             .task(id: query) { await jobStore.searchCompanies(query: query) }
             .topBarActions(
                 TopBarPrimary(title: "Add Company", systemImage: "plus") { isAdding = true },
-                isHidden: selection.isSelecting
-            ) { menu }
+                isHidden: selection.isSelecting,
+                isFiltering: isFiltering
+            ) { filterMenu } more: { menu }
             .selectionActions(
                 selection,
                 all: rows.map(\.id),
@@ -173,60 +175,94 @@ struct CompaniesView: View {
         }
     }
 
-    /// The filter chips over a line saying what's listed, with the empty
-    /// companies' switch beside it rather than only in the ⋯ menu.
-    private func filterHeader(resultCount: Int) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if showsScopes {
-                ScopeBar(selection: jobStore.catalogScope, counts: jobStore.scopeCounts) { scope in
-                    Haptics.select()
-                    Task { await jobStore.setScope(scope) }
-                }
-            }
-            // One line beside the switch, or stacked at large text sizes, where
-            // "127 tracked on Home" was cut to "127 t…".
-            let stacked = typeSize.isAccessibilitySize
-            (stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
-                     : AnyLayout(HStackLayout(spacing: 10))) {
-                Group {
-                    if !query.isEmpty {
-                        Text(resultCount == 1 ? "1 match" : "\(resultCount.formatted()) matches")
-                    } else {
-                        HStack(spacing: 6) {
-                            Image(systemName: "pin.fill")
-                            Text("\(jobStore.jobs.count.formatted()) tracked on Home")
-                        }
+    /// A line saying what's listed, with a way back to the whole catalog
+    /// beside it while a filter is on.
+    private func statusLine(resultCount: Int) -> some View {
+        // One line beside the button, or stacked at large text sizes, where
+        // "127 tracked on Home" was cut to "127 t…".
+        let stacked = typeSize.isAccessibilitySize
+        return (stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+                        : AnyLayout(HStackLayout(spacing: 10))) {
+            Group {
+                if !query.isEmpty {
+                    Text(resultCount == 1 ? "1 match" : "\(resultCount.formatted()) matches")
+                } else if jobStore.catalogScope != .all {
+                    let scope = jobStore.catalogScope
+                    HStack(spacing: 6) {
+                        Image(systemName: scope.systemImage)
+                        Text("\(scope.title) · \((jobStore.scopeCounts[scope] ?? resultCount).formatted())")
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "pin.fill")
+                        Text("\(jobStore.jobs.count.formatted()) tracked on Home")
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.inkMuted)
-                .lineLimit(2)
-                .frame(maxWidth: stacked ? nil : .infinity, alignment: .leading)
+            }
+            .font(.caption)
+            .foregroundStyle(.inkMuted)
+            .lineLimit(2)
+            .frame(maxWidth: stacked ? nil : .infinity, alignment: .leading)
 
-                if query.isEmpty && jobStore.catalogScope == .all {
-                    // Plain text, not a bordered toggle button: its chrome made
-                    // this row taller than the line it sits beside.
-                    Button {
-                        Haptics.select()
-                        withAnimation(Theme.Motion.snappy) { showEmpty.toggle() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: showEmpty ? "tray.full.fill" : "tray")
-                            Text("Show empty")
-                        }
-                        .font(.caption.weight(.semibold))
-                            .foregroundStyle(showEmpty ? Color.clay : Color.inkMuted)
+            if isFiltering {
+                // Plain text, not a bordered button: its chrome made this row
+                // taller than the line it sits beside.
+                Button(action: clearFilters) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark.circle.fill")
+                        Text("Clear Filter")
                     }
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .accessibilityAddTraits(showEmpty ? .isSelected : [])
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.clay)
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+            }
+        }
+        .padding(.horizontal, Theme.Space.gutter)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func clearFilters() {
+        Haptics.select()
+        withAnimation(Theme.Motion.snappy) { showEmpty = false }
+        if jobStore.catalogScope != .all {
+            Task { await jobStore.setScope(.all) }
+        }
+    }
+
+    /// The bar's filter menu: the fresher scopes, each with how many companies
+    /// it holds, then whether companies with nobody on file are listed.
+    @ViewBuilder
+    private var filterMenu: some View {
+        if showsScopes {
+            // Toggles rather than an inline picker: a menu drops a picker
+            // item's subtitle, and the count is the point of the subtitle.
+            Section("Show") {
+                ForEach(CatalogScope.allCases) { scope in
+                    Toggle(isOn: Binding(get: { jobStore.catalogScope == scope },
+                                         set: { on in
+                                             guard on else { return }
+                                             Haptics.select()
+                                             Task { await jobStore.setScope(scope) }
+                                         })) {
+                        Label(scope.title, systemImage: scope.systemImage)
+                        if let count = jobStore.scopeCounts[scope] {
+                            Text(count == 1 ? "1 company" : "\(count.formatted()) companies")
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, Theme.Space.gutter)
-            .padding(.top, showsScopes ? 0 : 8)
-            .padding(.bottom, 8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        Section {
+            // A scope already lists its empty companies (see `filtered`).
+            Toggle(isOn: Binding(get: { showEmpty },
+                                 set: { on in withAnimation(Theme.Motion.snappy) { showEmpty = on } })) {
+                Label("Show Empty Companies", systemImage: "tray")
+            }
+            .disabled(jobStore.catalogScope != .all)
+        }
     }
 
     /// The card's pin button and the leading swipe: onto Home, or off it.
@@ -242,7 +278,8 @@ struct CompaniesView: View {
         }
     }
 
-    /// Adding a company is the bar's own `+`; the menu has the rest.
+    /// Adding a company is the bar's own `+` and filtering its own menu; this
+    /// has the rest.
     @ViewBuilder
     private var menu: some View {
         Button { isAddingContact = true } label: {
@@ -252,24 +289,6 @@ struct CompaniesView: View {
             Label("Select", systemImage: "checkmark.circle")
         }
         .disabled(jobStore.allCompanies.isEmpty)
-        Divider()
-        if showsScopes {
-            // The chips' choices again, for VoiceOver and Switch Control users
-            // who'd rather not hunt along a scrolling row.
-            Picker(selection: Binding(get: { jobStore.catalogScope },
-                                      set: { scope in Task { await jobStore.setScope(scope) } })) {
-                ForEach(CatalogScope.allCases) { scope in
-                    Label(scope.title, systemImage: scope.systemImage).tag(scope)
-                }
-            } label: {
-                Label("Show", systemImage: "line.3.horizontal.decrease.circle")
-            }
-            .pickerStyle(.menu)
-        }
-        Toggle(isOn: $showEmpty) {
-            Label("Show empty companies", systemImage: "tray")
-        }
-        .disabled(jobStore.catalogScope != .all)
     }
 
     /// The row whose appearance fetches the next page: ten from the end.
@@ -433,7 +452,7 @@ struct CompaniesView: View {
                      ? "No company, sector or contact matches “\(query)”."
                      : "No company in “\(jobStore.catalogScope.title)” matches “\(query)”.")
             } else {
-                Text("No companies with contacts. Turn on “Show empty” to see the rest.")
+                Text("No companies with contacts. Turn on “Show Empty Companies” in the filter menu to see the rest.")
             }
         } actions: {
             if !query.isEmpty && jobStore.catalogScope != .all {
@@ -457,70 +476,5 @@ struct CompaniesView: View {
             }
             .secondaryButton()
         }
-    }
-}
-
-/// The row of filter chips over the catalog: All, then the fresher-hiring
-/// scopes, each with how many companies it holds.
-private struct ScopeBar: View {
-    let selection: CatalogScope
-    let counts: [CatalogScope: Int]
-    let onSelect: (CatalogScope) -> Void
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(CatalogScope.allCases) { scope in
-                        chip(scope)
-                            .id(scope)
-                    }
-                }
-                .padding(.horizontal, Theme.Space.gutter)
-                .padding(.vertical, 8)
-            }
-            .onChange(of: selection) { _, scope in
-                withAnimation(Theme.Motion.snappy) { proxy.scrollTo(scope, anchor: .center) }
-            }
-        }
-    }
-
-    private func chip(_ scope: CatalogScope) -> some View {
-        let isOn = scope == selection
-        let count = counts[scope]
-        return Button {
-            guard !isOn else { return }
-            onSelect(scope)
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: scope.systemImage)
-                    .font(.caption2.weight(.semibold))
-                Text(scope.title)
-                    .font(.footnote.weight(.semibold))
-                if let count {
-                    Text(count.formatted())
-                        .font(.caption2.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(isOn ? Color.white.opacity(0.8) : Color.inkFaint)
-                        .contentTransition(.numericText())
-                }
-            }
-            .foregroundStyle(isOn ? Color.white : Color.ink)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background {
-                if isOn {
-                    Capsule().fill(Color.clay)
-                } else {
-                    Capsule().fill(Color.paperRaised)
-                        .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
-                }
-            }
-            .contentShape(.capsule)
-        }
-        .buttonStyle(BouncyPress(scale: 0.94))
-        .animation(Theme.Motion.snappy, value: isOn)
-        .accessibilityLabel(count.map { "\(scope.title), \($0)" } ?? scope.title)
-        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }

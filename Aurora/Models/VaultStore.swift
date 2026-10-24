@@ -268,10 +268,7 @@ final class VaultStore {
     /// Unlock with the recovery phrase: everything comes back.
     func unlock(recoveryPhrase typed: String) async throws {
         guard let email, let vault = ownVault else { throw VaultError.notSetUp }
-        guard let phrase = RecoveryPhrase.normalized(typed), let salt = vault.recoverySalt,
-              let sealed = vault.sealedAccountKey,
-              let unlocking = await Self.derive(phrase, salt: salt, rounds: vault.recoveryRounds),
-              let accountKey = try? Sealing.unwrap(sealed, with: unlocking, context: Sealing.accountContext(email: email))
+        guard let accountKey = await Self.accountKey(fromPhrase: typed, vault: vault, email: email)
         else { throw VaultError.wrongRecoveryPhrase }
         AccountKeychain.save(accountKey, email: email)
         phase = .working("Unlocking…")
@@ -386,19 +383,44 @@ final class VaultStore {
         ownVault = try await VaultAPI.vault(ownerEmail: email)
     }
 
+    /// What proves a private-key change is the owner's: the current key, or —
+    /// when that's forgotten — the recovery phrase.
+    enum KeyChangeProof {
+        case currentKey(String)
+        case recoveryPhrase(String)
+    }
+
     /// Change the private key, and cut off everyone who imported with the old
     /// one: every contact is sealed again under a new key, which only the new
     /// private key opens. They see the code's contacts go until they're given
     /// the new private key.
     func changePrivateKey(current: String, new: String) async throws {
+        try await changePrivateKey(proof: .currentKey(current), new: new)
+    }
+
+    /// The same change, proven by the current key or by the recovery phrase.
+    /// The phrase works because it opens the account key, which already holds
+    /// this account's way into its vault: the old private key is never needed
+    /// to re-seal the contacts, only to show the change is wanted.
+    func changePrivateKey(proof: KeyChangeProof, new: String) async throws {
         guard let email, let accountKey = KeyRing.shared.accountKey,
               let vault = try await VaultAPI.vault(ownerEmail: email),
               let keyID = vault.keyID, let sealedKey = vault.sealedKey, let salt = vault.kdfSalt
         else { throw VaultError.notSetUp }
-        guard let unlocking = await Self.derive(current, salt: salt, rounds: vault.kdfRounds),
-              (try? Sealing.unwrap(sealedKey, with: unlocking,
-                                   context: Sealing.vaultKeyContext(vaultID: vault.id, keyID: keyID))) != nil
-        else { throw VaultError.wrongPrivateKey }
+        switch proof {
+        case .currentKey(let current):
+            guard let unlocking = await Self.derive(current, salt: salt, rounds: vault.kdfRounds),
+                  (try? Sealing.unwrap(sealedKey, with: unlocking,
+                                       context: Sealing.vaultKeyContext(vaultID: vault.id, keyID: keyID))) != nil
+            else { throw VaultError.wrongPrivateKey }
+        case .recoveryPhrase(let typed):
+            guard let recovered = await Self.accountKey(fromPhrase: typed, vault: vault, email: email),
+                  Self.same(recovered, accountKey)
+            else { throw VaultError.wrongRecoveryPhrase }
+        }
+        // Re-sealing reads every contact with the current vault key, which the
+        // account's grant put on the key ring when the app unlocked.
+        guard KeyRing.shared.vaultKey(keyID) != nil else { throw VaultError.notSetUp }
 
         let newKeyID = UUID().uuidString.lowercased()
         let newKey = Sealing.newKey()
@@ -611,6 +633,19 @@ final class VaultStore {
         }
         return (["key_id": keyID, "kdf_salt": salt, "kdf_rounds": Sealing.defaultRounds,
                  "sealed_key": wrapped ?? NSNull()], await recovery)
+    }
+
+    /// The account key the recovery phrase opens, or nil when it doesn't fit.
+    private static func accountKey(fromPhrase typed: String, vault: VaultRow, email: String) async -> SymmetricKey? {
+        guard let phrase = RecoveryPhrase.normalized(typed), let salt = vault.recoverySalt,
+              let sealed = vault.sealedAccountKey,
+              let unlocking = await derive(phrase, salt: salt, rounds: vault.recoveryRounds)
+        else { return nil }
+        return try? Sealing.unwrap(sealed, with: unlocking, context: Sealing.accountContext(email: email))
+    }
+
+    nonisolated private static func same(_ a: SymmetricKey, _ b: SymmetricKey) -> Bool {
+        a.withUnsafeBytes { Data($0) } == b.withUnsafeBytes { Data($0) }
     }
 
     private static func recoveryBody(_ accountKey: SymmetricKey, phrase: String, email: String) async -> [String: Any] {

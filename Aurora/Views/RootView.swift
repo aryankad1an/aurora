@@ -90,9 +90,13 @@ struct RootView: View {
         .environment(replySync)
         .environment(selectionChrome)
         .environment(vaultStore)
-        // Signed out: the keys leave memory with the account.
+        // Signed out: the keys leave memory with the account, and the widgets
+        // forget it.
         .onChange(of: gmailAuth.connectedEmail) { _, email in
-            if email == nil { vaultStore.signOut() }
+            if email == nil {
+                vaultStore.signOut()
+                WidgetShelf.signOut()
+            }
         }
         // Leaving the app: the phone checks for replies by itself until it's back.
         .onChange(of: scenePhase) { _, phase in
@@ -171,6 +175,8 @@ struct RootView: View {
         } else {
             tabs
                 .transition(.opacity)
+                // The home-screen and Lock Screen widgets' copy of the account.
+                .background { WidgetPublisher() }
                 // Replies arrive while the app is closed, so coming back is
                 // exactly when the answer on screen is most likely to be stale.
                 .onChange(of: scenePhase) { _, phase in
@@ -359,6 +365,9 @@ struct RootView: View {
                     notifications.openedLane = lane
                 } else if url.host() == "activity" {
                     mailQueue.isOpenRequested = true
+                } else if url.host() == "home" {
+                    // The Aurora widget.
+                    selectedTab = .home
                 } else if url.host() == "writing" {
                     // The Aurora Writer shortcut's answer: aurora://writing/<request id>/done?result=…
                     ShortcutsWriter.shared.receive(url)

@@ -112,10 +112,11 @@ struct Contact: Identifiable, Decodable {
     /// Whether this contact answers a (trimmed, non-empty) search — by name,
     /// address or position. `Job.matches` runs the same test over its people.
     func matches(_ query: String) -> Bool {
-        name.localizedCaseInsensitiveContains(query)
-            || email.localizedCaseInsensitiveContains(query)
-            || position.localizedCaseInsensitiveContains(query)
+        SearchQuery(query)?.matches(name, email, position) ?? false
     }
+
+    /// The fields a search finds a contact by.
+    nonisolated var searchFields: [String?] { [name, email, position] }
 
     /// Whether this contact wrote back to the last mail we sent them.
     var hasReplied: Bool { repliedAt != nil }
@@ -462,14 +463,36 @@ struct Job: Identifiable, Decodable {
     }
 
     func matches(_ query: String) -> Bool {
-        guard !query.isEmpty else { return false }
-        if company.localizedCaseInsensitiveContains(query) { return true }
-        if alsoKnownAs.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return true }
-        if sector?.localizedCaseInsensitiveContains(query) == true { return true }
-        if companyType?.localizedCaseInsensitiveContains(query) == true { return true }
-        if fresherRoles.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return true }
-        if domains.contains(where: { $0.localizedCaseInsensitiveContains(query) }) { return true }
-        return contacts.contains { $0.matches(query) }
+        guard let query = SearchQuery(query) else { return false }
+        return matches(query)
+    }
+
+    /// Whether every word of `query` is in this company's name, other names,
+    /// sector, type, roles, domains or its contacts' details — across them, so
+    /// "stripe recruiter" finds Stripe by its recruiter.
+    func matches(_ query: SearchQuery) -> Bool {
+        query.matches(folded: searchText)
+    }
+
+    /// Everything a search finds this company by, folded, from the shared cache:
+    /// typing a query re-checks the same companies on every keystroke.
+    private var searchText: String {
+        var hasher = Hasher()
+        hasher.combine(company)
+        hasher.combine(alsoKnownAs)
+        hasher.combine(sector)
+        hasher.combine(companyType)
+        hasher.combine(fresherRoles)
+        hasher.combine(domains)
+        for contact in contacts {
+            hasher.combine(contact.name)
+            hasher.combine(contact.email)
+            hasher.combine(contact.position)
+        }
+        return SearchTextCache.shared.text(for: id, signature: hasher.finalize()) {
+            [company, sector, companyType] + alsoKnownAs + fresherRoles + domains
+                + contacts.flatMap(\.searchFields)
+        }
     }
 }
 
@@ -585,6 +608,7 @@ extension Array where Element == Job {
     /// The companies from any of `sources` that match `query`, each once, by
     /// name — how a search over loaded pages and server hits is shown.
     static func matching(_ query: String, in sources: [Job]...) -> [Job] {
+        guard let query = SearchQuery(query) else { return [] }
         var seen = Set<String>()
         return sources.joined()
             .filter { $0.matches(query) && seen.insert($0.id).inserted }
